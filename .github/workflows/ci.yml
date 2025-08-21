@@ -1,0 +1,101 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux-build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [g++, clang++]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            clang \
+            g++ \
+            ninja-build \
+            libassimp-dev \
+            libglfw3-dev \
+            libglm-dev \
+            libvulkan-dev \
+            glslc
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DLVG_WARNINGS_AS_ERRORS=ON
+
+      - name: Build Examples
+        run: cmake --build build --target LightVulkanGraphicsExamples
+
+      - name: Run Smoke Tests
+        run: ctest --test-dir build --output-on-failure
+
+  linux-sanitizers:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            ninja-build \
+            libassimp-dev \
+            libglfw3-dev \
+            libglm-dev \
+            libvulkan-dev \
+            glslc
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_COMPILER=clang++
+          -DLVG_ENABLE_SANITIZERS=ON
+          -DLVG_WARNINGS_AS_ERRORS=ON
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run Smoke Tests
+        run: ctest --test-dir build --output-on-failure
+
+  windows-build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --no-progress -y
+          $vulkanSdk = Get-ChildItem 'C:\VulkanSDK' | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $vulkanSdk) {
+            throw 'Vulkan SDK installation was not found under C:\VulkanSDK'
+          }
+          "VULKAN_SDK=$($vulkanSdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($vulkanSdk.FullName)\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -G "Visual Studio 17 2022" -A x64
+          -DASSIMP_USE_FETCHCONTENT=ON
+          -DBUILD_TESTING=OFF
+          -DLVG_BUILD_EXAMPLES=OFF
+          -DLVG_WARNINGS_AS_ERRORS=ON
+
+      - name: Build Library
+        run: cmake --build build --config Release --target libLightVulkanGraphics

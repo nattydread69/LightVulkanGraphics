@@ -1,0 +1,21 @@
+# Build directories
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+
+# CMake-generated files
+/CMakeUserPresets.json
+/compile_commands.json
+
+# Editor and workspace metadata
+*.code-workspace
+/.cache/
+/.codex
+/.idea/
+/.vscode/
+/agent.md
+
+# OS cruft
+.DS_Store
+Thumbs.db

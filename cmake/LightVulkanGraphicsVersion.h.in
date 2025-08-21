@@ -1,0 +1,14 @@
+#pragma once
+
+#define LIGHT_VULKAN_GRAPHICS_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define LIGHT_VULKAN_GRAPHICS_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define LIGHT_VULKAN_GRAPHICS_VERSION_PATCH @PROJECT_VERSION_PATCH@
+#define LIGHT_VULKAN_GRAPHICS_VERSION "@PROJECT_VERSION@"
+
+namespace lightGraphics
+{
+inline constexpr int kLightVulkanGraphicsVersionMajor = LIGHT_VULKAN_GRAPHICS_VERSION_MAJOR;
+inline constexpr int kLightVulkanGraphicsVersionMinor = LIGHT_VULKAN_GRAPHICS_VERSION_MINOR;
+inline constexpr int kLightVulkanGraphicsVersionPatch = LIGHT_VULKAN_GRAPHICS_VERSION_PATCH;
+inline constexpr const char* kLightVulkanGraphicsVersion = LIGHT_VULKAN_GRAPHICS_VERSION;
+}
