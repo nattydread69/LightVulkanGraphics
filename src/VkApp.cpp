@@ -21,10 +21,26 @@
 #include "LightVulkanGraphicsLogging.h"
 #include "RiggedObject.h"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
+
 #include <GLFW/glfw3.h>
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4244)
+#endif
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #include <cstring>
 #include <cstdlib>
@@ -44,7 +60,6 @@
 #include <vulkan/vulkan.h>
 
 #if defined(_WIN32)
-#define NOMINMAX
 #include <windows.h>
 #elif defined(__APPLE__)
 #include <dlfcn.h>
@@ -95,6 +110,28 @@ namespace lightGraphics
 				return path.lexically_normal();
 			}
 			return canonicalPath;
+		}
+
+		std::optional<std::string> getEnvironmentVariable(const char* name)
+		{
+#if defined(_WIN32)
+			char* value = nullptr;
+			size_t length = 0;
+			if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+			{
+				return std::nullopt;
+			}
+
+			std::string result(value);
+			free(value);
+			return result;
+#else
+			if (const char* value = std::getenv(name))
+			{
+				return std::string(value);
+			}
+			return std::nullopt;
+#endif
 		}
 
 #if defined(_WIN32)
@@ -882,16 +919,16 @@ namespace lightGraphics
 			glm::vec3 u = glm::normalize(glm::cross(r, f));
 			if (glfwGetKey(window_, GLFW_KEY_A) == GLFW_PRESS) orbitTarget_ -= r*speed*dtSeconds;
 			if (glfwGetKey(window_, GLFW_KEY_D) == GLFW_PRESS) orbitTarget_ += r*speed*dtSeconds;
-			if (glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS) orbitTarget_ -= u*speed*dtSeconds;
-			if (glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS) orbitTarget_ += u*speed*dtSeconds;
+				if (glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS) orbitTarget_ -= u*speed*dtSeconds;
+				if (glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS) orbitTarget_ += u*speed*dtSeconds;
 
-			float az = glm::radians(orbitAzimuthDeg_);
-			float el = glm::radians(orbitElevationDeg_);
-			glm::vec3 dir(cos(az)*cos(el), sin(el), sin(az)*cos(el));
-			camera_.position = orbitTarget_ - glm::normalize(dir) * orbitRadius_;
-		}
-		else
-		{
+				float az = glm::radians(orbitAzimuthDeg_);
+				float el = glm::radians(orbitElevationDeg_);
+				glm::vec3 orbitDir(cos(az)*cos(el), sin(el), sin(az)*cos(el));
+				camera_.position = orbitTarget_ - glm::normalize(orbitDir) * orbitRadius_;
+			}
+			else
+			{
 			if (glfwGetKey(window_, GLFW_KEY_W) == GLFW_PRESS)
 				camera_.position += camForward()*speed*dtSeconds;
 			if (glfwGetKey(window_, GLFW_KEY_S) == GLFW_PRESS)
@@ -3444,9 +3481,9 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			addRoot(customShaderPath_);
 		}
 
-		if (const char* envPath = std::getenv("LIGHT_VULKAN_GRAPHICS_SHADER_PATH"))
+		if (const auto envPath = getEnvironmentVariable("LIGHT_VULKAN_GRAPHICS_SHADER_PATH"))
 		{
-			addRoot(envPath);
+			addRoot(*envPath);
 		}
 
 #ifdef LVG_BUILD_SHADER_DIR
@@ -4480,7 +4517,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 
 		// Offset indices for shaft
-		uint32_t offset = verts.size();
+		uint32_t offset = static_cast<uint32_t>(verts.size());
 		for (auto index : shaftIdx)
 		{
 			idx.push_back(index + offset);
@@ -4623,7 +4660,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				allIndices.push_back(index + vertexOffset);
 			}
 
-			vertexOffset += shapeVertices[shapeType].size();
+			vertexOffset += static_cast<uint32_t>(shapeVertices[shapeType].size());
 		}
 
 		if (debugOutput)
@@ -4675,12 +4712,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		for (int i = 0; i < 8; ++i)
 		{
 			shapeGeometries_[i].vertexOffset = vertexOffset;
-			shapeGeometries_[i].vertexCount = tempVertices[i].size();
+			shapeGeometries_[i].vertexCount = static_cast<uint32_t>(tempVertices[i].size());
 			shapeGeometries_[i].indexOffset = indexOffset;
-			shapeGeometries_[i].indexCount = tempIndices[i].size();
+			shapeGeometries_[i].indexCount = static_cast<uint32_t>(tempIndices[i].size());
 
-			vertexOffset += tempVertices[i].size();
-			indexOffset += tempIndices[i].size();
+			vertexOffset += static_cast<uint32_t>(tempVertices[i].size());
+			indexOffset += static_cast<uint32_t>(tempIndices[i].size());
 
 			if (debugOutput)
 			{

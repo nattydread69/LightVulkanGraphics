@@ -17,6 +17,7 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Public docs were aligned with the current FBX API, dependency behavior, and bundled asset licensing.
 - Reserved-identifier header guards were replaced with project-scoped names.
 - Sanitized installs now export the sanitizer link requirements needed by downstream CMake consumers.
+- Windows/MSVC builds now avoid `min`/`max` macro collisions, enable the required GLM experimental quaternion extension, and clean up warning-as-error blockers.
 
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.

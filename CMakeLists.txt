@@ -45,6 +45,10 @@ if (LVG_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT 
 endif()
 
 function(lvg_apply_project_options target)
+	if (WIN32)
+		target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+	endif()
+
 	if (LVG_ENABLE_WARNINGS)
 		if (MSVC)
 			target_compile_options(${target} PRIVATE /W4 /permissive-)

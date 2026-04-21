@@ -22,6 +22,9 @@
 #include <assimp/postprocess.h>
 #include <assimp/metadata.h>
 #include <assimp/material.h>
+#ifndef GLM_ENABLE_EXPERIMENTAL
+#define GLM_ENABLE_EXPERIMENTAL
+#endif
 #include <glm/gtx/quaternion.hpp>
 #include <iostream>
 #include <algorithm>
