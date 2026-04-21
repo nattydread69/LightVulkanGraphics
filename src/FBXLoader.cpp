@@ -385,8 +385,8 @@ void FBXLoader::processBones(aiMesh* mesh, RiggedMesh& riggedMesh)
         float totalWeight = 0.0f;
         for (size_t k = 0; k < weights.size() && k < 4; ++k)
         {
-            vertex.boneIndices[k] = weights[k].first;
-            vertex.boneWeights[k] = weights[k].second;
+            vertex.boneIndices[static_cast<glm::ivec4::length_type>(k)] = weights[k].first;
+            vertex.boneWeights[static_cast<glm::vec4::length_type>(k)] = weights[k].second;
             totalWeight += weights[k].second;
         }
 
@@ -483,7 +483,7 @@ void FBXLoader::buildBoneHierarchy(aiNode* node, int parentIndex, RiggedModel& m
         // Add to global bone list if not already present
         if (model.boneMapping.find(nodeName) == model.boneMapping.end())
         {
-            int globalBoneIndex = model.bones.size();
+            int globalBoneIndex = static_cast<int>(model.bones.size());
             model.boneMapping[nodeName] = globalBoneIndex;
 
             Bone bone;

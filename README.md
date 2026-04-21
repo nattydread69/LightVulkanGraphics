@@ -2,6 +2,8 @@
 
 Light Vulkan Graphics is a lightweight, modern C++ rendering library built on Vulkan. It focuses on clarity, portability, and fast per-frame object updates via instancing and optimized CPU-GPU data paths.
 
+![Light Vulkan Graphics demo screenshot showing primitive shapes and a rigged character](assets/screenshots/LightVulkanGraphicsDemo.png)
+
 Key capabilities include:
 - Flexible shape rendering with instancing (spheres, cubes, cylinders, lines, etc.)
 - High-performance per-frame updates (dirty tracking, persistent mapping, double-buffered instance data)
