@@ -16,6 +16,7 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - CI expanded beyond a single Ubuntu/GCC job to cover a Linux compiler matrix, sanitizer validation, and a Windows build path.
 - Public docs were aligned with the current FBX API, dependency behavior, and bundled asset licensing.
 - Reserved-identifier header guards were replaced with project-scoped names.
+- Sanitized installs now export the sanitizer link requirements needed by downstream CMake consumers.
 
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.

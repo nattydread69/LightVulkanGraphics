@@ -39,6 +39,11 @@ if (LVG_ENABLE_SANITIZERS AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
 	message(WARNING "LVG_ENABLE_SANITIZERS is only supported for GCC and Clang toolchains")
 endif()
 
+set(LVG_SANITIZER_LINK_FLAG "")
+if (LVG_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32)
+	set(LVG_SANITIZER_LINK_FLAG -fsanitize=address,undefined)
+endif()
+
 function(lvg_apply_project_options target)
 	if (LVG_ENABLE_WARNINGS)
 		if (MSVC)
@@ -54,9 +59,9 @@ function(lvg_apply_project_options target)
 		endif()
 	endif()
 
-	if (LVG_ENABLE_SANITIZERS AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU" AND NOT WIN32)
-		target_compile_options(${target} PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer)
-		target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+	if (LVG_SANITIZER_LINK_FLAG)
+		target_compile_options(${target} PRIVATE ${LVG_SANITIZER_LINK_FLAG} -fno-omit-frame-pointer)
+		target_link_options(${target} PRIVATE ${LVG_SANITIZER_LINK_FLAG})
 	endif()
 endfunction()
 
@@ -425,6 +430,10 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 	LVG_DEFAULT_SHADER_INSTALL_DIR="${LVG_SHADER_INSTALL_FULL_DIR}"
 )
 lvg_apply_project_options(${PROJECT_NAME})
+if (LVG_SANITIZER_LINK_FLAG)
+	# A sanitized shared library still needs downstream consumers to link the sanitizer runtimes.
+	target_link_options(${PROJECT_NAME} INTERFACE ${LVG_SANITIZER_LINK_FLAG})
+endif()
 
 if (WIN32)
 	target_compile_definitions(${PROJECT_NAME} PRIVATE VK_USE_PLATFORM_WIN32_KHR)
