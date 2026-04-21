@@ -30,12 +30,31 @@
 #include <algorithm>
 #include <filesystem>
 #include <cstring>
+#include <limits>
+#include <stdexcept>
 
 namespace lightGraphics
 {
 
     namespace
     {
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4267)
+#endif
+        int checkedSizeToInt(std::size_t value, const char* context)
+        {
+            if (value > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+            {
+                throw std::overflow_error(std::string(context) + " exceeds supported bone index range");
+            }
+
+            return static_cast<int>(value);
+        }
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
         glm::vec3 axisToVector(int axis)
         {
             switch (axis)
@@ -338,7 +357,7 @@ void FBXLoader::processBones(aiMesh* mesh, RiggedMesh& riggedMesh)
         int boneIndex;
         if (riggedMesh.boneMapping.find(boneName) == riggedMesh.boneMapping.end())
         {
-            boneIndex = static_cast<int>(riggedMesh.bones.size());
+            boneIndex = checkedSizeToInt(riggedMesh.bones.size(), "Mesh bone count");
             riggedMesh.boneMapping[boneName] = boneIndex;
 
             Bone newBone;
@@ -383,11 +402,18 @@ void FBXLoader::processBones(aiMesh* mesh, RiggedMesh& riggedMesh)
 
         RiggedVertex& vertex = riggedMesh.vertices[v];
         float totalWeight = 0.0f;
-        for (size_t k = 0; k < weights.size() && k < 4; ++k)
+        glm::vec4::length_type influenceIndex = 0;
+        for (const auto& weightEntry : weights)
         {
-            vertex.boneIndices[static_cast<glm::ivec4::length_type>(k)] = weights[k].first;
-            vertex.boneWeights[static_cast<glm::vec4::length_type>(k)] = weights[k].second;
-            totalWeight += weights[k].second;
+            if (influenceIndex >= vertex.boneWeights.length())
+            {
+                break;
+            }
+
+            vertex.boneIndices[influenceIndex] = weightEntry.first;
+            vertex.boneWeights[influenceIndex] = weightEntry.second;
+            totalWeight += weightEntry.second;
+            ++influenceIndex;
         }
 
         if (totalWeight > 0.0f)
@@ -483,7 +509,7 @@ void FBXLoader::buildBoneHierarchy(aiNode* node, int parentIndex, RiggedModel& m
         // Add to global bone list if not already present
         if (model.boneMapping.find(nodeName) == model.boneMapping.end())
         {
-            int globalBoneIndex = static_cast<int>(model.bones.size());
+            int globalBoneIndex = checkedSizeToInt(model.bones.size(), "Global bone count");
             model.boneMapping[nodeName] = globalBoneIndex;
 
             Bone bone;
