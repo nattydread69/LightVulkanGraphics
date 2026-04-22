@@ -22,6 +22,39 @@
 #include <algorithm>
 #include <iostream>
 
+namespace
+{
+template <typename Keyframe>
+int findInterpolationKeyIndex(float animationTime, const std::vector<Keyframe>& keys)
+{
+    if (keys.size() < 2)
+    {
+        return 0;
+    }
+
+    for (int i = 0; i < static_cast<int>(keys.size()) - 1; ++i)
+    {
+        if (animationTime < keys[i + 1].time)
+        {
+            return i;
+        }
+    }
+
+    return static_cast<int>(keys.size()) - 1;
+}
+
+float computeInterpolationFactor(float animationTime, float startTime, float endTime)
+{
+    if (endTime <= startTime)
+    {
+        return 0.0f;
+    }
+
+    const float factor = (animationTime - startTime) / (endTime - startTime);
+    return std::clamp(factor, 0.0f, 1.0f);
+}
+} // namespace
+
 namespace lightGraphics
 {
 
@@ -272,7 +305,9 @@ void RiggedObject::resetBoneTransforms()
 
         glm::mat4 transform = translation * rotationMatrix * scaleMatrix;
 
-        if (bone.parentIndex >= 0 && bone.parentIndex < static_cast<int>(boneTransforms.size()))
+        if (bone.parentIndex >= 0 &&
+            bone.parentIndex < static_cast<int>(i) &&
+            bone.parentIndex < static_cast<int>(boneTransforms.size()))
         {
             transform = boneTransforms[bone.parentIndex] * transform;
         }
@@ -366,22 +401,19 @@ void RiggedObject::calculateBoneTransforms()
                 }
                 else
                 {
-                    int keyIndex = 0;
-                    for (int j = 0; j < static_cast<int>(channel->positionKeys.size()) - 1; j++)
-                    {
-                        if (timeInTicks < channel->positionKeys[j + 1].time)
-                        {
-                            keyIndex = j;
-                            break;
-                        }
-                    }
+                    const int keyIndex =
+                        findInterpolationKeyIndex(timeInTicks, channel->positionKeys);
+                    const int nextKeyIndex = keyIndex + 1;
 
-                    if (keyIndex < static_cast<int>(channel->positionKeys.size()) - 1)
+                    if (nextKeyIndex < static_cast<int>(channel->positionKeys.size()))
                     {
-                        float deltaTime = channel->positionKeys[keyIndex + 1].time - channel->positionKeys[keyIndex].time;
-                        float factor = (timeInTicks - channel->positionKeys[keyIndex].time) / deltaTime;
+                        const float factor = computeInterpolationFactor(
+                            timeInTicks,
+                            channel->positionKeys[keyIndex].time,
+                            channel->positionKeys[nextKeyIndex].time);
                         position = glm::mix(channel->positionKeys[keyIndex].position,
-                                          channel->positionKeys[keyIndex + 1].position, factor);
+                                          channel->positionKeys[nextKeyIndex].position,
+                                          factor);
                     }
                     else
                     {
@@ -399,22 +431,19 @@ void RiggedObject::calculateBoneTransforms()
                 }
                 else
                 {
-                    int keyIndex = 0;
-                    for (int j = 0; j < static_cast<int>(channel->rotationKeys.size()) - 1; j++)
-                    {
-                        if (timeInTicks < channel->rotationKeys[j + 1].time)
-                        {
-                            keyIndex = j;
-                            break;
-                        }
-                    }
+                    const int keyIndex =
+                        findInterpolationKeyIndex(timeInTicks, channel->rotationKeys);
+                    const int nextKeyIndex = keyIndex + 1;
 
-                    if (keyIndex < static_cast<int>(channel->rotationKeys.size()) - 1)
+                    if (nextKeyIndex < static_cast<int>(channel->rotationKeys.size()))
                     {
-                        float deltaTime = channel->rotationKeys[keyIndex + 1].time - channel->rotationKeys[keyIndex].time;
-                        float factor = (timeInTicks - channel->rotationKeys[keyIndex].time) / deltaTime;
+                        const float factor = computeInterpolationFactor(
+                            timeInTicks,
+                            channel->rotationKeys[keyIndex].time,
+                            channel->rotationKeys[nextKeyIndex].time);
                         rotation = glm::slerp(channel->rotationKeys[keyIndex].rotation,
-                                            channel->rotationKeys[keyIndex + 1].rotation, factor);
+                                              channel->rotationKeys[nextKeyIndex].rotation,
+                                              factor);
                     }
                     else
                     {
@@ -432,22 +461,19 @@ void RiggedObject::calculateBoneTransforms()
                 }
                 else
                 {
-                    int keyIndex = 0;
-                    for (int j = 0; j < static_cast<int>(channel->scaleKeys.size()) - 1; j++)
-                    {
-                        if (timeInTicks < channel->scaleKeys[j + 1].time)
-                        {
-                            keyIndex = j;
-                            break;
-                        }
-                    }
+                    const int keyIndex =
+                        findInterpolationKeyIndex(timeInTicks, channel->scaleKeys);
+                    const int nextKeyIndex = keyIndex + 1;
 
-                    if (keyIndex < static_cast<int>(channel->scaleKeys.size()) - 1)
+                    if (nextKeyIndex < static_cast<int>(channel->scaleKeys.size()))
                     {
-                        float deltaTime = channel->scaleKeys[keyIndex + 1].time - channel->scaleKeys[keyIndex].time;
-                        float factor = (timeInTicks - channel->scaleKeys[keyIndex].time) / deltaTime;
+                        const float factor = computeInterpolationFactor(
+                            timeInTicks,
+                            channel->scaleKeys[keyIndex].time,
+                            channel->scaleKeys[nextKeyIndex].time);
                         scale = glm::mix(channel->scaleKeys[keyIndex].scale,
-                                       channel->scaleKeys[keyIndex + 1].scale, factor);
+                                         channel->scaleKeys[nextKeyIndex].scale,
+                                         factor);
                     }
                     else
                     {
@@ -465,7 +491,9 @@ void RiggedObject::calculateBoneTransforms()
         glm::mat4 transform = translation * rotationMatrix * scaleMatrix;
 
         // Apply parent transform if this bone has a parent
-        if (bone.parentIndex >= 0 && bone.parentIndex < static_cast<int>(boneTransforms.size()))
+        if (bone.parentIndex >= 0 &&
+            bone.parentIndex < static_cast<int>(i) &&
+            bone.parentIndex < static_cast<int>(boneTransforms.size()))
         {
             transform = boneTransforms[bone.parentIndex] * transform;
         }

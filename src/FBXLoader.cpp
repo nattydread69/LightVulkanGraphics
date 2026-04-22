@@ -32,6 +32,7 @@
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace lightGraphics
 {
@@ -140,6 +141,32 @@ namespace lightGraphics
         {
             return glm::quat(aiQuat.w, aiQuat.x, aiQuat.y, aiQuat.z);
         }
+
+        glm::mat4 computeGlobalTransformForNode(const std::vector<Bone>& bones, int nodeIndex)
+        {
+            if (nodeIndex < 0 || nodeIndex >= static_cast<int>(bones.size()))
+            {
+                return glm::mat4(1.0f);
+            }
+
+            std::vector<int> chain;
+            std::unordered_set<int> visited;
+            int current = nodeIndex;
+            while (current >= 0 &&
+                   current < static_cast<int>(bones.size()) &&
+                   visited.insert(current).second)
+            {
+                chain.push_back(current);
+                current = bones[current].parentIndex;
+            }
+
+            glm::mat4 globalTransform(1.0f);
+            for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            {
+                globalTransform *= bones[*it].localTransform;
+            }
+            return globalTransform;
+        }
     }
 
 FBXLoader::FBXLoader()
@@ -163,11 +190,7 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         aiProcess_FlipUVs |
         aiProcess_CalcTangentSpace |
         aiProcess_GenSmoothNormals |
-        aiProcess_JoinIdenticalVertices |
-        aiProcess_ImproveCacheLocality |
         aiProcess_RemoveRedundantMaterials |
-        aiProcess_OptimizeMeshes |
-        aiProcess_OptimizeGraph |
         aiProcess_ValidateDataStructure);
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
@@ -179,11 +202,20 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     // Create the model
     auto model = std::make_shared<RiggedModel>();
     glm::mat4 rootTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
-    rootTransform[0][3] = 0.0f;
-    rootTransform[1][3] = 0.0f;
-    rootTransform[2][3] = 0.0f;
+    rootTransform[3][0] = 0.0f;
+    rootTransform[3][1] = 0.0f;
+    rootTransform[3][2] = 0.0f;
     rootTransform[3][3] = 1.0f;
-    model->axisCorrection = buildAxisCorrection(scene) * rootTransform;
+
+    aiVector3D rootScaling;
+    aiQuaternion rootRotation;
+    aiVector3D rootTranslation;
+    scene->mRootNode->mTransformation.Decompose(rootScaling, rootRotation, rootTranslation);
+    glm::mat4 rootRotationOnly = glm::mat4_cast(glm::normalize(aiQuaternionToGlm(rootRotation)));
+
+    // Apply only orientation correction at the instance level. Root scale belongs to the
+    // imported scene hierarchy and should not be multiplied into the world transform again.
+    model->axisCorrection = buildAxisCorrection(scene) * rootRotationOnly;
     glm::vec3 correctedUp = glm::vec3(model->axisCorrection *
                                       glm::vec4(0.0f, 1.0f, 0.0f, 0.0f));
     if (glm::length(correctedUp) > 0.0f)
@@ -208,7 +240,9 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     currentModelDirectory_ = absFilePath.parent_path();
     embeddedTextures_.clear();
 
-    // Store global inverse transform
+    // Default to the scene root inverse and tighten it to the armature root after we have
+    // the imported node hierarchy. Using the scene root here causes large bind-pose errors
+    // for Worker.fbx because the actual skinning root is CharacterArmature.
     model->globalInverseTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
     model->globalInverseTransform = glm::inverse(model->globalInverseTransform);
 
@@ -223,6 +257,30 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
 
     // Build bone hierarchy
     buildBoneHierarchy(scene->mRootNode, -1, *model);
+
+    for (size_t boneIndex = 0; boneIndex < model->bones.size(); ++boneIndex)
+    {
+        model->bones[boneIndex].globalBindTransform =
+            computeGlobalTransformForNode(model->bones, static_cast<int>(boneIndex));
+    }
+
+    for (auto& mesh : model->meshes)
+    {
+        auto meshNodeIt = model->boneMapping.find(mesh.nodeName);
+        if (meshNodeIt != model->boneMapping.end())
+        {
+            mesh.globalBindTransform =
+                computeGlobalTransformForNode(model->bones, meshNodeIt->second);
+        }
+    }
+
+    if (auto it = model->boneMapping.find("CharacterArmature");
+        it != model->boneMapping.end())
+    {
+        const glm::mat4 armatureGlobal =
+            computeGlobalTransformForNode(model->bones, it->second);
+        model->globalInverseTransform = glm::inverse(armatureGlobal);
+    }
 
     return model;
 }
@@ -241,6 +299,7 @@ void FBXLoader::processNode(aiNode* node, const aiScene* scene, RiggedModel& mod
     {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
         RiggedMesh riggedMesh = processMesh(mesh, scene);
+        riggedMesh.nodeName = node->mName.C_Str();
         model.meshes.push_back(riggedMesh);
     }
 
@@ -493,60 +552,45 @@ void FBXLoader::buildBoneHierarchy(aiNode* node, int parentIndex, RiggedModel& m
 {
     std::string nodeName = node->mName.C_Str();
 
-    // Check if this node corresponds to a bone
-    int boneIndex = -1;
-    for (auto& mesh : model.meshes)
+    int nodeIndex = -1;
+    auto existingNode = model.boneMapping.find(nodeName);
+    if (existingNode == model.boneMapping.end())
     {
-        if (mesh.boneMapping.find(nodeName) != mesh.boneMapping.end())
+        nodeIndex = checkedSizeToInt(model.bones.size(), "Global node count");
+        model.boneMapping[nodeName] = nodeIndex;
+
+        Bone bone;
+        bone.name = nodeName;
+        bone.parentIndex = parentIndex;
+        bone.offsetMatrix = glm::mat4(1.0f); // Mesh data carries offsets per mesh
+        bone.localTransform = aiMatrix4x4ToGlm(node->mTransformation);
+
+        aiVector3D scaling;
+        aiQuaternion rotation;
+        aiVector3D translation;
+        node->mTransformation.Decompose(scaling, rotation, translation);
+        bone.bindPosition = aiVector3DToGlm(translation);
+        bone.bindRotation = aiQuaternionToGlm(rotation);
+        bone.bindScale = aiVector3DToGlm(scaling);
+
+        model.bones.push_back(bone);
+
+        if (parentIndex >= 0 && parentIndex < static_cast<int>(model.bones.size()))
         {
-            boneIndex = mesh.boneMapping[nodeName];
-            break;
-        }
-    }
-
-    if (boneIndex != -1)
-    {
-        // Add to global bone list if not already present
-        if (model.boneMapping.find(nodeName) == model.boneMapping.end())
-        {
-            int globalBoneIndex = checkedSizeToInt(model.bones.size(), "Global bone count");
-            model.boneMapping[nodeName] = globalBoneIndex;
-
-            Bone bone;
-            bone.name = nodeName;
-            bone.parentIndex = parentIndex;
-            bone.offsetMatrix = glm::mat4(1.0f); // Mesh data carries offsets per mesh
-            bone.localTransform = aiMatrix4x4ToGlm(node->mTransformation);
-
-            aiVector3D scaling;
-            aiQuaternion rotation;
-            aiVector3D translation;
-            node->mTransformation.Decompose(scaling, rotation, translation);
-            bone.bindPosition = aiVector3DToGlm(translation);
-            bone.bindRotation = aiQuaternionToGlm(rotation);
-            bone.bindScale = aiVector3DToGlm(scaling);
-
-            model.bones.push_back(bone);
-
-            if (parentIndex >= 0 && parentIndex < static_cast<int>(model.bones.size()))
-            {
-                model.bones[parentIndex].children.push_back(globalBoneIndex);
-            }
-        }
-
-        // Process children
-        for (unsigned int i = 0; i < node->mNumChildren; i++)
-        {
-            buildBoneHierarchy(node->mChildren[i], model.boneMapping[nodeName], model);
+            model.bones[parentIndex].children.push_back(nodeIndex);
         }
     }
     else
     {
-        // Process children even if this node is not a bone
-        for (unsigned int i = 0; i < node->mNumChildren; i++)
-        {
-            buildBoneHierarchy(node->mChildren[i], parentIndex, model);
-        }
+        nodeIndex = existingNode->second;
+        // Keep the first occurrence of a named node. FBX scenes can contain duplicate
+        // names (for example an outer scene root and an inner armature root), and
+        // rewriting parentage here can create self-cycles such as RootNode -> RootNode.
+    }
+
+    for (unsigned int i = 0; i < node->mNumChildren; i++)
+    {
+        buildBoneHierarchy(node->mChildren[i], nodeIndex, model);
     }
 }
 

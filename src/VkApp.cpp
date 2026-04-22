@@ -44,7 +44,9 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <cmath>
 #include <filesystem>
+#include <iomanip>
 #include <sstream>
 #include <system_error>
 #include <iostream>
@@ -55,6 +57,7 @@
 #include <array>
 #include <limits>
 #include <mutex>
+#include <type_traits>
 #include <unordered_set>
 
 #include <vulkan/vulkan.h>
@@ -79,10 +82,35 @@ namespace lightGraphics
 	using detail::UniformBufferObject;
 	using detail::Vertex;
 
+	static_assert(std::is_standard_layout_v<Vertex>, "Vertex must use a stable standard layout");
+	static_assert(offsetof(Vertex, pos) == 0, "Vertex position must start at offset 0");
+	static_assert(offsetof(Vertex, nrm) == sizeof(glm::vec3), "Vertex normal layout changed");
+	static_assert(offsetof(Vertex, uv) == sizeof(glm::vec3) * 2, "Vertex UV layout changed");
+	static_assert(sizeof(Vertex) == sizeof(float) * 8, "Vertex size must stay tightly packed");
+
+	static_assert(std::is_standard_layout_v<Instance>, "Instance must use a stable standard layout");
+	static_assert(offsetof(Instance, model) == 0, "Instance model matrix must start at offset 0");
+	static_assert(offsetof(Instance, color) == sizeof(glm::mat4), "Instance color offset changed");
+	static_assert(offsetof(Instance, shapeType) == sizeof(glm::mat4) + sizeof(glm::vec3),
+	              "Instance shapeType offset changed");
+
 	namespace
 	{
+		constexpr std::array<const char*, 1> kValidationLayers = {
+			"VK_LAYER_KHRONOS_validation"
+		};
+
 		std::mutex glfwLifecycleMutex;
 		size_t glfwLifecycleReferenceCount = 0;
+
+		constexpr bool shouldEnableValidationLayers()
+		{
+#ifndef NDEBUG
+			return true;
+#else
+			return false;
+#endif
+		}
 
 		void checkVkResult(VkResult result, const char* expression, const char* file, int line)
 		{
@@ -99,6 +127,251 @@ namespace lightGraphics
 
 		void shaderSearchModuleAnchor()
 		{
+		}
+
+		std::vector<VkLayerProperties> enumerateInstanceLayers()
+		{
+			uint32_t count = 0;
+			checkVkResult(vkEnumerateInstanceLayerProperties(&count, nullptr),
+			              "vkEnumerateInstanceLayerProperties(&count, nullptr)",
+			              __FILE__,
+			              __LINE__);
+			std::vector<VkLayerProperties> layers(count);
+			if (count > 0)
+			{
+				checkVkResult(vkEnumerateInstanceLayerProperties(&count, layers.data()),
+				              "vkEnumerateInstanceLayerProperties(&count, layers.data())",
+				              __FILE__,
+				              __LINE__);
+			}
+			return layers;
+		}
+
+		std::vector<VkExtensionProperties> enumerateInstanceExtensions()
+		{
+			uint32_t count = 0;
+			checkVkResult(vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr),
+			              "vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr)",
+			              __FILE__,
+			              __LINE__);
+			std::vector<VkExtensionProperties> extensions(count);
+			if (count > 0)
+			{
+				checkVkResult(vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data()),
+				              "vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data())",
+				              __FILE__,
+				              __LINE__);
+			}
+			return extensions;
+		}
+
+		std::vector<VkExtensionProperties> enumerateDeviceExtensions(VkPhysicalDevice device)
+		{
+			uint32_t count = 0;
+			checkVkResult(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr),
+			              "vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr)",
+			              __FILE__,
+			              __LINE__);
+			std::vector<VkExtensionProperties> extensions(count);
+			if (count > 0)
+			{
+				checkVkResult(vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data()),
+				              "vkEnumerateDeviceExtensionProperties(device, nullptr, &count, extensions.data())",
+				              __FILE__,
+				              __LINE__);
+			}
+			return extensions;
+		}
+
+		bool hasInstanceLayer(const std::vector<VkLayerProperties>& layers, const char* name)
+		{
+			return std::any_of(layers.begin(), layers.end(),
+			                   [name](const VkLayerProperties& layer)
+			                   {
+				                   return std::strcmp(layer.layerName, name) == 0;
+			                   });
+		}
+
+		bool hasInstanceExtension(const std::vector<VkExtensionProperties>& extensions, const char* name)
+		{
+			return std::any_of(extensions.begin(), extensions.end(),
+			                   [name](const VkExtensionProperties& extension)
+			                   {
+				                   return std::strcmp(extension.extensionName, name) == 0;
+			                   });
+		}
+
+		bool hasDeviceExtension(const std::vector<VkExtensionProperties>& extensions, const char* name)
+		{
+			return std::any_of(extensions.begin(), extensions.end(),
+			                   [name](const VkExtensionProperties& extension)
+			                   {
+				                   return std::strcmp(extension.extensionName, name) == 0;
+			                   });
+		}
+
+		void appendUniqueExtension(std::vector<const char*>& extensions, const char* name)
+		{
+			if (std::find_if(extensions.begin(), extensions.end(),
+			                 [name](const char* existing)
+			                 {
+				                 return std::strcmp(existing, name) == 0;
+			                 }) == extensions.end())
+			{
+				extensions.push_back(name);
+			}
+		}
+
+		VkResult createDebugUtilsMessenger(VkInstance instance,
+		                                   const VkDebugUtilsMessengerCreateInfoEXT* createInfo,
+		                                   const VkAllocationCallbacks* allocator,
+		                                   VkDebugUtilsMessengerEXT* messenger)
+		{
+			auto createFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+			    vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+			if (!createFn)
+			{
+				return VK_ERROR_EXTENSION_NOT_PRESENT;
+			}
+
+			return createFn(instance, createInfo, allocator, messenger);
+		}
+
+		void destroyDebugUtilsMessenger(VkInstance instance,
+		                                VkDebugUtilsMessengerEXT messenger,
+		                                const VkAllocationCallbacks* allocator)
+		{
+			auto destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+			    vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+			if (destroyFn)
+			{
+				destroyFn(instance, messenger, allocator);
+			}
+		}
+
+		bool isFiniteVec2(const glm::vec2& value)
+		{
+			return std::isfinite(value.x) && std::isfinite(value.y);
+		}
+
+		bool isFiniteVec3(const glm::vec3& value)
+		{
+			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+		}
+
+		std::string formatVulkanVersion(uint32_t version)
+		{
+			std::ostringstream message;
+			message << VK_VERSION_MAJOR(version) << '.'
+			        << VK_VERSION_MINOR(version) << '.'
+			        << VK_VERSION_PATCH(version);
+			return message.str();
+		}
+
+		std::string vendorName(uint32_t vendorId)
+		{
+			switch (vendorId)
+			{
+				case 0x10DE: return "NVIDIA";
+				case 0x1002: return "AMD";
+				case 0x1022: return "AMD";
+				case 0x8086: return "Intel";
+				case 0x13B5: return "ARM";
+				case 0x5143: return "Qualcomm";
+				case 0x106B: return "Apple";
+				default: return "Unknown";
+			}
+		}
+
+		std::string formatDriverVersion(uint32_t vendorId, uint32_t driverVersion)
+		{
+			std::ostringstream message;
+			if (vendorId == 0x10DE)
+			{
+				message << ((driverVersion >> 22) & 0x3ff) << '.'
+				        << ((driverVersion >> 14) & 0x0ff) << '.'
+				        << ((driverVersion >> 6) & 0x0ff) << '.'
+				        << (driverVersion & 0x03f);
+			}
+			else if (vendorId == 0x8086)
+			{
+				message << (driverVersion >> 14) << '.' << (driverVersion & 0x3fff);
+			}
+			else
+			{
+				message << VK_VERSION_MAJOR(driverVersion) << '.'
+				        << VK_VERSION_MINOR(driverVersion) << '.'
+				        << VK_VERSION_PATCH(driverVersion);
+			}
+
+			message << " (0x" << std::hex << driverVersion << std::dec << ')';
+			return message.str();
+		}
+
+		const char* physicalDeviceTypeName(VkPhysicalDeviceType type)
+		{
+			switch (type)
+			{
+				case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return "Discrete GPU";
+				case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return "Integrated GPU";
+				case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return "Virtual GPU";
+				case VK_PHYSICAL_DEVICE_TYPE_CPU: return "CPU";
+				case VK_PHYSICAL_DEVICE_TYPE_OTHER: return "Other";
+				default: return "Unknown";
+			}
+		}
+
+		int physicalDeviceTypeScore(VkPhysicalDeviceType type)
+		{
+			switch (type)
+			{
+				case VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU: return 4000;
+				case VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU: return 3000;
+				case VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU: return 2000;
+				case VK_PHYSICAL_DEVICE_TYPE_OTHER: return 1000;
+				case VK_PHYSICAL_DEVICE_TYPE_CPU: return 0;
+				default: return -1000;
+			}
+		}
+
+		std::string memoryPropertyFlagsToString(VkMemoryPropertyFlags flags)
+		{
+			std::ostringstream message;
+			bool first = true;
+			auto appendFlag = [&](VkMemoryPropertyFlags bit, const char* label)
+			{
+				if ((flags & bit) == 0)
+				{
+					return;
+				}
+
+				if (!first)
+				{
+					message << '|';
+				}
+				first = false;
+				message << label;
+			};
+
+			appendFlag(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, "DEVICE_LOCAL");
+			appendFlag(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, "HOST_VISIBLE");
+			appendFlag(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "HOST_COHERENT");
+			appendFlag(VK_MEMORY_PROPERTY_HOST_CACHED_BIT, "HOST_CACHED");
+			appendFlag(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT, "LAZILY_ALLOCATED");
+#ifdef VK_MEMORY_PROPERTY_PROTECTED_BIT
+			appendFlag(VK_MEMORY_PROPERTY_PROTECTED_BIT, "PROTECTED");
+#endif
+#ifdef VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD
+			appendFlag(VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD, "DEVICE_COHERENT_AMD");
+#endif
+#ifdef VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD
+			appendFlag(VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD, "DEVICE_UNCACHED_AMD");
+#endif
+			if (first)
+			{
+				message << '0';
+			}
+			return message.str();
 		}
 
 		std::optional<std::filesystem::path> weaklyCanonicalPath(const std::filesystem::path& path)
@@ -276,6 +549,206 @@ namespace lightGraphics
 		             ? consoleErrorStream()
 		             : consoleInfoStream();
 		stream << message << std::endl;
+	}
+
+	VKAPI_ATTR VkBool32 VKAPI_CALL VkApp::debugUtilsMessengerCallback(
+	    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+	    VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+	    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+	    void* userData)
+	{
+		(void) messageTypes;
+
+		const VkApp* app = reinterpret_cast<const VkApp*>(userData);
+		const char* messageText = (callbackData && callbackData->pMessage)
+		                        ? callbackData->pMessage
+		                        : "Validation message with no text";
+
+		LogLevel level = LogLevel::Info;
+		if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+		{
+			level = LogLevel::Error;
+		}
+		else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+		{
+			level = LogLevel::Warning;
+		}
+		else if (messageSeverity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+		{
+			level = LogLevel::Info;
+		}
+		else
+		{
+			level = LogLevel::Debug;
+		}
+
+		std::string message = std::string("[Validation] ") + messageText;
+		if (app && (app->debugOutput || app->logCallback_))
+		{
+			app->logMessage(level, message);
+		}
+		else
+		{
+			auto& stream = (level == LogLevel::Error || level == LogLevel::Warning)
+			             ? consoleErrorStream()
+			             : consoleInfoStream();
+			stream << message << std::endl;
+		}
+
+		return VK_FALSE;
+	}
+
+	void VkApp::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) const
+	{
+		createInfo = {};
+		createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+		createInfo.messageSeverity =
+		    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+		createInfo.messageType =
+		    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+		    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		createInfo.pfnUserCallback = &VkApp::debugUtilsMessengerCallback;
+		createInfo.pUserData = const_cast<VkApp*>(this);
+	}
+
+	void VkApp::setupDebugMessenger()
+	{
+		if (!validationEnabled_ || inst == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+		populateDebugMessengerCreateInfo(createInfo);
+		const VkResult result = createDebugUtilsMessenger(inst, &createInfo, nullptr, &debugMessenger_);
+		if (result == VK_ERROR_EXTENSION_NOT_PRESENT)
+		{
+			logMessage(LogLevel::Warning, "VK_EXT_debug_utils is unavailable; validation messages will not be hooked");
+			return;
+		}
+
+		VK_CHECK(result);
+	}
+
+	void VkApp::logSelectedPhysicalDeviceInfo(VkPhysicalDevice device) const
+	{
+		if (device == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		VkPhysicalDeviceProperties properties{};
+		vkGetPhysicalDeviceProperties(device, &properties);
+
+		VkPhysicalDeviceMemoryProperties memoryProperties{};
+		vkGetPhysicalDeviceMemoryProperties(device, &memoryProperties);
+
+		std::ostringstream summary;
+		summary << "Selected GPU: " << properties.deviceName
+		        << " (" << physicalDeviceTypeName(properties.deviceType) << ")"
+		        << " [" << vendorName(properties.vendorID) << ", vendor=0x"
+		        << std::hex << properties.vendorID << ", device=0x" << properties.deviceID
+		        << std::dec << "], API " << formatVulkanVersion(properties.apiVersion)
+		        << ", driver " << formatDriverVersion(properties.vendorID, properties.driverVersion)
+		        << ", graphics queue family " << qFamGfx
+		        << ", present queue family " << qFamPresent;
+		if (logCallback_ || debugOutput)
+		{
+			logMessage(LogLevel::Info, summary.str());
+		}
+		else
+		{
+			consoleInfoStream() << summary.str() << std::endl;
+		}
+
+		if (!debugOutput)
+		{
+			return;
+		}
+
+		for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
+		{
+			std::ostringstream message;
+			message << "[GPU] memoryType[" << i << "] heap=" << memoryProperties.memoryTypes[i].heapIndex
+			        << " flags=" << memoryPropertyFlagsToString(memoryProperties.memoryTypes[i].propertyFlags);
+			logMessage(LogLevel::Debug, message.str());
+		}
+	}
+
+	bool VkApp::validateRiggedMesh(const RiggedMesh& mesh) const
+	{
+		const std::string meshLabel = mesh.materialName.empty() ? std::string("<unnamed>") : mesh.materialName;
+		size_t unnormalizedWeightVertices = 0;
+		for (size_t index = 0; index < mesh.indices.size(); ++index)
+		{
+			if (mesh.indices[index] >= mesh.vertices.size())
+			{
+				logMessage(LogLevel::Error,
+				           "[RiggedMesh] '" + meshLabel + "' has out-of-range index " +
+				           std::to_string(mesh.indices[index]) + " at element " + std::to_string(index));
+				return false;
+			}
+		}
+
+		for (size_t vertexIndex = 0; vertexIndex < mesh.vertices.size(); ++vertexIndex)
+		{
+			const RiggedVertex& vertex = mesh.vertices[vertexIndex];
+			if (!isFiniteVec3(vertex.position) || !isFiniteVec3(vertex.normal) || !isFiniteVec2(vertex.texCoords))
+			{
+				logMessage(LogLevel::Error,
+				           "[RiggedMesh] '" + meshLabel + "' has non-finite source vertex data at vertex " +
+				           std::to_string(vertexIndex));
+				return false;
+			}
+
+			float weightSum = 0.0f;
+			for (int k = 0; k < 4; ++k)
+			{
+				const int boneIndex = vertex.boneIndices[k];
+				const float weight = vertex.boneWeights[k];
+				if (!std::isfinite(weight) || weight < 0.0f)
+				{
+					logMessage(LogLevel::Error,
+					           "[RiggedMesh] '" + meshLabel + "' has invalid bone weight at vertex " +
+					           std::to_string(vertexIndex));
+					return false;
+				}
+
+				if (boneIndex < -1 || boneIndex >= static_cast<int>(mesh.bones.size()))
+				{
+					logMessage(LogLevel::Error,
+					           "[RiggedMesh] '" + meshLabel + "' has invalid bone index " +
+					           std::to_string(boneIndex) + " at vertex " + std::to_string(vertexIndex));
+					return false;
+				}
+
+				weightSum += weight;
+			}
+
+			if (weightSum > 0.0f && std::abs(weightSum - 1.0f) > 1.0e-3f)
+			{
+				++unnormalizedWeightVertices;
+			}
+		}
+
+		if (unnormalizedWeightVertices > 0)
+		{
+			logMessage(LogLevel::Warning,
+			           "[RiggedMesh] '" + meshLabel + "' has " +
+			           std::to_string(unnormalizedWeightVertices) +
+			           " vertices whose bone weights are not normalized");
+		}
+
+		if (debugOutput)
+		{
+			std::ostringstream message;
+			message << "[RiggedMesh] '" << meshLabel << "' validated: vertices=" << mesh.vertices.size()
+			        << ", indices=" << mesh.indices.size() << ", bones=" << mesh.bones.size();
+			logMessage(LogLevel::Debug, message.str());
+		}
+
+		return true;
 	}
 
 	void VkApp::init(int width, int height, const char* title)
@@ -471,6 +944,12 @@ namespace lightGraphics
 			surface_ = VK_NULL_HANDLE;
 		}
 
+		if (debugMessenger_ != VK_NULL_HANDLE && inst != VK_NULL_HANDLE)
+		{
+			destroyDebugUtilsMessenger(inst, debugMessenger_, nullptr);
+			debugMessenger_ = VK_NULL_HANDLE;
+		}
+
 		if (inst != VK_NULL_HANDLE)
 		{
 			vkDestroyInstance(inst, nullptr);
@@ -546,6 +1025,7 @@ namespace lightGraphics
 	void VkApp::initVulkan()
 	{
 		createInstance();
+		setupDebugMessenger();
 		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
@@ -578,10 +1058,6 @@ namespace lightGraphics
 			{
 				updateCallback_(dt);
 			}
-
-			// Update instance data if any objects have changed (optimized)
-			updateInstanceDataOptimized();
-			updateRiggedInstances();
 
 			drawFrame();
 		}
@@ -640,6 +1116,11 @@ namespace lightGraphics
 			vkWaitForFences(device_, 1, &imagesInFlight_[imageIndex], VK_TRUE, UINT64_MAX);
 		}
 		imagesInFlight_[imageIndex] = inFlight_[currentFrame_];
+
+		// All CPU writes to GPU-visible frame resources happen only after the
+		// relevant frame/image fences have completed.
+		updateInstanceDataOptimized();
+		updateRiggedInstances();
 
 		// We're going to submit work that uses this frame's fence, so reset it
 		VkResult resReset = vkResetFences(device_, 1, &inFlight_[currentFrame_]);
@@ -1261,12 +1742,91 @@ namespace lightGraphics
 		uint32_t extCount = 0;
 		const char** reqExt = glfwGetRequiredInstanceExtensions(&extCount);
 		std::vector<const char*> exts(reqExt, reqExt+extCount);
+		const auto availableLayers = enumerateInstanceLayers();
+		const auto availableExtensions = enumerateInstanceExtensions();
+
+		validationEnabled_ = false;
+		if (shouldEnableValidationLayers())
+		{
+			const bool hasValidationLayer = hasInstanceLayer(availableLayers, kValidationLayers[0]);
+			if (hasValidationLayer)
+			{
+				validationEnabled_ = true;
+			}
+			else
+			{
+				consoleErrorStream() << "Vulkan validation layer '" << kValidationLayers[0]
+				                     << "' is unavailable; continuing without validation" << std::endl;
+			}
+		}
+
+		const bool hasDebugUtils = hasInstanceExtension(availableExtensions, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#if defined(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+		const bool hasValidationFeatures =
+		    hasInstanceExtension(availableExtensions, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+#else
+		const bool hasValidationFeatures = false;
+#endif
+		(void)hasValidationFeatures;
+
+		if (validationEnabled_ && !hasDebugUtils)
+		{
+			consoleErrorStream() << "VK_EXT_debug_utils is unavailable; validation callback setup will be skipped"
+			                     << std::endl;
+		}
+		if (validationEnabled_ && hasDebugUtils)
+		{
+			appendUniqueExtension(exts, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+		}
+
 		VkApplicationInfo ai{VK_STRUCTURE_TYPE_APPLICATION_INFO};
 		ai.apiVersion = VK_API_VERSION_1_1;
+
+		VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+		if (validationEnabled_ && hasDebugUtils)
+		{
+			populateDebugMessengerCreateInfo(debugCreateInfo);
+		}
+
+#if defined(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+		VkValidationFeatureEnableEXT enabledValidationFeatures[] = {
+			VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+			VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT
+		};
+		VkValidationFeaturesEXT validationFeatures{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+		if (validationEnabled_ && hasValidationFeatures)
+		{
+			appendUniqueExtension(exts, VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME);
+			validationFeatures.enabledValidationFeatureCount =
+			    static_cast<uint32_t>(std::size(enabledValidationFeatures));
+			validationFeatures.pEnabledValidationFeatures = enabledValidationFeatures;
+			validationFeatures.pNext = (hasDebugUtils ? &debugCreateInfo : nullptr);
+		}
+#endif
+
 		VkInstanceCreateInfo ii{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 		ii.pApplicationInfo = &ai;
 		ii.enabledExtensionCount = (uint32_t)exts.size();
 		ii.ppEnabledExtensionNames = exts.data();
+		if (validationEnabled_)
+		{
+			ii.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
+			ii.ppEnabledLayerNames = kValidationLayers.data();
+#if defined(VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT) && \
+    defined(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT)
+			ii.pNext = hasValidationFeatures
+			         ? static_cast<const void*>(&validationFeatures)
+			         : (hasDebugUtils ? static_cast<const void*>(&debugCreateInfo) : nullptr);
+#else
+			ii.pNext = hasDebugUtils ? static_cast<const void*>(&debugCreateInfo) : nullptr;
+#endif
+		}
+
 		VK_CHECK(vkCreateInstance(&ii, nullptr, &inst));
 	}
 
@@ -1282,6 +1842,10 @@ namespace lightGraphics
 			uint32_t graphicsFamily = 0;
 			uint32_t presentFamily = 0;
 			VkPhysicalDeviceFeatures features{};
+			VkPhysicalDeviceProperties properties{};
+			uint32_t surfaceFormatCount = 0;
+			uint32_t presentModeCount = 0;
+			int score = std::numeric_limits<int>::min();
 		};
 
 		uint32_t nPhys = 0;
@@ -1292,7 +1856,37 @@ namespace lightGraphics
 
 		auto supports = [&](VkPhysicalDevice pd)->std::optional<DeviceSupport>
 		{
+			DeviceSupport support{};
+			vkGetPhysicalDeviceProperties(pd, &support.properties);
+
+			auto logCandidate = [&](const char* status, const std::string& reason, int score = std::numeric_limits<int>::min())
+			{
+				if (!debugOutput)
+				{
+					return;
+				}
+
+				std::ostringstream message;
+				message << "[GPU] " << status << ": " << support.properties.deviceName
+				        << " (" << physicalDeviceTypeName(support.properties.deviceType) << ")";
+				if (!reason.empty())
+				{
+					message << " - " << reason;
+				}
+				if (score != std::numeric_limits<int>::min())
+				{
+					message << ", score=" << score;
+				}
+				logMessage(LogLevel::Debug, message.str());
+			};
+
 			uint32_t qCount=0; vkGetPhysicalDeviceQueueFamilyProperties(pd, &qCount, nullptr);
+			if (qCount == 0)
+			{
+				logCandidate("Rejected GPU", "no queue families");
+				return std::nullopt;
+			}
+
 			std::vector<VkQueueFamilyProperties> qfp(qCount);
 			vkGetPhysicalDeviceQueueFamilyProperties(pd, &qCount, qfp.data());
 			std::optional<uint32_t> g, p;
@@ -1303,32 +1897,77 @@ namespace lightGraphics
 				vkGetPhysicalDeviceSurfaceSupportKHR(pd, i, surface_, &present);
 				if (present) p = i;
 			}
-			if (g && p)
+			if (!g || !p)
 			{
-				DeviceSupport support{};
-				support.graphicsFamily = *g;
-				support.presentFamily = *p;
-				vkGetPhysicalDeviceFeatures(pd, &support.features);
-				return support;
+				logCandidate("Rejected GPU", "missing graphics or present queue");
+				return std::nullopt;
 			}
-			return std::nullopt;
+
+			const auto extensions = enumerateDeviceExtensions(pd);
+			if (!hasDeviceExtension(extensions, VK_KHR_SWAPCHAIN_EXTENSION_NAME))
+			{
+				logCandidate("Rejected GPU", "missing VK_KHR_swapchain support");
+				return std::nullopt;
+			}
+
+			vkGetPhysicalDeviceSurfaceFormatsKHR(pd, surface_, &support.surfaceFormatCount, nullptr);
+			vkGetPhysicalDeviceSurfacePresentModesKHR(pd, surface_, &support.presentModeCount, nullptr);
+			if (support.surfaceFormatCount == 0 || support.presentModeCount == 0)
+			{
+				std::ostringstream reason;
+				reason << "insufficient surface support (formats=" << support.surfaceFormatCount
+				       << ", presentModes=" << support.presentModeCount << ")";
+				logCandidate("Rejected GPU", reason.str());
+				return std::nullopt;
+			}
+
+			support.graphicsFamily = *g;
+			support.presentFamily = *p;
+			vkGetPhysicalDeviceFeatures(pd, &support.features);
+
+			support.score = physicalDeviceTypeScore(support.properties.deviceType);
+			if (support.graphicsFamily == support.presentFamily)
+			{
+				support.score += 100;
+			}
+			support.score += static_cast<int>(std::min<uint32_t>(
+			    support.properties.limits.maxImageDimension2D / 1024u,
+			    1024u));
+
+			std::ostringstream acceptedReason;
+			acceptedReason << "graphics queue=" << support.graphicsFamily
+			               << ", present queue=" << support.presentFamily
+			               << ", formats=" << support.surfaceFormatCount
+			               << ", presentModes=" << support.presentModeCount;
+			logCandidate("Candidate GPU", acceptedReason.str(), support.score);
+			return support;
 		};
 
+		VkPhysicalDevice bestPhysicalDevice = VK_NULL_HANDLE;
+		std::optional<DeviceSupport> bestSupport;
 		for (auto pd : physList)
 		{
-			auto qp = supports(pd);
-			if (qp)
+			auto support = supports(pd);
+			if (!support)
 			{
-				physicalDevice_ = pd;
-				qFamGfx = qp->graphicsFamily;
-				qFamPresent = qp->presentFamily;
-				supportsNonSolidFill_ = qp->features.fillModeNonSolid == VK_TRUE;
-				supportsWideLines_ = qp->features.wideLines == VK_TRUE;
-				break;
+				continue;
+			}
+
+			if (!bestSupport || support->score > bestSupport->score)
+			{
+				bestSupport = *support;
+				bestPhysicalDevice = pd;
 			}
 		}
-		if (!physicalDevice_)
-			throw std::runtime_error("No suitable GPU");
+		if (!bestSupport || bestPhysicalDevice == VK_NULL_HANDLE)
+			throw std::runtime_error("No suitable GPU with graphics, presentation, and swapchain support");
+
+		physicalDevice_ = bestPhysicalDevice;
+		qFamGfx = bestSupport->graphicsFamily;
+		qFamPresent = bestSupport->presentFamily;
+		supportsNonSolidFill_ = bestSupport->features.fillModeNonSolid == VK_TRUE;
+		supportsWideLines_ = bestSupport->features.wideLines == VK_TRUE;
+		logSelectedPhysicalDeviceInfo(physicalDevice_);
 	}
 
 	void VkApp::createLogicalDevice()
@@ -1355,6 +1994,11 @@ namespace lightGraphics
 		dci.enabledExtensionCount = 1;
 		dci.ppEnabledExtensionNames = devExts;
 		dci.pEnabledFeatures = &enabledFeatures;
+		if (validationEnabled_)
+		{
+			dci.enabledLayerCount = static_cast<uint32_t>(kValidationLayers.size());
+			dci.ppEnabledLayerNames = kValidationLayers.data();
+		}
 		VK_CHECK(vkCreateDevice(physicalDevice_, &dci, nullptr, &device_));
 		vkGetDeviceQueue(device_, qFamGfx, 0, &graphicsQueue_);
 		vkGetDeviceQueue(device_, qFamPresent, 0, &presentQueue_);
@@ -1380,10 +2024,15 @@ namespace lightGraphics
 		const uint32_t WIDTH = width_, HEIGHT = height_;
 		swapChainExtent_ = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent : VkExtent2D{WIDTH, HEIGHT};
 		VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync
+		uint32_t desiredImageCount = std::max(2u, caps.minImageCount);
+		if (caps.maxImageCount > 0)
+		{
+			desiredImageCount = std::min(desiredImageCount, caps.maxImageCount);
+		}
 
 		VkSwapchainCreateInfoKHR sci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
 		sci.surface = surface_;
-		sci.minImageCount = std::max(2u, caps.minImageCount);
+		sci.minImageCount = desiredImageCount;
 		sci.imageFormat = swapChainImageFormat_;
 		sci.imageColorSpace = chosen.colorSpace;
 		sci.imageExtent = swapChainExtent_;
@@ -1408,6 +2057,16 @@ namespace lightGraphics
 		uint32_t nImgs=0; vkGetSwapchainImagesKHR(device_, swapChain_, &nImgs, nullptr);
 		swapChainImages_.resize(nImgs);
 		vkGetSwapchainImagesKHR(device_, swapChain_, &nImgs, swapChainImages_.data());
+
+		if (debugOutput)
+		{
+			std::ostringstream message;
+			message << "Swapchain: format=" << swapChainImageFormat_
+			        << ", colorSpace=" << chosen.colorSpace
+			        << ", images=" << nImgs
+			        << ", extent=" << swapChainExtent_.width << 'x' << swapChainExtent_.height;
+			logMessage(LogLevel::Debug, message.str());
+		}
 	}
 
 	void VkApp::createImageViews()
@@ -2115,6 +2774,7 @@ namespace lightGraphics
 	{
 		VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 		cpci.queueFamilyIndex = qFamGfx;
+		cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 		VK_CHECK(vkCreateCommandPool(device_, &cpci, nullptr, &commandPool_));
 	}
 
@@ -3617,15 +4277,30 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 			instanceData.uprightCorrection = model->axisCorrection;
 
-		createBuffer(sizeof(Instance),
-		             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-		             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		             instanceData.instanceBuffer);
+		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+		{
+			createBuffer(sizeof(Instance),
+			             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			             instanceData.instanceBuffers[frameIndex]);
+			VK_CHECK(vkMapMemory(device_,
+			                     instanceData.instanceBuffers[frameIndex].memory,
+			                     0,
+			                     sizeof(Instance),
+			                     0,
+			                     &instanceData.instanceBufferMapped[frameIndex]));
+		}
 
 		for (const auto& mesh : model->meshes)
 		{
 			if (mesh.vertices.empty() || mesh.indices.empty())
 			{
+				continue;
+			}
+			if (!validateRiggedMesh(mesh))
+			{
+				logMessage(LogLevel::Warning,
+				           "[RiggedMesh] Skipping mesh because imported data failed validation");
 				continue;
 			}
 
@@ -3637,10 +4312,19 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			VkDeviceSize vbSize = sizeof(Vertex) * mesh.vertices.size();
 			VkDeviceSize ibSize = sizeof(uint32_t) * mesh.indices.size();
 
-			createBuffer(vbSize,
-			             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			             meshData.vertexBuffer);
+			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			{
+				createBuffer(vbSize,
+				             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+				             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				             meshData.vertexBuffers[frameIndex]);
+				VK_CHECK(vkMapMemory(device_,
+				                     meshData.vertexBuffers[frameIndex].memory,
+				                     0,
+				                     vbSize,
+				                     0,
+				                     &meshData.vertexBufferMapped[frameIndex]));
+			}
 			createBuffer(ibSize,
 			             VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
 			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -4070,6 +4754,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			// Clean up old buffer if it exists
 			if (instanceBufs_[frameIndex].buffer != VK_NULL_HANDLE)
 			{
+				if (instanceBufferMappedPerFrame_[frameIndex] != nullptr &&
+				    instanceBufs_[frameIndex].memory != VK_NULL_HANDLE)
+				{
+					vkUnmapMemory(device_, instanceBufs_[frameIndex].memory);
+					instanceBufferMappedPerFrame_[frameIndex] = nullptr;
+				}
 				vkDestroyBuffer(device_, instanceBufs_[frameIndex].buffer, nullptr);
 				vkFreeMemory(device_, instanceBufs_[frameIndex].memory, nullptr);
 			}
@@ -4189,7 +4879,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 	void VkApp::flushPendingUpdates()
 	{
+		if (sceneFinalized_ && device_ != VK_NULL_HANDLE && currentFrame_ < inFlight_.size())
+		{
+			VK_CHECK(vkWaitForFences(device_, 1, &inFlight_[currentFrame_], VK_TRUE, UINT64_MAX));
+		}
 		updateInstanceDataOptimized();
+		updateRiggedInstances();
 	}
 
 	void VkApp::updateRiggedInstances()
@@ -4197,6 +4892,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		if (riggedInstances_.empty())
 		{
 			return;
+		}
+
+		const uint32_t frameIndex = static_cast<uint32_t>(currentFrame_);
+		if (sceneFinalized_ && device_ != VK_NULL_HANDLE && frameIndex < inFlight_.size())
+		{
+			VK_CHECK(vkWaitForFences(device_, 1, &inFlight_[frameIndex], VK_TRUE, UINT64_MAX));
 		}
 
 		for (auto& instance : riggedInstances_)
@@ -4242,8 +4943,15 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 						if (it != model->boneMapping.end() &&
 						    it->second < static_cast<int>(boneTransforms.size()))
 						{
+							const Bone& globalBoneBind = model->bones[it->second];
 							glm::mat4 globalBone = boneTransforms[it->second];
-							finalMat = globalInverse * globalBone * bone.offsetMatrix;
+							// Derive skinning from the imported bind hierarchy and the mesh node's
+							// bind transform. This is more reliable for Worker.fbx than the raw
+							// aiBone offset matrix path.
+							finalMat = globalInverse *
+							           globalBone *
+							           glm::inverse(globalBoneBind.globalBindTransform) *
+							           mesh->globalBindTransform;
 						}
 						finalBoneMatrices[i] = finalMat;
 					}
@@ -4251,6 +4959,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 				glm::vec2 uvMin(std::numeric_limits<float>::max());
 				glm::vec2 uvMax(std::numeric_limits<float>::lowest());
+				bool loggedInvalidSkinnedVertex = false;
 
 				for (size_t v = 0; v < mesh->vertices.size(); ++v)
 				{
@@ -4285,6 +4994,21 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 					glm::vec3 finalPos = glm::vec3(blendedPos);
 					glm::vec3 finalNrm = glm::vec3(blendedNrm);
+					if (!isFiniteVec3(finalPos) || !isFiniteVec3(finalNrm))
+					{
+						if (!loggedInvalidSkinnedVertex)
+						{
+							const std::string meshLabel =
+							    mesh->materialName.empty() ? std::string("<unnamed>") : mesh->materialName;
+							logMessage(LogLevel::Warning,
+							           "[RiggedMesh] '" + meshLabel +
+							           "' produced non-finite skinned vertices; using source vertices for safety");
+							loggedInvalidSkinnedVertex = true;
+						}
+
+						finalPos = src.position;
+						finalNrm = src.normal;
+					}
 					if (glm::length(finalNrm) > 0.0f)
 					{
 						finalNrm = glm::normalize(finalNrm);
@@ -4309,13 +5033,22 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 					logMessage(LogLevel::Debug, message.str());
 				}
 
-				if (!meshData.skinnedVertices.empty() && meshData.vertexBuffer.memory != VK_NULL_HANDLE)
+				detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[frameIndex];
+				void* frameVertexMapped = meshData.vertexBufferMapped[frameIndex];
+				if (!meshData.skinnedVertices.empty() && frameVertexBuffer.memory != VK_NULL_HANDLE)
 				{
 					VkDeviceSize vbSize = sizeof(Vertex) * meshData.skinnedVertices.size();
-					void* mapped = nullptr;
-					VK_CHECK(vkMapMemory(device_, meshData.vertexBuffer.memory, 0, vbSize, 0, &mapped));
-					std::memcpy(mapped, meshData.skinnedVertices.data(), static_cast<size_t>(vbSize));
-					vkUnmapMemory(device_, meshData.vertexBuffer.memory);
+					if (frameVertexMapped != nullptr)
+					{
+						std::memcpy(frameVertexMapped, meshData.skinnedVertices.data(), static_cast<size_t>(vbSize));
+					}
+					else
+					{
+						void* mapped = nullptr;
+						VK_CHECK(vkMapMemory(device_, frameVertexBuffer.memory, 0, vbSize, 0, &mapped));
+						std::memcpy(mapped, meshData.skinnedVertices.data(), static_cast<size_t>(vbSize));
+						vkUnmapMemory(device_, frameVertexBuffer.memory);
+					}
 				}
 			}
 
@@ -4327,12 +5060,21 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			riggedInstance.color = glm::vec3(riggedObject->getColour());
 			riggedInstance.shapeType = static_cast<float>(lightGraphics::ShapeType::HUMAN);
 
-			if (instance.instanceBuffer.memory != VK_NULL_HANDLE)
+			detail::Buffer& frameInstanceBuffer = instance.instanceBuffers[frameIndex];
+			void* frameInstanceMapped = instance.instanceBufferMapped[frameIndex];
+			if (frameInstanceBuffer.memory != VK_NULL_HANDLE)
 			{
-				void* mapped = nullptr;
-				VK_CHECK(vkMapMemory(device_, instance.instanceBuffer.memory, 0, sizeof(Instance), 0, &mapped));
-				std::memcpy(mapped, &riggedInstance, sizeof(Instance));
-				vkUnmapMemory(device_, instance.instanceBuffer.memory);
+				if (frameInstanceMapped != nullptr)
+				{
+					std::memcpy(frameInstanceMapped, &riggedInstance, sizeof(Instance));
+				}
+				else
+				{
+					void* mapped = nullptr;
+					VK_CHECK(vkMapMemory(device_, frameInstanceBuffer.memory, 0, sizeof(Instance), 0, &mapped));
+					std::memcpy(mapped, &riggedInstance, sizeof(Instance));
+					vkUnmapMemory(device_, frameInstanceBuffer.memory);
+				}
 			}
 		}
 	}
@@ -4341,10 +5083,28 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 	{
 		for (auto& instance : riggedInstances_)
 		{
-			destroyBuffer(device_, instance.instanceBuffer);
+			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			{
+				if (instance.instanceBufferMapped[frameIndex] != nullptr &&
+				    instance.instanceBuffers[frameIndex].memory != VK_NULL_HANDLE)
+				{
+					vkUnmapMemory(device_, instance.instanceBuffers[frameIndex].memory);
+					instance.instanceBufferMapped[frameIndex] = nullptr;
+				}
+				destroyBuffer(device_, instance.instanceBuffers[frameIndex]);
+			}
 			for (auto& mesh : instance.meshes)
 			{
-				destroyBuffer(device_, mesh.vertexBuffer);
+				for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+				{
+					if (mesh.vertexBufferMapped[frameIndex] != nullptr &&
+					    mesh.vertexBuffers[frameIndex].memory != VK_NULL_HANDLE)
+					{
+						vkUnmapMemory(device_, mesh.vertexBuffers[frameIndex].memory);
+						mesh.vertexBufferMapped[frameIndex] = nullptr;
+					}
+					destroyBuffer(device_, mesh.vertexBuffers[frameIndex]);
+				}
 				destroyBuffer(device_, mesh.indexBuffer);
 				mesh.skinnedVertices.clear();
 				mesh.texture.reset();
@@ -4990,9 +5750,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 			for (const auto& riggedInstance : riggedInstances_)
 			{
+				const detail::Buffer& frameInstanceBuffer = riggedInstance.instanceBuffers[currentFrame_];
 				for (const auto& meshData : riggedInstance.meshes)
 				{
-					if (meshData.vertexBuffer.buffer == VK_NULL_HANDLE ||
+					const detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[currentFrame_];
+					if (frameVertexBuffer.buffer == VK_NULL_HANDLE ||
+					    frameInstanceBuffer.buffer == VK_NULL_HANDLE ||
 					    meshData.indexBuffer.buffer == VK_NULL_HANDLE ||
 					    meshData.indexCount == 0)
 					{
@@ -5000,8 +5763,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 					}
 
 					std::array<VkBuffer, 2> riggedBuffers{
-						meshData.vertexBuffer.buffer,
-						riggedInstance.instanceBuffer.buffer
+						frameVertexBuffer.buffer,
+						frameInstanceBuffer.buffer
 					};
 					std::array<VkDeviceSize, 2> riggedOffsets{0, 0};
 

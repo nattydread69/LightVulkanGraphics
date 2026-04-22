@@ -267,9 +267,11 @@ namespace lightGraphics
 		float orbitDollySens_ = 0.5f;
 		bool supportsNonSolidFill_ = false;
 		bool supportsWideLines_ = false;
+		bool validationEnabled_ = false;
 
 		// Vulkan core
 		VkInstance inst = VK_NULL_HANDLE;
+		VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
 		VkSurfaceKHR surface_ = VK_NULL_HANDLE;
 		VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
 		VkDevice device_ = VK_NULL_HANDLE;
@@ -363,7 +365,8 @@ namespace lightGraphics
 		struct RiggedMeshRenderData
 		{
 			const RiggedMesh* mesh = nullptr;
-			detail::Buffer vertexBuffer;
+			detail::Buffer vertexBuffers[MAX_FRAMES_IN_FLIGHT]{};
+			void* vertexBufferMapped[MAX_FRAMES_IN_FLIGHT]{};
 			detail::Buffer indexBuffer;
 			std::vector<detail::Vertex> skinnedVertices;
 			uint32_t indexCount = 0;
@@ -372,7 +375,8 @@ namespace lightGraphics
 		struct RiggedInstanceRenderData
 		{
 			std::shared_ptr<RiggedObject> object;
-			detail::Buffer instanceBuffer;
+			detail::Buffer instanceBuffers[MAX_FRAMES_IN_FLIGHT]{};
+			void* instanceBufferMapped[MAX_FRAMES_IN_FLIGHT]{};
 			glm::mat4 uprightCorrection = glm::mat4(1.0f);
 			int activeAnimationIndex = -1;
 			bool animationLoop = true;
@@ -433,6 +437,7 @@ namespace lightGraphics
 		// Lifecycle helpers
 		void createWindow(int w, int h, const char* title);
 		void initVulkan();
+		void setupDebugMessenger();
 		void mainLoop();
 
 		// Vulkan creation chain
@@ -521,6 +526,15 @@ namespace lightGraphics
 
 		void createBufferRaw(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
 							VkBuffer& buffer, VkDeviceMemory& memory);
+
+		void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) const;
+		void logSelectedPhysicalDeviceInfo(VkPhysicalDevice device) const;
+		bool validateRiggedMesh(const RiggedMesh& mesh) const;
+		static VKAPI_ATTR VkBool32 VKAPI_CALL debugUtilsMessengerCallback(
+		    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+		    VkDebugUtilsMessageTypeFlagsEXT messageTypes,
+		    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+		    void* userData);
 
 		void destroyBuffer(VkDevice device, detail::Buffer& buf);
 		void createTextureDescriptorPool();

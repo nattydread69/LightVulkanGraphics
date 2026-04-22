@@ -44,6 +44,7 @@ namespace lightGraphics
         glm::mat4 offsetMatrix;  // Transform from mesh space to bone space
         glm::mat4 finalTransform; // Final transformation matrix
         glm::mat4 localTransform; // Bind-pose transform relative to parent
+        glm::mat4 globalBindTransform = glm::mat4(1.0f);
         glm::vec3 bindPosition = glm::vec3(0.0f);
         glm::quat bindRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         glm::vec3 bindScale    = glm::vec3(1.0f);
@@ -103,10 +104,12 @@ namespace lightGraphics
         std::vector<RiggedVertex> vertices;
         std::vector<unsigned int> indices;
         std::string materialName;
+        std::string nodeName;
         glm::vec4 diffuseColor = glm::vec4(1.0f);
         std::string diffuseTexturePath;
         std::shared_ptr<EmbeddedTextureData> embeddedTexture;
         std::string embeddedTextureKey;
+        glm::mat4 globalBindTransform = glm::mat4(1.0f);
         std::vector<Bone> bones;
         std::map<std::string, int> boneMapping; // Maps bone names to indices
     };
