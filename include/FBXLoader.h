@@ -45,6 +45,8 @@ namespace lightGraphics
         glm::mat4 finalTransform; // Final transformation matrix
         glm::mat4 localTransform; // Bind-pose transform relative to parent
         glm::mat4 globalBindTransform = glm::mat4(1.0f);
+        glm::mat4 skinningGlobalBindTransform = glm::mat4(1.0f);
+        glm::mat4 skinningLocalBindTransform = glm::mat4(1.0f);
         glm::vec3 bindPosition = glm::vec3(0.0f);
         glm::quat bindRotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
         glm::vec3 bindScale    = glm::vec3(1.0f);
@@ -123,6 +125,7 @@ namespace lightGraphics
         std::map<std::string, int> boneMapping; // Global bone name to index mapping
         glm::mat4 axisCorrection = glm::mat4(1.0f);
         glm::mat4 globalInverseTransform;
+        bool usesSkinningBindCorrection = false;
     };
 
     /**
