@@ -32,6 +32,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -53,7 +54,7 @@ glm::quat buildWorkerSpawnRotation(const glm::vec3& workerPosition)
 
 	toCamera = glm::normalize(toCamera);
 
-	// After the upright correction, Worker.fbx faces +Z in demo space.
+	// Worker.fbx still needs this object-local correction before yawing in demo space.
 	const float yawToCamera = std::atan2(toCamera.x, toCamera.z);
 	const glm::quat faceCameraRotation =
 	    glm::angleAxis(yawToCamera, glm::vec3(0.0f, 1.0f, 0.0f));
@@ -194,7 +195,6 @@ private:
 		if (worker_->getAnimationCount() > 0)
 		{
 			auto animationNames = worker_->getAnimationNames();
-			const int preferredAnimationIndex = 23;
 			lightGraphics::consoleInfoStream() << "Loaded Worker.fbx with "
 			                                   << worker_->getAnimationCount()
 			                                   << " animation(s):" << std::endl;
@@ -204,14 +204,35 @@ private:
 				                                   << std::endl;
 			}
 
-			int initialAnimationIndex = preferredAnimationIndex;
-			if (preferredAnimationIndex >= static_cast<int>(worker_->getAnimationCount()))
+			int initialAnimationIndex = -1;
+			const std::vector<std::string> preferredStartupAnimations = {
+			    "CharacterArmature|Idle_Neutral",
+			    "CharacterArmature|Idle",
+			    "Idle",
+			    "Idle_Neutral"};
+
+			for (const auto& preferredName : preferredStartupAnimations)
+			{
+				for (size_t i = 0; i < animationNames.size(); ++i)
+				{
+					if (animationNames[i] == preferredName)
+					{
+						initialAnimationIndex = static_cast<int>(i);
+						break;
+					}
+				}
+				if (initialAnimationIndex >= 0)
+				{
+					break;
+				}
+			}
+
+			if (initialAnimationIndex < 0)
 			{
 				initialAnimationIndex = 0;
-				lightGraphics::consoleInfoStream() << "Preferred startup animation "
-				                                   << preferredAnimationIndex
-				                                   << " is unavailable, falling back to animation 0."
-				                                   << std::endl;
+				lightGraphics::consoleInfoStream()
+				    << "No preferred idle startup animation found, falling back to animation 0."
+				    << std::endl;
 			}
 
 			worker_->playAnimation(initialAnimationIndex, true);

@@ -4916,6 +4916,9 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 			const auto& boneTransforms = riggedObject->getBoneTransforms();
 			glm::mat4 globalInverse = model->globalInverseTransform;
+			const bool useSkinningBindCorrection =
+			    model->usesSkinningBindCorrection &&
+			    boneTransforms.size() == model->bones.size();
 
 			for (auto& meshData : instance.meshes)
 			{
@@ -4943,15 +4946,25 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 						if (it != model->boneMapping.end() &&
 						    it->second < static_cast<int>(boneTransforms.size()))
 						{
-							const Bone& globalBoneBind = model->bones[it->second];
 							glm::mat4 globalBone = boneTransforms[it->second];
-							// Derive skinning from the imported bind hierarchy and the mesh node's
-							// bind transform. This is more reliable for Worker.fbx than the raw
-							// aiBone offset matrix path.
-							finalMat = globalInverse *
-							           globalBone *
-							           glm::inverse(globalBoneBind.globalBindTransform) *
-							           mesh->globalBindTransform;
+							if (useSkinningBindCorrection)
+							{
+								// Assimp's offset matrix already maps mesh bind vertices into
+								// the skin bind basis. Rebuilding another corrected bind
+								// hierarchy here cancels the imported animation delta for
+								// Worker.fbx and leaves the arms in the horizontal bind pose.
+								finalMat = globalInverse * globalBone * bone.offsetMatrix;
+							}
+							else
+							{
+								const Bone& globalBoneBind = model->bones[it->second];
+								// Default to the node-bind path for ordinary rigs. The corrected
+								// skin-bind path is only enabled when bind mismatch is detected.
+								finalMat = globalInverse *
+								           globalBone *
+								           glm::inverse(globalBoneBind.globalBindTransform) *
+								           mesh->globalBindTransform;
+							}
 						}
 						finalBoneMatrices[i] = finalMat;
 					}

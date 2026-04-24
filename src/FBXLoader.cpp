@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <cstring>
+#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
@@ -262,6 +263,8 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     {
         model->bones[boneIndex].globalBindTransform =
             computeGlobalTransformForNode(model->bones, static_cast<int>(boneIndex));
+        model->bones[boneIndex].skinningGlobalBindTransform =
+            model->bones[boneIndex].globalBindTransform;
     }
 
     for (auto& mesh : model->meshes)
@@ -274,6 +277,52 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         }
     }
 
+    std::vector<bool> hasSkinningBindTransform(model->bones.size(), false);
+    for (const auto& mesh : model->meshes)
+    {
+        for (const auto& meshBone : mesh.bones)
+        {
+            auto globalBoneIt = model->boneMapping.find(meshBone.name);
+            if (globalBoneIt == model->boneMapping.end())
+            {
+                continue;
+            }
+
+            const int globalBoneIndex = globalBoneIt->second;
+            if (globalBoneIndex < 0 ||
+                globalBoneIndex >= static_cast<int>(model->bones.size()))
+            {
+                continue;
+            }
+
+            // Preserve the first imported skin bind per bone. Some FBX files use
+            // a skin bind basis that differs from node local transforms.
+            if (!hasSkinningBindTransform[globalBoneIndex])
+            {
+                model->bones[globalBoneIndex].skinningGlobalBindTransform =
+                    mesh.globalBindTransform * glm::inverse(meshBone.offsetMatrix);
+                hasSkinningBindTransform[globalBoneIndex] = true;
+            }
+        }
+    }
+
+    for (size_t boneIndex = 0; boneIndex < model->bones.size(); ++boneIndex)
+    {
+        const int parentIndex = model->bones[boneIndex].parentIndex;
+        if (parentIndex >= 0 &&
+            parentIndex < static_cast<int>(model->bones.size()))
+        {
+            model->bones[boneIndex].skinningLocalBindTransform =
+                glm::inverse(model->bones[parentIndex].skinningGlobalBindTransform) *
+                model->bones[boneIndex].skinningGlobalBindTransform;
+        }
+        else
+        {
+            model->bones[boneIndex].skinningLocalBindTransform =
+                model->bones[boneIndex].skinningGlobalBindTransform;
+        }
+    }
+
     if (auto it = model->boneMapping.find("CharacterArmature");
         it != model->boneMapping.end())
     {
@@ -281,6 +330,38 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
             computeGlobalTransformForNode(model->bones, it->second);
         model->globalInverseTransform = glm::inverse(armatureGlobal);
     }
+
+    int correctedBoneCount = 0;
+    float maxSkinningBindDelta = 0.0f;
+    for (size_t boneIndex = 0; boneIndex < model->bones.size(); ++boneIndex)
+    {
+        if (!hasSkinningBindTransform[boneIndex])
+        {
+            continue;
+        }
+
+        const glm::vec3 nodeBindPos = glm::vec3(
+            model->globalInverseTransform *
+            glm::vec4(model->bones[boneIndex].globalBindTransform[3]));
+        const glm::vec3 skinBindPos = glm::vec3(
+            model->globalInverseTransform *
+            glm::vec4(model->bones[boneIndex].skinningGlobalBindTransform[3]));
+        const float bindDelta = glm::length(nodeBindPos - skinBindPos);
+
+        if (!std::isfinite(bindDelta))
+        {
+            continue;
+        }
+
+        maxSkinningBindDelta = std::max(maxSkinningBindDelta, bindDelta);
+        if (bindDelta > 0.02f)
+        {
+            ++correctedBoneCount;
+        }
+    }
+
+    model->usesSkinningBindCorrection =
+        correctedBoneCount >= 4 && maxSkinningBindDelta > 0.05f;
 
     return model;
 }
