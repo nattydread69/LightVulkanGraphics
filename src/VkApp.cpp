@@ -4916,48 +4916,6 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 			const auto& boneTransforms = riggedObject->getBoneTransforms();
 			glm::mat4 globalInverse = model->globalInverseTransform;
-			std::vector<glm::mat4> correctedBoneTransforms;
-			const std::vector<glm::mat4>* skinningBoneTransforms = &boneTransforms;
-
-			if (model->usesSkinningBindCorrection &&
-			    boneTransforms.size() == model->bones.size())
-			{
-				correctedBoneTransforms.resize(model->bones.size(), glm::mat4(1.0f));
-				for (size_t boneIndex = 0; boneIndex < model->bones.size(); ++boneIndex)
-				{
-					const Bone& bone = model->bones[boneIndex];
-					glm::mat4 currentLocalTransform = boneTransforms[boneIndex];
-					if (bone.parentIndex >= 0 &&
-					    bone.parentIndex < static_cast<int>(boneTransforms.size()))
-					{
-						currentLocalTransform =
-						    glm::inverse(boneTransforms[bone.parentIndex]) *
-						    boneTransforms[boneIndex];
-					}
-
-					// When the imported skin bind differs from the scene node bind, applying
-					// the animation delta in the skin bind basis restores the intended pose
-					// without reintroducing the raw-offset corruption.
-					const glm::mat4 localAnimationDelta =
-					    currentLocalTransform * glm::inverse(bone.localTransform);
-					const glm::mat4 correctedLocalTransform =
-					    bone.skinningLocalBindTransform * localAnimationDelta;
-
-					if (bone.parentIndex >= 0 &&
-					    bone.parentIndex < static_cast<int>(correctedBoneTransforms.size()))
-					{
-						correctedBoneTransforms[boneIndex] =
-						    correctedBoneTransforms[bone.parentIndex] *
-						    correctedLocalTransform;
-					}
-					else
-					{
-						correctedBoneTransforms[boneIndex] = correctedLocalTransform;
-					}
-				}
-
-				skinningBoneTransforms = &correctedBoneTransforms;
-			}
 
 			for (auto& meshData : instance.meshes)
 			{
@@ -4983,23 +4941,17 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 						glm::mat4 finalMat = glm::mat4(1.0f);
 						auto it = model->boneMapping.find(bone.name);
 						if (it != model->boneMapping.end() &&
-						    it->second < static_cast<int>(skinningBoneTransforms->size()))
+						    it->second < static_cast<int>(boneTransforms.size()))
 						{
-							glm::mat4 globalBone = (*skinningBoneTransforms)[it->second];
-							if (model->usesSkinningBindCorrection)
-							{
-								finalMat = globalInverse * globalBone * bone.offsetMatrix;
-							}
-							else
-							{
-								const Bone& globalBoneBind = model->bones[it->second];
-								// Default to the node-bind path for ordinary rigs. The corrected
-								// skin-bind path above is only enabled for mismatched FBX imports.
-								finalMat = globalInverse *
-								           globalBone *
-								           glm::inverse(globalBoneBind.globalBindTransform) *
-								           mesh->globalBindTransform;
-							}
+							const Bone& globalBoneBind = model->bones[it->second];
+							glm::mat4 globalBone = boneTransforms[it->second];
+							// Derive skinning from the imported bind hierarchy and the mesh node's
+							// bind transform. This is more reliable for Worker.fbx than the raw
+							// aiBone offset matrix path.
+							finalMat = globalInverse *
+							           globalBone *
+							           glm::inverse(globalBoneBind.globalBindTransform) *
+							           mesh->globalBindTransform;
 						}
 						finalBoneMatrices[i] = finalMat;
 					}

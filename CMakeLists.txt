@@ -172,27 +172,78 @@ if (ASSIMP_ROOT)
 	list(PREPEND CMAKE_PREFIX_PATH "${ASSIMP_ROOT}")
 endif()
 
+if (WIN32 AND NOT ASSIMP_ROOT)
+	# Common Windows build-from-source locations (build dir alongside source dir)
+	set(_assimp_win_candidates
+		"C:/mycode/assimp/build"
+		"C:/dev/assimp/build"
+		"C:/assimp/build"
+		"C:/libs/assimp/build"
+		"$ENV{USERPROFILE}/source/repos/assimp/build"
+	)
+	# Also check vcpkg
+	if (DEFINED ENV{VCPKG_ROOT})
+		list(APPEND _assimp_win_candidates "$ENV{VCPKG_ROOT}/installed/x64-windows")
+	endif()
+	foreach(_candidate IN LISTS _assimp_win_candidates)
+		# scene.h is in the source tree; config.h is generated into the build tree
+		cmake_path(GET _candidate PARENT_PATH _candidate_src)
+		if (EXISTS "${_candidate_src}/include/assimp/scene.h" OR
+			EXISTS "${_candidate}/include/assimp/config.h")
+			set(ASSIMP_ROOT "${_candidate}" CACHE PATH "Path to local Assimp installation" FORCE)
+			message(STATUS "Auto-detected Assimp at: ${_candidate}")
+			break()
+		endif()
+	endforeach()
+endif()
+
+# When built from source, headers are split: generated headers in the build
+# tree (include/) and original headers in the source tree (../include/).
+if (ASSIMP_ROOT)
+	cmake_path(GET ASSIMP_ROOT PARENT_PATH _assimp_src_root)
+	set(_assimp_include_hints "${ASSIMP_ROOT}" "${_assimp_src_root}")
+else()
+	set(_assimp_include_hints "")
+endif()
+
 find_path(ASSIMP_INCLUDE_DIR
 	NAMES assimp/scene.h
-	HINTS ${ASSIMP_ROOT}
+	HINTS ${_assimp_include_hints}
 	PATH_SUFFIXES include
 )
 
 find_library(ASSIMP_LIBRARY
-
-	NAMES assimp libassimp
+	NAMES assimp libassimp assimp-vc143-mt assimp-vc142-mt assimp-vc141-mt
 	HINTS ${ASSIMP_ROOT}
-	PATH_SUFFIXES lib lib64 lib/x86_64-linux-gnu
+	PATH_SUFFIXES lib lib64 lib/Release lib/Debug lib/x86_64-linux-gnu
 )
 
 if (ASSIMP_LIBRARY AND ASSIMP_INCLUDE_DIR)
+	# For from-source builds, also include the build tree for generated headers
+	# (e.g. assimp/config.h, assimp/revision.h which are not in the source tree)
+	set(_assimp_all_includes "${ASSIMP_INCLUDE_DIR}")
+	if (ASSIMP_ROOT AND EXISTS "${ASSIMP_ROOT}/include/assimp/config.h")
+		list(APPEND _assimp_all_includes "${ASSIMP_ROOT}/include")
+	endif()
+
 	add_library(assimp::assimp UNKNOWN IMPORTED)
 	set_target_properties(assimp::assimp PROPERTIES
 		IMPORTED_LOCATION "${ASSIMP_LIBRARY}"
-		INTERFACE_INCLUDE_DIRECTORIES "${ASSIMP_INCLUDE_DIR}"
+		INTERFACE_INCLUDE_DIRECTORIES "${_assimp_all_includes}"
 	)
 	message(STATUS "Found assimp library: ${ASSIMP_LIBRARY}")
-	message(STATUS "Found assimp headers: ${ASSIMP_INCLUDE_DIR}")
+	message(STATUS "Found assimp headers: ${_assimp_all_includes}")
+
+	# On Windows the import lib and DLL live in different trees (lib/ vs bin/).
+	# Derive the DLL path so examples can copy it as a post-build step.
+	if (WIN32 AND ASSIMP_LIBRARY MATCHES "\\.lib$")
+		string(REGEX REPLACE "/lib/" "/bin/" _assimp_dll_path "${ASSIMP_LIBRARY}")
+		string(REGEX REPLACE "\\.lib$" ".dll" _assimp_dll_path "${_assimp_dll_path}")
+		if (EXISTS "${_assimp_dll_path}")
+			set(ASSIMP_DLL "${_assimp_dll_path}" CACHE FILEPATH "Path to the assimp runtime DLL (Windows only)")
+			message(STATUS "Found assimp DLL: ${ASSIMP_DLL}")
+		endif()
+	endif()
 endif()
 
 if (NOT TARGET assimp::assimp AND ASSIMP_USE_CONFIG)
@@ -534,6 +585,18 @@ if (LVG_BUILD_EXAMPLES)
 	add_executable(demoVulkanGraphics examples/demo_vulkan_graphics.cpp)
 	lvg_configure_build_tree_example(demoVulkanGraphics)
 	target_link_libraries(demoVulkanGraphics PRIVATE ${GLFW_LIB_TARGET})
+
+	# Copy the assimp DLL next to each example on Windows so they run in-place.
+	if (WIN32 AND ASSIMP_DLL)
+		foreach(_lvg_ex IN ITEMS simple_fbx_loader_example fbx_rigged_example demoVulkanGraphics)
+			add_custom_command(TARGET ${_lvg_ex} POST_BUILD
+				COMMAND ${CMAKE_COMMAND} -E copy_if_different
+					"${ASSIMP_DLL}"
+					"$<TARGET_FILE_DIR:${_lvg_ex}>"
+				COMMENT "Copying ${ASSIMP_DLL} for ${_lvg_ex}"
+			)
+		endforeach()
+	endif()
 
 	add_custom_target(LightVulkanGraphicsExamples
 		DEPENDS
