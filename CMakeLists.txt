@@ -311,6 +311,7 @@ set(SOURCES
 	"${PROJECT_SOURCE_DIR}/src/FBXLoader.cpp"
 	"${PROJECT_SOURCE_DIR}/src/GraphicsModel.cpp"
 	"${PROJECT_SOURCE_DIR}/src/RiggedObject.cpp"
+	"${PROJECT_SOURCE_DIR}/src/SceneGraph.cpp"
 )
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})

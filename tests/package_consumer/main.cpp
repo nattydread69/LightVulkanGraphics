@@ -1,4 +1,5 @@
 #include "FBXLoader.h"
+#include "SceneGraph.h"
 #include "lightVulkanGraphics.h"
 
 int main()
@@ -11,6 +12,8 @@ int main()
 	createInfo.enableDebugOutput = false;
 
 	(void) loader;
+	lightGraphics::Transform transform;
+	(void) transform;
 	lightGraphics::lightVulkanGraphics app("package-consumer", createInfo);
 	(void) app;
 	return 0;

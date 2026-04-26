@@ -20,6 +20,7 @@
 
 #include "LightVulkanGraphicsLogging.h"
 #include "LightVulkanGraphicsVersion.h"
+#include "SceneGraph.h"
 #include "VkApp.h"
 #include <string>
 #include <vector>
@@ -54,6 +55,8 @@ namespace lightGraphics
         {
             return VkApp::addRiggedObject(riggedObject);
         }
+        SceneGraph& sceneGraph() { return VkApp::sceneGraph(); }
+        const SceneGraph& sceneGraph() const { return VkApp::sceneGraph(); }
 
 		// Camera control API (exposed for applications)
 		void setKeyboardCameraEnabled(bool enabled) { VkApp::setKeyboardCameraEnabled(enabled); }

@@ -20,6 +20,7 @@
 #include "FBXLoader.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "RiggedObject.h"
+#include "SceneGraph.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -527,6 +528,11 @@ namespace lightGraphics
 #define LVG_VK_CHECK(expr) checkVkResult((expr), #expr, __FILE__, __LINE__)
 #define VK_CHECK(expr) LVG_VK_CHECK(expr)
 
+	VkApp::VkApp()
+	    : sceneGraph_(std::make_unique<SceneGraph>(*this))
+	{
+	}
+
 	VkApp::~VkApp()
 	{
 		cleanup();
@@ -785,6 +791,8 @@ namespace lightGraphics
 		sceneFinalized_ = true;
 
 		// Update instance data for all objects that were added before finalization
+		sceneGraph_->updateWorldTransforms();
+		sceneGraph_->syncToRenderer();
 		updateInstanceData();
 	}
 
@@ -1059,6 +1067,8 @@ namespace lightGraphics
 				updateCallback_(dt);
 			}
 
+			sceneGraph_->updateWorldTransforms();
+			sceneGraph_->syncToRenderer();
 			drawFrame();
 		}
 	}
@@ -4219,6 +4229,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 		// Initialize dirty tracking for new object
 		dirtyObjects_.push_back(true);
+		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
 		if (sceneFinalized_)
@@ -4233,6 +4244,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 		// Initialize dirty tracking for new object
 		dirtyObjects_.push_back(true);
+		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
 		if (sceneFinalized_)
@@ -4249,6 +4261,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 		// Initialize dirty tracking for new object
 		dirtyObjects_.push_back(true);
+		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
 		if (sceneFinalized_)
@@ -4410,6 +4423,111 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		return riggedInstances_.size() - 1;
 	}
 
+	void VkApp::removeRiggedObject(size_t index)
+	{
+		if (index >= riggedInstances_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("removeRiggedObject", index, riggedInstances_.size()));
+		}
+
+		if (sceneFinalized_ && device_ != VK_NULL_HANDLE)
+		{
+			VK_CHECK(vkDeviceWaitIdle(device_));
+		}
+
+		destroyRiggedInstance(riggedInstances_[index]);
+		riggedInstances_.erase(riggedInstances_.begin() + static_cast<std::ptrdiff_t>(index));
+		sceneGraph_->onRiggedObjectRemoved(index);
+	}
+
+	glm::mat4 VkApp::getObjectModelMatrix(size_t index) const
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("getObjectModelMatrix", index, _objects_.size()));
+		}
+
+		if (index < objectModelMatrixOverrides_.size() && objectModelMatrixOverrides_[index])
+		{
+			return *objectModelMatrixOverrides_[index];
+		}
+
+		const auto& obj = _objects_[index];
+		const glm::mat4 translation = glm::translate(glm::mat4(1.0f), obj.getPosition());
+		const glm::mat4 rotation = glm::mat4_cast(obj.getRotation());
+		const glm::mat4 scale = glm::scale(glm::mat4(1.0f), obj.getSize());
+		return translation * rotation * scale;
+	}
+
+	void VkApp::setObjectModelMatrixOverride(size_t index, const glm::mat4& model)
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setObjectModelMatrixOverride", index, _objects_.size()));
+		}
+
+		if (objectModelMatrixOverrides_.size() < _objects_.size())
+		{
+			objectModelMatrixOverrides_.resize(_objects_.size());
+		}
+		objectModelMatrixOverrides_[index] = model;
+
+		if (sceneFinalized_)
+		{
+			markObjectDirty(index);
+		}
+		else
+		{
+			instanceDataDirty_ = true;
+		}
+	}
+
+	void VkApp::clearObjectModelMatrixOverride(size_t index)
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("clearObjectModelMatrixOverride", index, _objects_.size()));
+		}
+
+		clearObjectModelMatrixOverrideInternal(index);
+		if (sceneFinalized_)
+		{
+			markObjectDirty(index);
+		}
+		else
+		{
+			instanceDataDirty_ = true;
+		}
+	}
+
+	void VkApp::setRiggedObjectTransformMatrixOverride(size_t index, const glm::mat4& transform)
+	{
+		if (index >= riggedInstances_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setRiggedObjectTransformMatrixOverride", index, riggedInstances_.size()));
+		}
+		riggedInstances_[index].transformMatrixOverride = transform;
+	}
+
+	void VkApp::clearRiggedObjectTransformMatrixOverride(size_t index)
+	{
+		if (index >= riggedInstances_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("clearRiggedObjectTransformMatrixOverride", index, riggedInstances_.size()));
+		}
+		riggedInstances_[index].transformMatrixOverride.reset();
+	}
+
+	SceneGraph& VkApp::sceneGraph()
+	{
+		return *sceneGraph_;
+	}
+
+	const SceneGraph& VkApp::sceneGraph() const
+	{
+		return *sceneGraph_;
+	}
+
 	// Object update methods for physics simulation
 	void VkApp::setObjectPosition(size_t index, const glm::vec3& position)
 	{
@@ -4419,6 +4537,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 
 		_objects_[index].setPosition(position);
+		clearObjectModelMatrixOverrideInternal(index);
+		sceneGraph_->onObjectChanged(index);
 		if (sceneFinalized_)
 		{
 			markObjectDirty(index);
@@ -4433,6 +4553,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 
 		_objects_[index].setSize(scale);
+		clearObjectModelMatrixOverrideInternal(index);
+		sceneGraph_->onObjectChanged(index);
 		if (sceneFinalized_)
 		{
 			markObjectDirty(index);
@@ -4447,6 +4569,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 
 		_objects_[index].setRotation(rotation);
+		clearObjectModelMatrixOverrideInternal(index);
+		sceneGraph_->onObjectChanged(index);
 		if (sceneFinalized_)
 		{
 			markObjectDirty(index);
@@ -4461,6 +4585,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 
 		_objects_[index].setColour(color);
+		sceneGraph_->onObjectChanged(index);
 		if (sceneFinalized_)
 		{
 			markObjectDirty(index);
@@ -4479,6 +4604,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		_objects_[index].setPosition(position);
 		_objects_[index].setSize(scale);
 		_objects_[index].setRotation(rotation);
+		clearObjectModelMatrixOverrideInternal(index);
+		sceneGraph_->onObjectChanged(index);
 
 		if (sceneFinalized_)
 		{
@@ -4689,10 +4816,15 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			{
 				dirtyObjects_.erase(dirtyObjects_.begin() + index);
 			}
+			if (index < objectModelMatrixOverrides_.size())
+			{
+				objectModelMatrixOverrides_.erase(objectModelMatrixOverrides_.begin() + index);
+			}
 			if (index < instanceDataCache_.size())
 			{
 				instanceDataCache_.erase(instanceDataCache_.begin() + index);
 			}
+			sceneGraph_->onObjectRemoved(index);
 			instanceDataDirty_ = true;
 			if (sceneFinalized_)
 			{
@@ -4712,9 +4844,15 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 	void VkApp::clearObjects()
 	{
+		const size_t removedCount = _objects_.size();
 		_objects_.clear();
 		dirtyObjects_.clear();
+		objectModelMatrixOverrides_.clear();
 		instanceDataCache_.clear();
+		for (size_t i = 0; i < removedCount; ++i)
+		{
+			sceneGraph_->onObjectRemoved(0);
+		}
 		instanceDataDirty_ = true;
 		if (sceneFinalized_)
 		{
@@ -4727,6 +4865,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		if (index < _objects_.size())
 		{
 			_objects_[index] = obj;
+			clearObjectModelMatrixOverrideInternal(index);
+			sceneGraph_->onObjectChanged(index);
 			if (sceneFinalized_)
 			{
 				markObjectDirty(index);
@@ -4745,6 +4885,29 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 		dirtyObjects_[index] = true;
 		instanceDataDirty_ = true;
+	}
+
+	Instance VkApp::makeInstanceForObject(size_t index) const
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("makeInstanceForObject", index, _objects_.size()));
+		}
+
+		const auto& obj = _objects_[index];
+		Instance instance{};
+		instance.model = getObjectModelMatrix(index);
+		instance.color = glm::vec3(obj.getColour());
+		instance.shapeType = static_cast<float>(obj._type);
+		return instance;
+	}
+
+	void VkApp::clearObjectModelMatrixOverrideInternal(size_t index)
+	{
+		if (index < objectModelMatrixOverrides_.size())
+		{
+			objectModelMatrixOverrides_[index].reset();
+		}
 	}
 
 	void VkApp::ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize)
@@ -4813,16 +4976,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		{
 			if (dirtyObjects_[i])
 			{
-				const auto& obj = _objects_[i];
-
-				// Create model matrix from position, rotation, and size
-				glm::mat4 translation = glm::translate(glm::mat4(1.0f), obj.getPosition());
-				glm::mat4 rotation = glm::mat4_cast(obj.getRotation());
-				glm::mat4 scale = glm::scale(glm::mat4(1.0f), obj.getSize());
-
-				instanceDataCache_[i].model = translation * rotation * scale;
-				instanceDataCache_[i].color = glm::vec3(obj.getColour()); // Convert vec4 to vec3
-				instanceDataCache_[i].shapeType = static_cast<float>(obj._type);
+				instanceDataCache_[i] = makeInstanceForObject(i);
 
 				dirtyObjects_[i] = false;
 				anyDirty = true;
@@ -4857,6 +5011,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			if (update.first < _objects_.size())
 			{
 				_objects_[update.first].setPosition(update.second);
+				clearObjectModelMatrixOverrideInternal(update.first);
+				sceneGraph_->onObjectChanged(update.first);
 				markObjectDirty(update.first);
 			}
 		}
@@ -4872,6 +5028,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				_objects_[index].setPosition(std::get<1>(update));
 				_objects_[index].setSize(std::get<2>(update));
 				_objects_[index].setRotation(std::get<3>(update));
+				clearObjectModelMatrixOverrideInternal(index);
+				sceneGraph_->onObjectChanged(index);
 				markObjectDirty(index);
 			}
 		}
@@ -4883,6 +5041,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		{
 			VK_CHECK(vkWaitForFences(device_, 1, &inFlight_[currentFrame_], VK_TRUE, UINT64_MAX));
 		}
+		sceneGraph_->updateWorldTransforms();
+		sceneGraph_->syncToRenderer();
 		updateInstanceDataOptimized();
 		updateRiggedInstances();
 	}
@@ -5066,10 +5226,17 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			}
 
 			Instance riggedInstance{};
-			glm::mat4 translation = glm::translate(glm::mat4(1.0f), riggedObject->getPosition());
-			glm::mat4 rotation = glm::mat4_cast(riggedObject->getRotation());
-			glm::mat4 scale = glm::scale(glm::mat4(1.0f), riggedObject->getSize());
-			riggedInstance.model = translation * rotation * instance.uprightCorrection * scale;
+			if (instance.transformMatrixOverride)
+			{
+				riggedInstance.model = *instance.transformMatrixOverride * instance.uprightCorrection;
+			}
+			else
+			{
+				glm::mat4 translation = glm::translate(glm::mat4(1.0f), riggedObject->getPosition());
+				glm::mat4 rotation = glm::mat4_cast(riggedObject->getRotation());
+				glm::mat4 scale = glm::scale(glm::mat4(1.0f), riggedObject->getSize());
+				riggedInstance.model = translation * rotation * instance.uprightCorrection * scale;
+			}
 			riggedInstance.color = glm::vec3(riggedObject->getColour());
 			riggedInstance.shapeType = static_cast<float>(lightGraphics::ShapeType::HUMAN);
 
@@ -5092,36 +5259,44 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 	}
 
+	void VkApp::destroyRiggedInstance(RiggedInstanceRenderData& instance)
+	{
+		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+		{
+			if (instance.instanceBufferMapped[frameIndex] != nullptr &&
+			    instance.instanceBuffers[frameIndex].memory != VK_NULL_HANDLE)
+			{
+				vkUnmapMemory(device_, instance.instanceBuffers[frameIndex].memory);
+				instance.instanceBufferMapped[frameIndex] = nullptr;
+			}
+			destroyBuffer(device_, instance.instanceBuffers[frameIndex]);
+		}
+		for (auto& mesh : instance.meshes)
+		{
+			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			{
+				if (mesh.vertexBufferMapped[frameIndex] != nullptr &&
+				    mesh.vertexBuffers[frameIndex].memory != VK_NULL_HANDLE)
+				{
+					vkUnmapMemory(device_, mesh.vertexBuffers[frameIndex].memory);
+					mesh.vertexBufferMapped[frameIndex] = nullptr;
+				}
+				destroyBuffer(device_, mesh.vertexBuffers[frameIndex]);
+			}
+			destroyBuffer(device_, mesh.indexBuffer);
+			mesh.skinnedVertices.clear();
+			mesh.texture.reset();
+		}
+		instance.meshes.clear();
+		instance.object.reset();
+		instance.transformMatrixOverride.reset();
+	}
+
 	void VkApp::destroyRiggedInstances()
 	{
 		for (auto& instance : riggedInstances_)
 		{
-			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
-			{
-				if (instance.instanceBufferMapped[frameIndex] != nullptr &&
-				    instance.instanceBuffers[frameIndex].memory != VK_NULL_HANDLE)
-				{
-					vkUnmapMemory(device_, instance.instanceBuffers[frameIndex].memory);
-					instance.instanceBufferMapped[frameIndex] = nullptr;
-				}
-				destroyBuffer(device_, instance.instanceBuffers[frameIndex]);
-			}
-			for (auto& mesh : instance.meshes)
-			{
-				for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
-				{
-					if (mesh.vertexBufferMapped[frameIndex] != nullptr &&
-					    mesh.vertexBuffers[frameIndex].memory != VK_NULL_HANDLE)
-					{
-						vkUnmapMemory(device_, mesh.vertexBuffers[frameIndex].memory);
-						mesh.vertexBufferMapped[frameIndex] = nullptr;
-					}
-					destroyBuffer(device_, mesh.vertexBuffers[frameIndex]);
-				}
-				destroyBuffer(device_, mesh.indexBuffer);
-				mesh.skinnedVertices.clear();
-				mesh.texture.reset();
-			}
+			destroyRiggedInstance(instance);
 		}
 		riggedInstances_.clear();
 	}
@@ -5148,16 +5323,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		std::vector<Instance> instances(instanceCount_);
 		for (size_t i = 0; i < _objects_.size() && i < instanceCount_; ++i)
 		{
-			const auto& obj = _objects_[i];
-
-			// Create model matrix from position, rotation, and size
-			glm::mat4 translation = glm::translate(glm::mat4(1.0f), obj.getPosition());
-			glm::mat4 rotation = glm::mat4_cast(obj.getRotation());
-			glm::mat4 scale = glm::scale(glm::mat4(1.0f), obj.getSize());
-
-			instances[i].model = translation * rotation * scale;
-			instances[i].color = glm::vec3(obj.getColour()); // Convert vec4 to vec3
-			instances[i].shapeType = static_cast<float>(obj._type);
+			instances[i] = makeInstanceForObject(i);
 		}
 
 		// Update the instance buffer
@@ -5691,13 +5857,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = shapeGroups[shapeType][k];
-					const auto& obj = _objects_[objIndex];
-					glm::mat4 T = glm::translate(glm::mat4(1.0f), obj.getPosition());
-					glm::mat4 R = glm::mat4_cast(obj.getRotation());
-					glm::mat4 S = glm::scale(glm::mat4(1.0f), obj.getSize());
-					tmp[k].model = T * R * S;
-					tmp[k].color = glm::vec3(obj.getColour());
-					tmp[k].shapeType = static_cast<float>(obj._type);
+					tmp[k] = makeInstanceForObject(objIndex);
 				}
 				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
 				VkDeviceSize bytes = sizeof(Instance) * countForShape;
@@ -5860,13 +6020,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = overlayShapeGroups[shapeType][k];
-					const auto& obj = _objects_[objIndex];
-					glm::mat4 T = glm::translate(glm::mat4(1.0f), obj.getPosition());
-					glm::mat4 R = glm::mat4_cast(obj.getRotation());
-					glm::mat4 S = glm::scale(glm::mat4(1.0f), obj.getSize());
-					tmp[k].model = T * R * S;
-					tmp[k].color = glm::vec3(obj.getColour());
-					tmp[k].shapeType = static_cast<float>(obj._type);
+					tmp[k] = makeInstanceForObject(objIndex);
 				}
 
 				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;

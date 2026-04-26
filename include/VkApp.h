@@ -29,6 +29,7 @@
 #include <vector>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <array>
 #include <tuple>
@@ -94,6 +95,7 @@ namespace lightGraphics::detail
 namespace lightGraphics
 {
 	class RiggedObject;
+	class SceneGraph;
 	struct EmbeddedTextureData;
 	struct RiggedMesh;
 
@@ -109,6 +111,7 @@ namespace lightGraphics
 		};
 		using LogCallback = std::function<void(LogLevel, const std::string&)>;
 
+		VkApp();
 		virtual ~VkApp();
 		void init(int width, int height, const char* title);
 		void finalizeScene();
@@ -140,6 +143,15 @@ namespace lightGraphics
 		size_t getObjectCount() const { return _objects_.size(); }
 		const lightGraphics::pObject& getObject(size_t index) const { return _objects_[index]; }
 		size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject);
+		void removeRiggedObject(size_t index);
+		size_t getRiggedObjectCount() const { return riggedInstances_.size(); }
+		glm::mat4 getObjectModelMatrix(size_t index) const;
+		void setObjectModelMatrixOverride(size_t index, const glm::mat4& model);
+		void clearObjectModelMatrixOverride(size_t index);
+		void setRiggedObjectTransformMatrixOverride(size_t index, const glm::mat4& transform);
+		void clearRiggedObjectTransformMatrixOverride(size_t index);
+		SceneGraph& sceneGraph();
+		const SceneGraph& sceneGraph() const;
 
 		// Object property update methods for physics simulation
 		void setObjectPosition(size_t index, const glm::vec3& position);
@@ -357,6 +369,7 @@ namespace lightGraphics
 		// Performance optimization data structures
 		std::vector<bool> dirtyObjects_; // Track which objects need updating
 		bool instanceDataDirty_ = false; // Global dirty flag for instance data
+		std::vector<std::optional<glm::mat4>> objectModelMatrixOverrides_;
 		// Double-buffered (per-frame) instance buffers to avoid stalls
 		detail::Buffer instanceBufs_[MAX_FRAMES_IN_FLIGHT]{};
 		void* instanceBufferMappedPerFrame_[MAX_FRAMES_IN_FLIGHT]{}; // Persistently mapped per frame
@@ -378,6 +391,7 @@ namespace lightGraphics
 			detail::Buffer instanceBuffers[MAX_FRAMES_IN_FLIGHT]{};
 			void* instanceBufferMapped[MAX_FRAMES_IN_FLIGHT]{};
 			glm::mat4 uprightCorrection = glm::mat4(1.0f);
+			std::optional<glm::mat4> transformMatrixOverride;
 			int activeAnimationIndex = -1;
 			bool animationLoop = true;
 			std::vector<RiggedMeshRenderData> meshes;
@@ -416,7 +430,10 @@ namespace lightGraphics
 		void markObjectDirty(size_t index);
 		void updateInstanceDataOptimized();
 		void ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize);
+		detail::Instance makeInstanceForObject(size_t index) const;
+		void clearObjectModelMatrixOverrideInternal(size_t index);
 		void updateRiggedInstances();
+		void destroyRiggedInstance(RiggedInstanceRenderData& instance);
 		void destroyRiggedInstances();
 		detail::MeshPtr make_cylinder(float radius, float height, int slices);
 		void makeArrow(float shaftRadius, float shaftLength, float headRadius, float headLength, int slices,
@@ -553,6 +570,7 @@ namespace lightGraphics
 		std::vector<VkFence> imagesInFlight_;
 
 		std::vector<lightGraphics::pObject> _objects_;
+		std::unique_ptr<SceneGraph> sceneGraph_;
 
 		// Physics update callback
 		std::function<void(float)> updateCallback_;

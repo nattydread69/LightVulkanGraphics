@@ -23,6 +23,7 @@ https://patreon.com/Nattydread?utm_medium=unknown&utm_source=join_link&utm_campa
 
 ## Features
 - Optimized instance uploads: dirty-tracked, persistently-mapped, double-buffered instance buffers
+- Scene graph API for parent-child transforms over existing primitive and rigged renderables
 - Multiple pipelines: flexible shapes, wireframe, unlit
 - Camera API: keyboard navigation, orbit controls, `setCameraLookAt`, FOV/planes/sensitivity setters
 - Cylinder helpers: connect points and objects conveniently
@@ -138,6 +139,29 @@ int main()
     gfx.run();
     return 0;
 }
+```
+
+## Scene Graph Usage
+
+Use `sceneGraph()` when objects need hierarchical transforms. Graph-owned objects are still rendered by the existing flat instance path, but their final model matrices are driven by parent-child world transforms.
+
+```cpp
+auto& scene = gfx.sceneGraph();
+
+auto parent = scene.createNode("Parent");
+scene.setLocalPosition(parent, {0.0f, 0.0f, 0.0f});
+
+auto child = scene.createObjectNode(lightGraphics::ShapeType::CUBE,
+                                    {2.0f, 0.0f, 0.0f},
+                                    {1.0f, 1.0f, 1.0f},
+                                    {0.2f, 0.6f, 1.0f, 1.0f},
+                                    glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+                                    "Child Cube",
+                                    1.0f,
+                                    parent);
+
+scene.setLocalRotation(parent, glm::angleAxis(glm::radians(45.0f),
+                                              glm::vec3(0.0f, 1.0f, 0.0f)));
 ```
 
 If you need to override shader discovery before initialization, pass a create-info struct:
