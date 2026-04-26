@@ -302,16 +302,10 @@ if (NOT TARGET assimp::assimp)
 endif()
 
 # ---------------- Sources ----------------
-# Explicitly list all source files
-set(SOURCES
-	"${PROJECT_SOURCE_DIR}/src/VkApp.cpp"
-	"${PROJECT_SOURCE_DIR}/src/LightVulkanGraphicsLogging.cpp"
-	"${PROJECT_SOURCE_DIR}/src/lightVulkanGraphics.cpp"
-	"${PROJECT_SOURCE_DIR}/src/pObject.cpp"
-	"${PROJECT_SOURCE_DIR}/src/FBXLoader.cpp"
-	"${PROJECT_SOURCE_DIR}/src/GraphicsModel.cpp"
-	"${PROJECT_SOURCE_DIR}/src/RiggedObject.cpp"
-	"${PROJECT_SOURCE_DIR}/src/SceneGraph.cpp"
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+	"${PROJECT_SOURCE_DIR}/src/*.cpp"
+	"${PROJECT_SOURCE_DIR}/src/*.cxx"
+	"${PROJECT_SOURCE_DIR}/src/*.cc"
 )
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
