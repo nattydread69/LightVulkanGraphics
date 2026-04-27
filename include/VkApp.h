@@ -86,12 +86,19 @@ namespace lightGraphics::detail
 		glm::vec4 directionType;
 		glm::vec4 colorIntensity;
 		glm::vec4 spotAngles;
+		glm::vec4 shadowInfo;
 	};
 
 	struct LightingBufferObject
 	{
 		glm::vec4 ambientAndCount;
 		GpuLight lights[lightGraphics::MaxForwardLights];
+		glm::mat4 shadowMatrices[lightGraphics::MaxForwardLights];
+	};
+
+	struct ShadowPushConstants
+	{
+		glm::mat4 lightViewProj;
 	};
 
 	struct Texture
@@ -348,8 +355,11 @@ namespace lightGraphics
 
 		// Render pass / pipeline
 		VkRenderPass renderPass_ = VK_NULL_HANDLE;
+		VkRenderPass shadowRenderPass_ = VK_NULL_HANDLE;
 		VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+		VkPipelineLayout shadowPipelineLayout_ = VK_NULL_HANDLE;
 		VkPipeline graphicsPipeline_ = VK_NULL_HANDLE;
+		VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
 
 		// Multiple pipelines for different rendering modes
 		VkPipeline flexibleShapePipeline_ = VK_NULL_HANDLE;
@@ -374,6 +384,15 @@ namespace lightGraphics
 		VkImage depthImage_ = VK_NULL_HANDLE;
 		VkDeviceMemory depthImageMemory_ = VK_NULL_HANDLE;
 		VkImageView depthImageView_ = VK_NULL_HANDLE;
+		VkFormat shadowDepthFormat_ = VK_FORMAT_UNDEFINED;
+		VkImage shadowImage_ = VK_NULL_HANDLE;
+		VkDeviceMemory shadowImageMemory_ = VK_NULL_HANDLE;
+		VkImageView shadowImageView_ = VK_NULL_HANDLE;
+		VkSampler shadowSampler_ = VK_NULL_HANDLE;
+		std::vector<VkImageView> shadowLayerImageViews_;
+		std::vector<VkFramebuffer> shadowFramebuffers_;
+		uint32_t shadowMapSize_ = 1024;
+		uint32_t shadowLayerCount_ = static_cast<uint32_t>(lightGraphics::MaxForwardLights);
 
 		// Sync
 		static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
@@ -484,6 +503,8 @@ namespace lightGraphics
 		void markObjectDirty(size_t index);
 		void markLightingDirty();
 		lightGraphics::LightSource lightForUpload(size_t index) const;
+		glm::mat4 shadowMatrixForLight(size_t index) const;
+		glm::vec3 shadowSceneCenter() const;
 		detail::LightingBufferObject buildLightingBufferObject() const;
 		void updateInstanceDataOptimized();
 		void ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize);
@@ -522,8 +543,10 @@ namespace lightGraphics
 		void createSwapChain();
 		void createImageViews();
 		void createRenderPass();
+		void createShadowRenderPass();
 		void createDescriptorSetLayout();
 		void createGraphicsPipeline();
+		void createShadowPipeline();
 		void createOriginalSpherePipeline();
 		void createFlexibleShapePipeline();
 		void createRiggedPipeline();
@@ -532,6 +555,7 @@ namespace lightGraphics
 		void createLinePipeline();
 		void createCommandPool();
 		void createDepthResources();
+		void createShadowResources();
 		void createFramebuffers();
 		void createUniformBuffers();
 		void createDescriptorPool();
@@ -553,12 +577,14 @@ namespace lightGraphics
 		void handleRiggedAnimationInput();
 		void updateUniformBuffer(uint32_t imageIndex);
 		void updateLightingBuffer(uint32_t imageIndex);
+		void recordShadowPass(VkCommandBuffer cmd);
 		void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
 		void drawFrame();
 
 		// Depth helpers
 		VkFormat findSupportedFormat(const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
 		VkFormat findDepthFormat();
+		VkFormat findShadowDepthFormat();
 		bool hasStencilComponent(VkFormat format);
 
 		// Image helpers

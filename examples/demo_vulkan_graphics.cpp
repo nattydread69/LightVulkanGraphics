@@ -147,7 +147,12 @@ private:
 		    "Scaled Sphere", 0.5f);
 		app_.addObject(scaledSphere);
 
+		app_.addObject(lightGraphics::ShapeType::CUBE, glm::vec3(-1.5f, -1.05f, -5.0f),
+		              glm::vec3(5.0f, 0.06f, 4.5f), glm::vec4(0.34f, 0.38f, 0.36f, 1.0f),
+		              glm::quat(1.0f, 0.0f, 0.0f, 0.0f), "Worker Shadow Ground", 0.0f);
+
 		createRiggedWorker();
+		configureDemoShadows();
 
 		for (size_t i = 0; i < app_.getObjectCount(); ++i)
 		{
@@ -191,15 +196,23 @@ private:
 		}
 
 		app_.addRiggedObject(worker_);
-		app_.addSpotLight(workerPosition + glm::vec3(1.2f, 2.4f, -2.0f),
-		                  glm::normalize(glm::vec3(-1.2f, -1.7f, 2.0f)),
-		                  glm::vec3(1.0f, 0.86f, 0.68f),
-		                  10.0f,
-		                  7.0f,
-		                  glm::radians(18.0f),
-		                  glm::radians(35.0f),
-		                  "Worker Warm Key Light");
-
+		const size_t workerLightIndex = app_.addSpotLight(workerPosition + glm::vec3(1.2f, 2.4f, -2.0f),
+		                                                  glm::normalize(glm::vec3(-1.2f, -1.7f, 2.0f)),
+		                                                  glm::vec3(1.0f, 0.86f, 0.68f),
+		                                                  10.0f,
+		                                                  7.0f,
+		                                                  glm::radians(18.0f),
+		                                                  glm::radians(35.0f),
+		                                                  "Worker Warm Key Light");
+		lightGraphics::LightSource workerLight = app_.getLight(workerLightIndex);
+		workerLight.castsShadow = true;
+		workerLight.shadowStrength = 0.45f;
+		workerLight.shadowBias = 0.0025f;
+		workerLight.shadowNormalBias = 0.015f;
+		workerLight.shadowFar = 12.0f;
+		app_.updateLight(workerLightIndex, workerLight);
+		const int preferredAnimationIndex = 23;
+ 			
 		if (worker_->getAnimationCount() > 0)
 		{
 			auto animationNames = worker_->getAnimationNames();
@@ -212,30 +225,8 @@ private:
 				                                   << std::endl;
 			}
 
-			int initialAnimationIndex = -1;
-			const std::vector<std::string> preferredStartupAnimations = {
-			    "CharacterArmature|Idle_Neutral",
-			    "CharacterArmature|Idle",
-			    "Idle",
-			    "Idle_Neutral"};
-
-			for (const auto& preferredName : preferredStartupAnimations)
-			{
-				for (size_t i = 0; i < animationNames.size(); ++i)
-				{
-					if (animationNames[i] == preferredName)
-					{
-						initialAnimationIndex = static_cast<int>(i);
-						break;
-					}
-				}
-				if (initialAnimationIndex >= 0)
-				{
-					break;
-				}
-			}
-
-			if (initialAnimationIndex < 0)
+			int initialAnimationIndex = preferredAnimationIndex;
+			if (preferredAnimationIndex >= static_cast<int>(worker_->getAnimationCount()))
 			{
 				initialAnimationIndex = 0;
 				lightGraphics::consoleInfoStream()
@@ -253,6 +244,23 @@ private:
 			lightGraphics::consoleInfoStream()
 			    << "Loaded Worker.fbx, but no animations were found." << std::endl;
 		}
+	}
+
+	void configureDemoShadows()
+	{
+		if (app_.getLightCount() == 0)
+		{
+			return;
+		}
+
+		lightGraphics::LightSource sun = app_.getLight(0);
+		sun.castsShadow = true;
+		sun.shadowStrength = 0.75f;
+		sun.shadowBias = 0.003f;
+		sun.shadowNormalBias = 0.02f;
+		sun.shadowOrthoSize = 8.0f;
+		sun.shadowFar = 35.0f;
+		app_.updateLight(0, sun);
 	}
 
 	std::shared_ptr<lightGraphics::RiggedObject> worker_;

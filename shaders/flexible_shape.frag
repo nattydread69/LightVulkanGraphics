@@ -29,13 +29,17 @@ struct ShaderLight
     vec4 directionType;
     vec4 colorIntensity;
     vec4 spotAngles;
+    vec4 shadowInfo;
 };
 
 layout(set = 0, binding = 1) uniform Lighting
 {
     vec4 ambientAndCount;
     ShaderLight lights[LVG_MAX_LIGHTS];
+    mat4 shadowMatrices[LVG_MAX_LIGHTS];
 } lighting;
+
+layout(set = 0, binding = 2) uniform sampler2DArrayShadow shadowMaps;
 
 // Shape-specific parameters
 const float sphereRoughness = 0.3;
@@ -64,6 +68,35 @@ float spotAttenuation(ShaderLight light, vec3 lightToFragment)
     float innerCos = light.spotAngles.x;
     float outerCos = light.spotAngles.y;
     return clamp((cosTheta - outerCos) / max(innerCos - outerCos, 0.001), 0.0, 1.0);
+}
+
+float sampleShadow(int lightIndex, vec3 normal)
+{
+    ShaderLight light = lighting.lights[lightIndex];
+    float layer = light.shadowInfo.x;
+    if (layer < 0.0)
+    {
+        return 1.0;
+    }
+
+    vec3 biasedPos = vPosWS + normalize(normal) * light.shadowInfo.z;
+    vec4 shadowPos = lighting.shadowMatrices[lightIndex] * vec4(biasedPos, 1.0);
+    if (shadowPos.w <= 0.0)
+    {
+        return 1.0;
+    }
+
+    vec3 proj = shadowPos.xyz / shadowPos.w;
+    proj.xy = proj.xy * 0.5 + 0.5;
+    if (proj.x < 0.0 || proj.x > 1.0 ||
+        proj.y < 0.0 || proj.y > 1.0 ||
+        proj.z < 0.0 || proj.z > 1.0)
+    {
+        return 1.0;
+    }
+
+    float visibility = texture(shadowMaps, vec4(proj.xy, layer, proj.z - light.shadowInfo.y));
+    return mix(1.0, visibility, light.shadowInfo.w);
 }
 
 vec3 calculateLighting(vec3 normal, vec3 viewDir, vec3 baseColor, float roughness)
@@ -115,8 +148,9 @@ vec3 calculateLighting(vec3 normal, vec3 viewDir, vec3 baseColor, float roughnes
         float shininess = mix(4.0, specularPower, 1.0 - roughness);
         float specular = pow(NdotH, shininess);
         vec3 specularColor = radiance * specular * (1.0 - roughness);
+        float shadow = sampleShadow(i, normal);
 
-        result += diffuse + specularColor;
+        result += (diffuse + specularColor) * shadow;
     }
 
     return result;

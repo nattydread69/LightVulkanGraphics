@@ -183,17 +183,22 @@ gfx.addPointLight({2.0f, 3.0f, -2.0f},
                   8.0f,
                   "Warm Point");
 
-gfx.addSpotLight({-2.0f, 4.0f, -3.0f},
-                 glm::normalize(glm::vec3(0.3f, -1.0f, 0.5f)),
-                 {0.55f, 0.70f, 1.0f},
-                 8.0f,
-                 10.0f,
-                 glm::radians(15.0f),
-                 glm::radians(28.0f),
-                 "Cool Spot");
+size_t spot = gfx.addSpotLight({-2.0f, 4.0f, -3.0f},
+                               glm::normalize(glm::vec3(0.3f, -1.0f, 0.5f)),
+                               {0.55f, 0.70f, 1.0f},
+                               8.0f,
+                               10.0f,
+                               glm::radians(15.0f),
+                               glm::radians(28.0f),
+                               "Cool Spot");
+
+auto shadowedSpot = gfx.getLight(spot);
+shadowedSpot.castsShadow = true;
+shadowedSpot.shadowStrength = 0.5f;
+gfx.updateLight(spot, shadowedSpot);
 ```
 
-Lights can also be attached to scene graph nodes with `createLightNode()` or `attachLight()`, which makes their position and direction follow parent transforms. The forward renderer currently uploads up to `lightGraphics::MaxForwardLights` lights. `LightSource::castsShadow` is reserved for a future shadow-map pass and does not render shadows yet.
+Lights can also be attached to scene graph nodes with `createLightNode()` or `attachLight()`, which makes their position and direction follow parent transforms. The forward renderer currently uploads up to `lightGraphics::MaxForwardLights` lights. Directional and spot lights can cast shadow maps with `LightSource::castsShadow`; point-light shadows are not implemented yet because they require cubemap or six-face rendering.
 
 If you need to override shader discovery before initialization, pass a create-info struct:
 

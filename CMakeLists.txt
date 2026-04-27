@@ -366,6 +366,10 @@ set(UNLIT_FS_SRC ${SHADER_DIR}/unlit.frag)
 set(UNLIT_VS_SPV ${SPV_DIR}/unlit.vert.spv)
 set(UNLIT_FS_SPV ${SPV_DIR}/unlit.frag.spv)
 
+# Shadow depth shader
+set(SHADOW_VS_SRC ${SHADER_DIR}/shadow_depth.vert)
+set(SHADOW_VS_SPV ${SPV_DIR}/shadow_depth.vert.spv)
+
 # Compile original sphere shaders
 add_custom_command(
 	OUTPUT ${VS_SPV}
@@ -436,6 +440,14 @@ add_custom_command(
 	COMMENT "Compiling ${UNLIT_FS_SRC}"
 )
 
+# Compile shadow depth shader
+add_custom_command(
+	OUTPUT ${SHADOW_VS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=vert -o ${SHADOW_VS_SPV} ${SHADOW_VS_SRC}
+	DEPENDS ${SHADOW_VS_SRC}
+	COMMENT "Compiling ${SHADOW_VS_SRC}"
+)
+
 # Create shader target that depends on all compiled shaders
 add_custom_target(Shaders ALL DEPENDS
 	${VS_SPV} ${FS_SPV}
@@ -443,6 +455,7 @@ add_custom_target(Shaders ALL DEPENDS
 	${RIGGED_VS_SPV} ${RIGGED_FS_SPV}
 	${WIRE_VS_SPV} ${WIRE_FS_SPV}
 	${UNLIT_VS_SPV} ${UNLIT_FS_SPV}
+	${SHADOW_VS_SPV}
 )
 
 # Ensure shaders build whenever the lib builds (so install will have them)
