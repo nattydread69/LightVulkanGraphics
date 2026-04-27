@@ -62,6 +62,7 @@
 #include <unordered_set>
 
 #include <vulkan/vulkan.h>
+#include <glm/gtc/constants.hpp>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -76,7 +77,9 @@
 namespace lightGraphics
 {
 	using detail::Buffer;
+	using detail::GpuLight;
 	using detail::Instance;
+	using detail::LightingBufferObject;
 	using detail::Mesh;
 	using detail::MeshPtr;
 	using detail::Texture;
@@ -94,6 +97,10 @@ namespace lightGraphics
 	static_assert(offsetof(Instance, color) == sizeof(glm::mat4), "Instance color offset changed");
 	static_assert(offsetof(Instance, shapeType) == sizeof(glm::mat4) + sizeof(glm::vec3),
 	              "Instance shapeType offset changed");
+	static_assert(std::is_standard_layout_v<GpuLight>, "GpuLight must use a stable standard layout");
+	static_assert(sizeof(GpuLight) == sizeof(glm::vec4) * 4, "GpuLight size must match shader layout");
+	static_assert(std::is_standard_layout_v<LightingBufferObject>,
+	              "LightingBufferObject must use a stable standard layout");
 
 	namespace
 	{
@@ -523,6 +530,14 @@ namespace lightGraphics
 			        << size << " objects";
 			return message.str();
 		}
+
+		std::string makeLightIndexMessage(const char* operation, size_t index, size_t size)
+		{
+			std::ostringstream message;
+			message << operation << " index " << index << " is out of range for "
+			        << size << " lights";
+			return message.str();
+		}
 	}
 
 #define LVG_VK_CHECK(expr) checkVkResult((expr), #expr, __FILE__, __LINE__)
@@ -531,6 +546,14 @@ namespace lightGraphics
 	VkApp::VkApp()
 	    : sceneGraph_(std::make_unique<SceneGraph>(*this))
 	{
+		LightSource defaultLight;
+		defaultLight.type = LightType::Directional;
+		defaultLight.direction = -glm::normalize(glm::vec3(0.4f, 0.7f, 0.2f));
+		defaultLight.color = glm::vec3(1.0f);
+		defaultLight.intensity = 1.0f;
+		defaultLight.name = "Default Directional Light";
+		lights_.push_back(defaultLight);
+		lightTransformMatrixOverrides_.push_back(std::nullopt);
 	}
 
 	VkApp::~VkApp()
@@ -1361,10 +1384,24 @@ namespace lightGraphics
 			}
 			destroyBuffer(device_, uniformBuffers2_[i]);
 		}
+		for (size_t i = 0; i < lightingBuffers_.size(); i++)
+		{
+			if (lightingBuffers_[i].memory != VK_NULL_HANDLE && lightingBuffersMapped_.size() > i)
+			{
+				if (lightingBuffersMapped_[i] != nullptr)
+				{
+					vkUnmapMemory(device_, lightingBuffers_[i].memory);
+					lightingBuffersMapped_[i] = nullptr;
+				}
+			}
+			destroyBuffer(device_, lightingBuffers_[i]);
+		}
 		uniformBuffers2_.clear();
 		uniformBuffers_.clear();
 		uniformBuffersMemory_.clear();
 		uniformBuffersMapped_.clear();
+		lightingBuffers_.clear();
+		lightingBuffersMapped_.clear();
 
 		if (descriptorPool_ != VK_NULL_HANDLE)
 		{
@@ -1576,7 +1613,26 @@ namespace lightGraphics
 		}
 
 		std::memcpy(dst, &ubo, sizeof(ubo));
+		updateLightingBuffer(imageIndex);
 		//std::cout << "END VkApp::updateUniformBuffer " << imageIndex << std::endl;
+	}
+
+	void VkApp::updateLightingBuffer(uint32_t imageIndex)
+	{
+		if (imageIndex >= lightingBuffersMapped_.size())
+		{
+			throw std::runtime_error("updateLightingBuffer: imageIndex out of range");
+		}
+
+		void* dst = lightingBuffersMapped_[imageIndex];
+		if (!dst)
+		{
+			throw std::runtime_error("updateLightingBuffer: mapped pointer is null");
+		}
+
+		LightingBufferObject lighting = buildLightingBufferObject();
+		std::memcpy(dst, &lighting, sizeof(lighting));
+		lightingDataDirty_ = false;
 	}
 
 	// -----------------------------
@@ -2140,8 +2196,16 @@ namespace lightGraphics
 		uboB.descriptorCount = 1;
 		uboB.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 
+		VkDescriptorSetLayoutBinding lightingB{};
+		lightingB.binding = 1;
+		lightingB.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		lightingB.descriptorCount = 1;
+		lightingB.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		std::array<VkDescriptorSetLayoutBinding, 2> bindings{uboB, lightingB};
 		VkDescriptorSetLayoutCreateInfo dsli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-		dsli.bindingCount = 1; dsli.pBindings = &uboB;
+		dsli.bindingCount = static_cast<uint32_t>(bindings.size());
+		dsli.pBindings = bindings.data();
 		VK_CHECK(vkCreateDescriptorSetLayout(device_, &dsli, nullptr, &descriptorSetLayout_));
 
 		VkDescriptorSetLayoutBinding samplerBinding{};
@@ -3197,10 +3261,13 @@ void VkApp::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
 	void VkApp::createUniformBuffers()
 	{
 		VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+		VkDeviceSize lightingBufferSize = sizeof(LightingBufferObject);
 		size_t count = swapChainImages_.size();
 
 		uniformBuffers2_.resize(count);
 		uniformBuffersMapped_.resize(count, nullptr);
+		lightingBuffers_.resize(count);
+		lightingBuffersMapped_.resize(count, nullptr);
 
 		for (size_t i = 0; i < count; i++)
 		{
@@ -3225,6 +3292,28 @@ void VkApp::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
 				throw std::runtime_error("failed to map uniform buffer memory");
 			}
 			uniformBuffersMapped_[i] = data;
+
+			createBuffer(
+				lightingBufferSize,
+				VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				lightingBuffers_[i]
+			);
+
+			void* lightingData = nullptr;
+			mapRes = vkMapMemory(
+				device_,
+				lightingBuffers_[i].memory,
+				0,
+				lightingBufferSize,
+				0,
+				&lightingData
+			);
+			if (mapRes != VK_SUCCESS || lightingData == nullptr)
+			{
+				throw std::runtime_error("failed to map lighting uniform buffer memory");
+			}
+			lightingBuffersMapped_[i] = lightingData;
 		}
 	}
 
@@ -3569,7 +3658,10 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 	void VkApp::createDescriptorPool()
 	{
 		// --- Descriptors
-		VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, (uint32_t)uniformBuffers2_.size()};
+		VkDescriptorPoolSize poolSize{
+			VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			static_cast<uint32_t>(uniformBuffers2_.size() * 2)
+		};
 		VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 		dpci.maxSets = (uint32_t)uniformBuffers2_.size();
 		dpci.poolSizeCount=1; dpci.pPoolSizes=&poolSize;
@@ -3589,13 +3681,24 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		for (size_t i=0;i < uniformBuffers2_.size();++i)
 		{
 			VkDescriptorBufferInfo bi{uniformBuffers2_[i].buffer, 0, sizeof(UniformBufferObject)};
-			VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-			w.dstSet = descriptorSets_[i];
-			w.dstBinding = 0;
-			w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			w.descriptorCount = 1;
-			w.pBufferInfo = &bi;
-			vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+			VkDescriptorBufferInfo lightBi{lightingBuffers_[i].buffer, 0, sizeof(LightingBufferObject)};
+
+			std::array<VkWriteDescriptorSet, 2> writes{};
+			writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			writes[0].dstSet = descriptorSets_[i];
+			writes[0].dstBinding = 0;
+			writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			writes[0].descriptorCount = 1;
+			writes[0].pBufferInfo = &bi;
+
+			writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			writes[1].dstSet = descriptorSets_[i];
+			writes[1].dstBinding = 1;
+			writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			writes[1].descriptorCount = 1;
+			writes[1].pBufferInfo = &lightBi;
+
+			vkUpdateDescriptorSets(device_, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 		}
 	}
 
@@ -4218,6 +4321,210 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 	// ---------------- Object Management Functions ----------------
 
+	size_t VkApp::addLight(const lightGraphics::LightSource& light)
+	{
+		LightSource normalizedLight = light;
+		if (glm::length(normalizedLight.direction) > 0.0f)
+		{
+			normalizedLight.direction = glm::normalize(normalizedLight.direction);
+		}
+		else
+		{
+			normalizedLight.direction = glm::vec3(0.0f, -1.0f, 0.0f);
+		}
+		if (normalizedLight.outerConeAngleRadians < normalizedLight.innerConeAngleRadians)
+		{
+			std::swap(normalizedLight.innerConeAngleRadians, normalizedLight.outerConeAngleRadians);
+		}
+
+		lights_.push_back(normalizedLight);
+		lightTransformMatrixOverrides_.push_back(std::nullopt);
+		if (lights_.size() == lightGraphics::MaxForwardLights + 1)
+		{
+			logMessage(LogLevel::Warning,
+			           "Only the first " + std::to_string(lightGraphics::MaxForwardLights) +
+			           " lights are uploaded by the current forward renderer");
+		}
+		markLightingDirty();
+		return lights_.size() - 1;
+	}
+
+	size_t VkApp::addDirectionalLight(const glm::vec3& direction,
+	                                  const glm::vec3& color,
+	                                  float intensity,
+	                                  const std::string& name)
+	{
+		LightSource light;
+		light.type = LightType::Directional;
+		light.direction = direction;
+		light.color = color;
+		light.intensity = intensity;
+		light.name = name;
+		return addLight(light);
+	}
+
+	size_t VkApp::addPointLight(const glm::vec3& position,
+	                            const glm::vec3& color,
+	                            float intensity,
+	                            float range,
+	                            const std::string& name)
+	{
+		LightSource light;
+		light.type = LightType::Point;
+		light.position = position;
+		light.color = color;
+		light.intensity = intensity;
+		light.range = range;
+		light.name = name;
+		return addLight(light);
+	}
+
+	size_t VkApp::addSpotLight(const glm::vec3& position,
+	                           const glm::vec3& direction,
+	                           const glm::vec3& color,
+	                           float intensity,
+	                           float range,
+	                           float innerConeAngleRadians,
+	                           float outerConeAngleRadians,
+	                           const std::string& name)
+	{
+		LightSource light;
+		light.type = LightType::Spot;
+		light.position = position;
+		light.direction = direction;
+		light.color = color;
+		light.intensity = intensity;
+		light.range = range;
+		light.innerConeAngleRadians = innerConeAngleRadians;
+		light.outerConeAngleRadians = outerConeAngleRadians;
+		light.name = name;
+		return addLight(light);
+	}
+
+	void VkApp::removeLight(size_t index)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("removeLight", index, lights_.size()));
+		}
+
+		lights_.erase(lights_.begin() + static_cast<std::ptrdiff_t>(index));
+		if (index < lightTransformMatrixOverrides_.size())
+		{
+			lightTransformMatrixOverrides_.erase(lightTransformMatrixOverrides_.begin() + static_cast<std::ptrdiff_t>(index));
+		}
+		sceneGraph_->onLightRemoved(index);
+		markLightingDirty();
+	}
+
+	void VkApp::clearLights()
+	{
+		const size_t removedCount = lights_.size();
+		lights_.clear();
+		lightTransformMatrixOverrides_.clear();
+		for (size_t i = 0; i < removedCount; ++i)
+		{
+			sceneGraph_->onLightRemoved(0);
+		}
+		markLightingDirty();
+	}
+
+	void VkApp::updateLight(size_t index, const lightGraphics::LightSource& light)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("updateLight", index, lights_.size()));
+		}
+
+		LightSource normalizedLight = light;
+		if (glm::length(normalizedLight.direction) > 0.0f)
+		{
+			normalizedLight.direction = glm::normalize(normalizedLight.direction);
+		}
+		else
+		{
+			normalizedLight.direction = glm::vec3(0.0f, -1.0f, 0.0f);
+		}
+		if (normalizedLight.outerConeAngleRadians < normalizedLight.innerConeAngleRadians)
+		{
+			std::swap(normalizedLight.innerConeAngleRadians, normalizedLight.outerConeAngleRadians);
+		}
+
+		lights_[index] = normalizedLight;
+		sceneGraph_->onLightChanged(index);
+		markLightingDirty();
+	}
+
+	void VkApp::setLightPosition(size_t index, const glm::vec3& position)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightPosition", index, lights_.size()));
+		}
+		lights_[index].position = position;
+		sceneGraph_->onLightChanged(index);
+		markLightingDirty();
+	}
+
+	void VkApp::setLightDirection(size_t index, const glm::vec3& direction)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightDirection", index, lights_.size()));
+		}
+		lights_[index].direction = glm::length(direction) > 0.0f
+			? glm::normalize(direction)
+			: glm::vec3(0.0f, -1.0f, 0.0f);
+		sceneGraph_->onLightChanged(index);
+		markLightingDirty();
+	}
+
+	void VkApp::setLightColor(size_t index, const glm::vec3& color)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightColor", index, lights_.size()));
+		}
+		lights_[index].color = color;
+		markLightingDirty();
+	}
+
+	void VkApp::setLightIntensity(size_t index, float intensity)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightIntensity", index, lights_.size()));
+		}
+		lights_[index].intensity = intensity;
+		markLightingDirty();
+	}
+
+	void VkApp::setLightRange(size_t index, float range)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightRange", index, lights_.size()));
+		}
+		lights_[index].range = range;
+		markLightingDirty();
+	}
+
+	void VkApp::setLightEnabled(size_t index, bool enabled)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightEnabled", index, lights_.size()));
+		}
+		lights_[index].enabled = enabled;
+		markLightingDirty();
+	}
+
+	void VkApp::setAmbientLight(const glm::vec3& ambientColor)
+	{
+		ambientLight_ = ambientColor;
+		markLightingDirty();
+	}
+
 	void VkApp::addObject(lightGraphics::pObject *newObject)
 	{
 		if (!newObject)
@@ -4498,6 +4805,35 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		{
 			instanceDataDirty_ = true;
 		}
+	}
+
+	void VkApp::setLightTransformMatrixOverride(size_t index, const glm::mat4& transform)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightTransformMatrixOverride", index, lights_.size()));
+		}
+
+		if (lightTransformMatrixOverrides_.size() < lights_.size())
+		{
+			lightTransformMatrixOverrides_.resize(lights_.size());
+		}
+		lightTransformMatrixOverrides_[index] = transform;
+		markLightingDirty();
+	}
+
+	void VkApp::clearLightTransformMatrixOverride(size_t index)
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("clearLightTransformMatrixOverride", index, lights_.size()));
+		}
+
+		if (index < lightTransformMatrixOverrides_.size())
+		{
+			lightTransformMatrixOverrides_[index].reset();
+		}
+		markLightingDirty();
 	}
 
 	void VkApp::setRiggedObjectTransformMatrixOverride(size_t index, const glm::mat4& transform)
@@ -4885,6 +5221,65 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		}
 		dirtyObjects_[index] = true;
 		instanceDataDirty_ = true;
+	}
+
+	void VkApp::markLightingDirty()
+	{
+		lightingDataDirty_ = true;
+	}
+
+	LightSource VkApp::lightForUpload(size_t index) const
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("lightForUpload", index, lights_.size()));
+		}
+
+		LightSource light = lights_[index];
+		if (index < lightTransformMatrixOverrides_.size() && lightTransformMatrixOverrides_[index])
+		{
+			const glm::mat4& transform = *lightTransformMatrixOverrides_[index];
+			light.position = glm::vec3(transform * glm::vec4(light.position, 1.0f));
+			glm::vec3 transformedDirection = glm::mat3(transform) * light.direction;
+			if (glm::length(transformedDirection) > 0.0f)
+			{
+				light.direction = glm::normalize(transformedDirection);
+			}
+		}
+
+		if (glm::length(light.direction) > 0.0f)
+		{
+			light.direction = glm::normalize(light.direction);
+		}
+		else
+		{
+			light.direction = glm::vec3(0.0f, -1.0f, 0.0f);
+		}
+		return light;
+	}
+
+	LightingBufferObject VkApp::buildLightingBufferObject() const
+	{
+		LightingBufferObject lighting{};
+		const size_t lightCount = std::min(lights_.size(), lightGraphics::MaxForwardLights);
+		lighting.ambientAndCount = glm::vec4(ambientLight_, static_cast<float>(lightCount));
+
+		for (size_t i = 0; i < lightCount; ++i)
+		{
+			const LightSource light = lightForUpload(i);
+			GpuLight& gpuLight = lighting.lights[i];
+			const float intensity = light.enabled ? light.intensity : 0.0f;
+			const float range = std::max(light.range, 0.0f);
+			const float inner = glm::clamp(light.innerConeAngleRadians, 0.0f, glm::pi<float>());
+			const float outer = glm::clamp(light.outerConeAngleRadians, inner, glm::pi<float>());
+
+			gpuLight.positionRange = glm::vec4(light.position, range);
+			gpuLight.directionType = glm::vec4(light.direction, static_cast<float>(light.type));
+			gpuLight.colorIntensity = glm::vec4(light.color, intensity);
+			gpuLight.spotAngles = glm::vec4(std::cos(inner), std::cos(outer), light.castsShadow ? 1.0f : 0.0f, 0.0f);
+		}
+
+		return lighting;
 	}
 
 	Instance VkApp::makeInstanceForObject(size_t index) const

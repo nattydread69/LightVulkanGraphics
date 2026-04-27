@@ -18,6 +18,7 @@ layout(binding = 0) uniform UBO
 
 layout(location=0) out vec3 vNrmWS;
 layout(location=1) out vec3 vColor;
+layout(location=2) out vec3 vPosWS;
 
 void main() 
 {
@@ -28,5 +29,6 @@ void main()
 
     vNrmWS = normalize(nrmWS);
     vColor = iColor;
+    vPosWS = posWS.xyz;
     gl_Position = U.uProj * U.uView * posWS;
 }

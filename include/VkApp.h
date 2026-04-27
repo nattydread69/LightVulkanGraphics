@@ -19,6 +19,7 @@
 #pragma once
 
 #include "Camera.h"
+#include "Light.h"
 #include "pObject.h"
 
 #include <vulkan/vulkan.h>
@@ -77,6 +78,20 @@ namespace lightGraphics::detail
 		glm::mat4 model;
 		glm::mat4 view;
 		glm::mat4 proj;
+	};
+
+	struct GpuLight
+	{
+		glm::vec4 positionRange;
+		glm::vec4 directionType;
+		glm::vec4 colorIntensity;
+		glm::vec4 spotAngles;
+	};
+
+	struct LightingBufferObject
+	{
+		glm::vec4 ambientAndCount;
+		GpuLight lights[lightGraphics::MaxForwardLights];
 	};
 
 	struct Texture
@@ -145,9 +160,42 @@ namespace lightGraphics
 		size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject);
 		void removeRiggedObject(size_t index);
 		size_t getRiggedObjectCount() const { return riggedInstances_.size(); }
+		size_t addLight(const lightGraphics::LightSource& light);
+		size_t addDirectionalLight(const glm::vec3& direction,
+		                           const glm::vec3& color = glm::vec3(1.0f),
+		                           float intensity = 1.0f,
+		                           const std::string& name = "");
+		size_t addPointLight(const glm::vec3& position,
+		                     const glm::vec3& color = glm::vec3(1.0f),
+		                     float intensity = 1.0f,
+		                     float range = 10.0f,
+		                     const std::string& name = "");
+		size_t addSpotLight(const glm::vec3& position,
+		                    const glm::vec3& direction,
+		                    const glm::vec3& color = glm::vec3(1.0f),
+		                    float intensity = 1.0f,
+		                    float range = 10.0f,
+		                    float innerConeAngleRadians = glm::radians(20.0f),
+		                    float outerConeAngleRadians = glm::radians(30.0f),
+		                    const std::string& name = "");
+		void removeLight(size_t index);
+		void clearLights();
+		void updateLight(size_t index, const lightGraphics::LightSource& light);
+		size_t getLightCount() const { return lights_.size(); }
+		const lightGraphics::LightSource& getLight(size_t index) const { return lights_[index]; }
+		void setLightPosition(size_t index, const glm::vec3& position);
+		void setLightDirection(size_t index, const glm::vec3& direction);
+		void setLightColor(size_t index, const glm::vec3& color);
+		void setLightIntensity(size_t index, float intensity);
+		void setLightRange(size_t index, float range);
+		void setLightEnabled(size_t index, bool enabled);
+		void setAmbientLight(const glm::vec3& ambientColor);
+		glm::vec3 getAmbientLight() const { return ambientLight_; }
 		glm::mat4 getObjectModelMatrix(size_t index) const;
 		void setObjectModelMatrixOverride(size_t index, const glm::mat4& model);
 		void clearObjectModelMatrixOverride(size_t index);
+		void setLightTransformMatrixOverride(size_t index, const glm::mat4& transform);
+		void clearLightTransformMatrixOverride(size_t index);
 		void setRiggedObjectTransformMatrixOverride(size_t index, const glm::mat4& transform);
 		void clearRiggedObjectTransformMatrixOverride(size_t index);
 		SceneGraph& sceneGraph();
@@ -345,6 +393,8 @@ namespace lightGraphics
 		std::vector<VkDeviceMemory> uniformBuffersMemory_;
 		std::vector<VkDescriptorSet> descriptorSets_;
 		std::vector<void*> uniformBuffersMapped_;
+		std::vector<detail::Buffer> lightingBuffers_;
+		std::vector<void*> lightingBuffersMapped_;
 
 		// Timing
 		std::chrono::steady_clock::time_point tPrev;
@@ -370,6 +420,10 @@ namespace lightGraphics
 		std::vector<bool> dirtyObjects_; // Track which objects need updating
 		bool instanceDataDirty_ = false; // Global dirty flag for instance data
 		std::vector<std::optional<glm::mat4>> objectModelMatrixOverrides_;
+		std::vector<lightGraphics::LightSource> lights_;
+		std::vector<std::optional<glm::mat4>> lightTransformMatrixOverrides_;
+		glm::vec3 ambientLight_{0.1f, 0.1f, 0.15f};
+		bool lightingDataDirty_ = true;
 		// Double-buffered (per-frame) instance buffers to avoid stalls
 		detail::Buffer instanceBufs_[MAX_FRAMES_IN_FLIGHT]{};
 		void* instanceBufferMappedPerFrame_[MAX_FRAMES_IN_FLIGHT]{}; // Persistently mapped per frame
@@ -428,6 +482,9 @@ namespace lightGraphics
 
 		// Performance optimization methods
 		void markObjectDirty(size_t index);
+		void markLightingDirty();
+		lightGraphics::LightSource lightForUpload(size_t index) const;
+		detail::LightingBufferObject buildLightingBufferObject() const;
 		void updateInstanceDataOptimized();
 		void ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize);
 		detail::Instance makeInstanceForObject(size_t index) const;
@@ -495,6 +552,7 @@ namespace lightGraphics
 		void updateCameraFromKeyboard(float dtSeconds);
 		void handleRiggedAnimationInput();
 		void updateUniformBuffer(uint32_t imageIndex);
+		void updateLightingBuffer(uint32_t imageIndex);
 		void recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex);
 		void drawFrame();
 

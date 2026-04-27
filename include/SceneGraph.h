@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include "Light.h"
 #include "pObject.h"
 
 #include <glm/glm.hpp>
@@ -74,6 +75,9 @@ namespace lightGraphics
 		SceneNodeHandle createRiggedObjectNode(const std::shared_ptr<RiggedObject>& riggedObject,
 		                                       SceneNodeHandle parent = SceneNodeHandle{},
 		                                       const std::string& nodeName = "");
+		SceneNodeHandle createLightNode(const LightSource& light,
+		                                SceneNodeHandle parent = SceneNodeHandle{},
+		                                const std::string& nodeName = "");
 
 		void destroyNode(SceneNodeHandle node);
 		bool contains(SceneNodeHandle node) const;
@@ -108,11 +112,14 @@ namespace lightGraphics
 		                    float mass = 1.0f);
 		size_t attachRiggedObject(SceneNodeHandle node,
 		                          const std::shared_ptr<RiggedObject>& riggedObject);
+		size_t attachLight(SceneNodeHandle node, const LightSource& light);
 
 		std::optional<size_t> getAttachedObjectIndex(SceneNodeHandle node) const;
 		std::optional<size_t> getAttachedRiggedObjectIndex(SceneNodeHandle node) const;
+		std::optional<size_t> getAttachedLightIndex(SceneNodeHandle node) const;
 		void detachObject(SceneNodeHandle node, bool removeFromRenderer = false);
 		void detachRiggedObject(SceneNodeHandle node, bool removeFromRenderer = false);
+		void detachLight(SceneNodeHandle node, bool removeFromRenderer = false);
 
 	private:
 		struct Node
@@ -126,6 +133,7 @@ namespace lightGraphics
 			std::vector<SceneNodeHandle> children;
 			std::optional<size_t> objectIndex;
 			std::optional<size_t> riggedObjectIndex;
+			std::optional<size_t> lightIndex;
 			bool worldDirty = true;
 			bool rendererDirty = true;
 		};
@@ -150,6 +158,8 @@ namespace lightGraphics
 		void onObjectChanged(size_t index);
 		void onObjectRemoved(size_t index);
 		void onRiggedObjectRemoved(size_t index);
+		void onLightChanged(size_t index);
+		void onLightRemoved(size_t index);
 
 		friend class VkApp;
 	};

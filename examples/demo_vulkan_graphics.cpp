@@ -191,6 +191,14 @@ private:
 		}
 
 		app_.addRiggedObject(worker_);
+		app_.addSpotLight(workerPosition + glm::vec3(1.2f, 2.4f, -2.0f),
+		                  glm::normalize(glm::vec3(-1.2f, -1.7f, 2.0f)),
+		                  glm::vec3(1.0f, 0.86f, 0.68f),
+		                  10.0f,
+		                  7.0f,
+		                  glm::radians(18.0f),
+		                  glm::radians(35.0f),
+		                  "Worker Warm Key Light");
 
 		if (worker_->getAnimationCount() > 0)
 		{

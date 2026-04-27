@@ -37,6 +37,13 @@ namespace lightGraphics
 			renderable.setSize(glm::vec3(1.0f));
 			return renderable;
 		}
+
+		LightSource makeRenderableLight(const LightSource& source)
+		{
+			LightSource renderable(source);
+			renderable.position = glm::vec3(0.0f);
+			return renderable;
+		}
 	}
 
 	glm::mat4 Transform::matrix() const
@@ -139,6 +146,18 @@ namespace lightGraphics
 		return handle;
 	}
 
+	SceneNodeHandle SceneGraph::createLightNode(const LightSource& light,
+	                                            SceneNodeHandle parent,
+	                                            const std::string& nodeName)
+	{
+		SceneNodeHandle handle = createNode(nodeName.empty() ? light.name : nodeName, parent);
+		Transform transform;
+		transform.position = light.position;
+		setLocalTransform(handle, transform);
+		attachLight(handle, makeRenderableLight(light));
+		return handle;
+	}
+
 	void SceneGraph::destroyNode(SceneNodeHandle node)
 	{
 		if (node == root_)
@@ -155,6 +174,7 @@ namespace lightGraphics
 
 		detachObject(node, true);
 		detachRiggedObject(node, true);
+		detachLight(node, true);
 		detachFromParent(node);
 
 		record.children.clear();
@@ -299,6 +319,10 @@ namespace lightGraphics
 			{
 				app_.setRiggedObjectTransformMatrixOverride(*node.riggedObjectIndex, node.worldTransform);
 			}
+			if (node.lightIndex)
+			{
+				app_.setLightTransformMatrixOverride(*node.lightIndex, node.worldTransform);
+			}
 
 			node.rendererDirty = false;
 		}
@@ -348,6 +372,18 @@ namespace lightGraphics
 		return riggedObjectIndex;
 	}
 
+	size_t SceneGraph::attachLight(SceneNodeHandle node, const LightSource& light)
+	{
+		Node& record = getNode(node);
+		detachLight(node, true);
+
+		const size_t lightIndex = app_.addLight(light);
+		record.lightIndex = lightIndex;
+		record.rendererDirty = true;
+		syncToRenderer();
+		return lightIndex;
+	}
+
 	std::optional<size_t> SceneGraph::getAttachedObjectIndex(SceneNodeHandle node) const
 	{
 		return getNode(node).objectIndex;
@@ -356,6 +392,11 @@ namespace lightGraphics
 	std::optional<size_t> SceneGraph::getAttachedRiggedObjectIndex(SceneNodeHandle node) const
 	{
 		return getNode(node).riggedObjectIndex;
+	}
+
+	std::optional<size_t> SceneGraph::getAttachedLightIndex(SceneNodeHandle node) const
+	{
+		return getNode(node).lightIndex;
 	}
 
 	void SceneGraph::detachObject(SceneNodeHandle node, bool removeFromRenderer)
@@ -395,6 +436,26 @@ namespace lightGraphics
 		else
 		{
 			app_.clearRiggedObjectTransformMatrixOverride(riggedObjectIndex);
+		}
+	}
+
+	void SceneGraph::detachLight(SceneNodeHandle node, bool removeFromRenderer)
+	{
+		Node& record = getNode(node);
+		if (!record.lightIndex)
+		{
+			return;
+		}
+
+		const size_t lightIndex = *record.lightIndex;
+		record.lightIndex.reset();
+		if (removeFromRenderer)
+		{
+			app_.removeLight(lightIndex);
+		}
+		else
+		{
+			app_.clearLightTransformMatrixOverride(lightIndex);
 		}
 	}
 
@@ -569,6 +630,36 @@ namespace lightGraphics
 			else if (*node.riggedObjectIndex > index)
 			{
 				--(*node.riggedObjectIndex);
+			}
+		}
+	}
+
+	void SceneGraph::onLightChanged(size_t index)
+	{
+		for (Node& node : nodes_)
+		{
+			if (node.alive && node.lightIndex && *node.lightIndex == index)
+			{
+				node.rendererDirty = true;
+			}
+		}
+	}
+
+	void SceneGraph::onLightRemoved(size_t index)
+	{
+		for (Node& node : nodes_)
+		{
+			if (!node.alive || !node.lightIndex)
+			{
+				continue;
+			}
+			if (*node.lightIndex == index)
+			{
+				node.lightIndex.reset();
+			}
+			else if (*node.lightIndex > index)
+			{
+				--(*node.lightIndex);
 			}
 		}
 	}

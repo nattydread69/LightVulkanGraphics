@@ -19,49 +19,110 @@ layout(set = 0, binding = 0) uniform UBO
 
 layout(set = 1, binding = 0) uniform sampler2D textureSampler;
 
-// Lighting parameters
-const vec3 keyLightColor = vec3(1.0, 1.0, 1.0);
-const vec3 fillLightColor = vec3(0.6, 0.7, 0.9);
-const vec3 ambientColor = vec3(0.22, 0.22, 0.28);
 const float specularPower = 32.0;
 const float diffuseWrap = 0.2;
+const int LVG_MAX_LIGHTS = 16;
+const int LVG_LIGHT_DIRECTIONAL = 0;
+const int LVG_LIGHT_SPOT = 2;
+
+struct ShaderLight
+{
+    vec4 positionRange;
+    vec4 directionType;
+    vec4 colorIntensity;
+    vec4 spotAngles;
+};
+
+layout(set = 0, binding = 1) uniform Lighting
+{
+    vec4 ambientAndCount;
+    ShaderLight lights[LVG_MAX_LIGHTS];
+} lighting;
+
+float distanceAttenuation(float distanceToLight, float range)
+{
+    float inverseSquare = 1.0 / max(distanceToLight * distanceToLight, 1.0);
+    if (range <= 0.0)
+    {
+        return inverseSquare;
+    }
+
+    float normalizedDistance = clamp(1.0 - distanceToLight / range, 0.0, 1.0);
+    return inverseSquare * normalizedDistance * normalizedDistance;
+}
+
+float spotAttenuation(ShaderLight light, vec3 lightToFragment)
+{
+    float cosTheta = dot(normalize(light.directionType.xyz), normalize(lightToFragment));
+    float innerCos = light.spotAngles.x;
+    float outerCos = light.spotAngles.y;
+    return clamp((cosTheta - outerCos) / max(innerCos - outerCos, 0.001), 0.0, 1.0);
+}
 
 vec3 calculateLighting(
     vec3 normal,
     vec3 viewDir,
-    vec3 keyLightDir,
-    vec3 fillLightDir,
     vec3 baseColor,
     float roughness)
 {
     normal = normalize(normal);
     viewDir = normalize(viewDir);
-    keyLightDir = normalize(keyLightDir);
-    fillLightDir = normalize(fillLightDir);
-    
-    vec3 ambient = ambientColor * baseColor;
-    
-    float NdotL = max((dot(normal, keyLightDir) + diffuseWrap) / (1.0 + diffuseWrap), 0.0);
-    float NdotFill = max((dot(normal, fillLightDir) + diffuseWrap) / (1.0 + diffuseWrap), 0.0);
-    vec3 diffuse = keyLightColor * baseColor * NdotL;
-    vec3 diffuseFill = fillLightColor * baseColor * NdotFill;
-    
-    vec3 halfDir = normalize(keyLightDir + viewDir);
-    float NdotH = max(dot(normal, halfDir), 0.0);
-    float specular = pow(NdotH, specularPower * (1.0 - roughness));
-    vec3 specularColor = keyLightColor * specular * (1.0 - roughness);
-    
-    return ambient + diffuse + diffuseFill + specularColor;
+
+    vec3 result = lighting.ambientAndCount.rgb * baseColor;
+    int lightCount = min(int(lighting.ambientAndCount.w + 0.5), LVG_MAX_LIGHTS);
+
+    for (int i = 0; i < lightCount; ++i)
+    {
+        ShaderLight light = lighting.lights[i];
+        int type = int(light.directionType.w + 0.5);
+        float intensity = light.colorIntensity.a;
+        if (intensity <= 0.0)
+        {
+            continue;
+        }
+
+        vec3 lightDir;
+        float attenuation = 1.0;
+        if (type == LVG_LIGHT_DIRECTIONAL)
+        {
+            lightDir = normalize(-light.directionType.xyz);
+        }
+        else
+        {
+            vec3 toLight = light.positionRange.xyz - vPosWS;
+            float distanceToLight = length(toLight);
+            if (distanceToLight <= 0.0001)
+            {
+                continue;
+            }
+            lightDir = toLight / distanceToLight;
+            attenuation = distanceAttenuation(distanceToLight, light.positionRange.w);
+            if (type == LVG_LIGHT_SPOT)
+            {
+                attenuation *= spotAttenuation(light, -lightDir);
+            }
+        }
+
+        float NdotL = max((dot(normal, lightDir) + diffuseWrap) / (1.0 + diffuseWrap), 0.0);
+        vec3 radiance = light.colorIntensity.rgb * intensity * attenuation;
+        vec3 diffuse = radiance * baseColor * NdotL;
+
+        vec3 halfDir = normalize(lightDir + viewDir);
+        float NdotH = max(dot(normal, halfDir), 0.0);
+        float shininess = mix(4.0, specularPower, 1.0 - roughness);
+        float specular = pow(NdotH, shininess);
+        vec3 specularColor = radiance * specular * (1.0 - roughness);
+
+        result += diffuse + specularColor;
+    }
+
+    return result;
 }
 
 void main() 
 {
     vec3 cameraPosWS = vec3(inverse(U.uView)[3]);
     vec3 viewDir = normalize(cameraPosWS - vPosWS);
-
-    // Keep the character lit from the viewer side with a slight overhead bias.
-    vec3 keyLightDir = normalize(viewDir + vec3(0.0, 0.65, 0.0));
-    vec3 fillLightDir = normalize(viewDir + vec3(-0.6, 0.2, 0.35));
 
     vec4 texSample = texture(textureSampler, vTexCoord);
     vec3 baseColor = texSample.rgb;
@@ -70,8 +131,6 @@ void main()
     vec3 finalColor = calculateLighting(
         vNrmWS,
         viewDir,
-        keyLightDir,
-        fillLightDir,
         baseColor,
         roughness);
     outColor = vec4(finalColor, texSample.a);

@@ -164,6 +164,37 @@ scene.setLocalRotation(parent, glm::angleAxis(glm::radians(45.0f),
                                               glm::vec3(0.0f, 1.0f, 0.0f)));
 ```
 
+## Light Sources
+
+Scenes start with one default directional light so existing applications keep rendering with visible shading. Applications can replace it with their own lighting setup:
+
+```cpp
+gfx.clearLights();
+gfx.setAmbientLight({0.08f, 0.08f, 0.10f});
+
+gfx.addDirectionalLight(glm::normalize(glm::vec3(-0.4f, -0.8f, -0.2f)),
+                        {1.0f, 1.0f, 1.0f},
+                        1.0f,
+                        "Sun");
+
+gfx.addPointLight({2.0f, 3.0f, -2.0f},
+                  {1.0f, 0.75f, 0.45f},
+                  5.0f,
+                  8.0f,
+                  "Warm Point");
+
+gfx.addSpotLight({-2.0f, 4.0f, -3.0f},
+                 glm::normalize(glm::vec3(0.3f, -1.0f, 0.5f)),
+                 {0.55f, 0.70f, 1.0f},
+                 8.0f,
+                 10.0f,
+                 glm::radians(15.0f),
+                 glm::radians(28.0f),
+                 "Cool Spot");
+```
+
+Lights can also be attached to scene graph nodes with `createLightNode()` or `attachLight()`, which makes their position and direction follow parent transforms. The forward renderer currently uploads up to `lightGraphics::MaxForwardLights` lights. `LightSource::castsShadow` is reserved for a future shadow-map pass and does not render shadows yet.
+
 If you need to override shader discovery before initialization, pass a create-info struct:
 
 ```cpp
