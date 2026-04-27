@@ -5724,8 +5724,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			gpuLight.positionRange = glm::vec4(light.position, range);
 			gpuLight.directionType = glm::vec4(light.direction, static_cast<float>(light.type));
 			gpuLight.colorIntensity = glm::vec4(light.color, intensity);
-			gpuLight.spotAngles = glm::vec4(std::cos(inner), std::cos(outer), light.castsShadow ? 1.0f : 0.0f, 0.0f);
+			gpuLight.spotAngles = glm::vec4(std::cos(inner),
+			                                std::cos(outer),
+			                                shadowRenderingEnabled_ && light.castsShadow ? 1.0f : 0.0f,
+			                                0.0f);
 			const bool canCastShadow =
+				shadowRenderingEnabled_ &&
 				light.enabled &&
 				light.castsShadow &&
 				(light.type == LightType::Directional || light.type == LightType::Spot);
@@ -6526,6 +6530,11 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 	void VkApp::recordShadowPass(VkCommandBuffer cmd)
 	{
+		if (!shadowRenderingEnabled_)
+		{
+			return;
+		}
+
 		if (shadowPipeline_ == VK_NULL_HANDLE ||
 		    shadowPipelineLayout_ == VK_NULL_HANDLE ||
 		    shadowFramebuffers_.empty())

@@ -195,24 +195,8 @@ private:
 			return;
 		}
 
-		app_.addRiggedObject(worker_);
-		const size_t workerLightIndex = app_.addSpotLight(workerPosition + glm::vec3(1.2f, 2.4f, -2.0f),
-		                                                  glm::normalize(glm::vec3(-1.2f, -1.7f, 2.0f)),
-		                                                  glm::vec3(1.0f, 0.86f, 0.68f),
-		                                                  10.0f,
-		                                                  7.0f,
-		                                                  glm::radians(18.0f),
-		                                                  glm::radians(35.0f),
-		                                                  "Worker Warm Key Light");
-		lightGraphics::LightSource workerLight = app_.getLight(workerLightIndex);
-		workerLight.castsShadow = true;
-		workerLight.shadowStrength = 0.45f;
-		workerLight.shadowBias = 0.0025f;
-		workerLight.shadowNormalBias = 0.015f;
-		workerLight.shadowFar = 12.0f;
-		app_.updateLight(workerLightIndex, workerLight);
 		const int preferredAnimationIndex = 23;
- 			
+
 		if (worker_->getAnimationCount() > 0)
 		{
 			auto animationNames = worker_->getAnimationNames();
@@ -230,7 +214,7 @@ private:
 			{
 				initialAnimationIndex = 0;
 				lightGraphics::consoleInfoStream()
-				    << "No preferred idle startup animation found, falling back to animation 0."
+				    << "Preferred wave startup animation 23 was not found, falling back to animation 0."
 				    << std::endl;
 			}
 
@@ -244,6 +228,23 @@ private:
 			lightGraphics::consoleInfoStream()
 			    << "Loaded Worker.fbx, but no animations were found." << std::endl;
 		}
+
+		app_.addRiggedObject(worker_);
+		const size_t workerLightIndex = app_.addSpotLight(workerPosition + glm::vec3(1.2f, 2.4f, -2.0f),
+		                                                  glm::normalize(glm::vec3(-1.2f, -1.7f, 2.0f)),
+		                                                  glm::vec3(1.0f, 0.86f, 0.68f),
+		                                                  10.0f,
+		                                                  7.0f,
+		                                                  glm::radians(18.0f),
+		                                                  glm::radians(35.0f),
+		                                                  "Worker Warm Key Light");
+		lightGraphics::LightSource workerLight = app_.getLight(workerLightIndex);
+		workerLight.castsShadow = true;
+		workerLight.shadowStrength = 0.45f;
+		workerLight.shadowBias = 0.0025f;
+		workerLight.shadowNormalBias = 0.015f;
+		workerLight.shadowFar = 12.0f;
+		app_.updateLight(workerLightIndex, workerLight);
 	}
 
 	void configureDemoShadows()

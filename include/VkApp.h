@@ -198,6 +198,8 @@ namespace lightGraphics
 		void setLightEnabled(size_t index, bool enabled);
 		void setAmbientLight(const glm::vec3& ambientColor);
 		glm::vec3 getAmbientLight() const { return ambientLight_; }
+		void setShadowRenderingEnabled(bool enabled) { shadowRenderingEnabled_ = enabled; }
+		bool getShadowRenderingEnabled() const { return shadowRenderingEnabled_; }
 		glm::mat4 getObjectModelMatrix(size_t index) const;
 		void setObjectModelMatrixOverride(size_t index, const glm::mat4& model);
 		void clearObjectModelMatrixOverride(size_t index);
@@ -309,6 +311,7 @@ namespace lightGraphics
 
 		// Scene state
 		bool sceneFinalized_ = false;
+		bool shadowRenderingEnabled_ = true;
 
 		// Camera and input
 		Camera camera_;

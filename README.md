@@ -198,7 +198,7 @@ shadowedSpot.shadowStrength = 0.5f;
 gfx.updateLight(spot, shadowedSpot);
 ```
 
-Lights can also be attached to scene graph nodes with `createLightNode()` or `attachLight()`, which makes their position and direction follow parent transforms. The forward renderer currently uploads up to `lightGraphics::MaxForwardLights` lights. Directional and spot lights can cast shadow maps with `LightSource::castsShadow`; point-light shadows are not implemented yet because they require cubemap or six-face rendering.
+Lights can also be attached to scene graph nodes with `createLightNode()` or `attachLight()`, which makes their position and direction follow parent transforms. The forward renderer currently uploads up to `lightGraphics::MaxForwardLights` lights. Directional and spot lights can cast shadow maps with `LightSource::castsShadow`; point-light shadows are not implemented yet because they require cubemap or six-face rendering. Use `setShadowRenderingEnabled(false)` to skip shadow-map rendering and force all lights to render unshadowed.
 
 If you need to override shader discovery before initialization, pass a create-info struct:
 
