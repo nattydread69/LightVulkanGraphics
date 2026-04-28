@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // Light Vulkan Graphics
-// Copyright (C) 2025 Dr. Nathanael John Inkson
+// Copyright (C) 2026 Dr. Nathanael John Inkson
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published
@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 //
-// Copyright(c) 2025 onwards Dr. Nathanael Inkson
+// Copyright(c) 2026 onwards Dr. Nathanael Inkson
 //
 
 #ifndef LIGHT_VULKAN_GRAPHICS_PHEADERS_H

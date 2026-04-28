@@ -226,19 +226,36 @@ Enable debug output by checking the console for:
 
 ## Integration with Rendering
 
-To render rigged models, you'll need to:
+`RiggedObject` instances can be rendered by the library with
+`lightGraphics::lightVulkanGraphics::addRiggedObject()`. The renderer uploads
+the loaded mesh data, updates the skinned vertex buffers as animations advance,
+and uses the bundled rigged-mesh shaders. Applications are still responsible
+for loading the model, choosing an animation, calling `updateAnimation()` each
+frame, and adding the object before `finalizeScene()`.
 
-1. **Extend your shaders** to support bone matrices
-2. **Update vertex buffers** with bone weight data
-3. **Pass bone transforms** to the GPU as uniforms
-4. **Implement skinning** in vertex shaders
+```cpp
+auto character = std::make_shared<lightGraphics::RiggedObject>(
+    glm::vec3(0.0f), glm::vec3(1.0f),
+    glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+    "Character", 70.0f, "models/character.fbx");
 
-Example vertex shader uniform:
-```glsl
-layout(std140) uniform BoneMatrices {
-    mat4 boneTransforms[MAX_BONES];
-};
+if (!character->getModel()) {
+    std::cerr << character->getLastError() << std::endl;
+    return;
+}
+
+if (character->getAnimationCount() > 0) {
+    character->playAnimation(0, true);
+}
+
+app.addRiggedObject(character);
+app.setUpdateCallback([character](float dt) {
+    character->updateAnimation(dt);
+});
 ```
+
+Advanced animation blending, morph targets, and custom material workflows are
+not implemented yet.
 
 ## Performance Considerations
 

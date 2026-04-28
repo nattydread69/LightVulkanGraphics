@@ -11,6 +11,8 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Generated public version header with compile-time version macros and constants.
 - `lightGraphics::LightVulkanGraphics` compatibility alias for the main application class.
 - Contributor guidance for local build and verification workflows.
+- Root-level TODO roadmap for the next library-maturity work.
+- Focused non-GPU unit test target for core transform, handle, object, and object-index behavior.
 
 ### Changed
 - CI expanded beyond a single Ubuntu/GCC job to cover a Linux compiler matrix, sanitizer validation, and a Windows build path.
@@ -18,6 +20,8 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Reserved-identifier header guards were replaced with project-scoped names.
 - Sanitized installs now export the sanitizer link requirements needed by downstream CMake consumers.
 - Windows/MSVC builds now avoid `min`/`max` macro collisions, enable the required GLM experimental quaternion extension, and clean up warning-as-error blockers.
+- Invalid object indices in remove/update APIs now throw `std::out_of_range` consistently instead of being ignored.
+- Object state method implementations were split out of `src/VkApp.cpp` into `src/VkAppObjectState.cpp`.
 
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.

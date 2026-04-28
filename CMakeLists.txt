@@ -615,6 +615,15 @@ if (LVG_BUILD_EXAMPLES)
 endif()
 
 if (BUILD_TESTING)
+	add_executable(light_vulkan_graphics_unit_tests
+		tests/unit/test_core_types.cpp
+	)
+	lvg_configure_build_tree_example(light_vulkan_graphics_unit_tests)
+	add_test(
+		NAME light_vulkan_graphics_unit_tests
+		COMMAND light_vulkan_graphics_unit_tests
+	)
+
 	if (LVG_BUILD_EXAMPLES)
 		add_test(
 			NAME light_vulkan_graphics_examples_build

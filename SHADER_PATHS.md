@@ -35,16 +35,14 @@ int main() {
 ### Custom Shader Path
 ```cpp
 #include "lightVulkanGraphics.h"
-#include "VkApp.h"
 
 int main() {
-    lightGraphics::lightVulkanGraphics app;
+    lightGraphics::LightVulkanGraphicsCreateInfo createInfo;
+    createInfo.shaderPath = "/path/to/your/spv";
     
-    // Set custom shader path before initialization
-    app.setShaderPath("/path/to/your/shaders/");
+    lightGraphics::lightVulkanGraphics app("My App", createInfo);
     
-    // Or set via environment variable
-    // export LIGHT_VULKAN_GRAPHICS_SHADER_PATH="/path/to/your/shaders"
+    // Or set LIGHT_VULKAN_GRAPHICS_SHADER_PATH before constructing the app.
     
     return 0;
 }

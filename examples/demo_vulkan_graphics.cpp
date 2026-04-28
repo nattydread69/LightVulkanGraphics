@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // Light Vulkan Graphics
-// Copyright (C) 2025 Dr. Nathanael John Inkson
+// Copyright (C) 2026 Dr. Nathanael John Inkson
 //
 // This program is free software: you can redistribute it and/or modify
 // it under the terms of the GNU Lesser General Public License as published
@@ -282,7 +282,9 @@ public:
 			}
 			else
 			{
-				lightGraphics::consoleInfoStream() << "Unknown model: " << modelArg << std::endl;
+				lightGraphics::consoleInfoStream()
+				    << "Unknown scene argument: " << modelArg
+				    << ". Available scene: demo" << std::endl;
 			}
 		}
 
@@ -325,8 +327,7 @@ public:
 private:
 	enum class ModelType
 	{
-		Demo,
-		Custom
+		Demo
 	};
 
 	void handleKeyboardInput()
@@ -348,10 +349,6 @@ private:
 		{
 			switchModel(ModelType::Demo);
 		}
-		if (keysJustPressed_[GLFW_KEY_F2])
-		{
-			switchModel(ModelType::Custom);
-		}
 		if (keysJustPressed_[GLFW_KEY_F5])
 		{
 			showModelMenu();
@@ -369,10 +366,6 @@ private:
 		case ModelType::Demo:
 			lightGraphics::consoleInfoStream() << "Loading demo scene..." << std::endl;
 			currentPhysicsModel_ = std::make_unique<DemoModel>(app_);
-			break;
-		case ModelType::Custom:
-			lightGraphics::consoleInfoStream() << "Custom model is not implemented yet." << std::endl;
-			currentPhysicsModel_.reset();
 			break;
 		}
 
@@ -415,7 +408,6 @@ private:
 		                                   << std::endl;
 		lightGraphics::consoleInfoStream() << "\nKeyboard Controls:" << std::endl;
 		lightGraphics::consoleInfoStream() << "F1 - Demo scene" << std::endl;
-		lightGraphics::consoleInfoStream() << "F2 - Custom model (not implemented)" << std::endl;
 		lightGraphics::consoleInfoStream() << "F5 - Show this menu" << std::endl;
 		lightGraphics::consoleInfoStream() << "N/P - Cycle Worker animation (if loaded)" << std::endl;
 		lightGraphics::consoleInfoStream() << "ESC - Exit application" << std::endl;
