@@ -619,6 +619,9 @@ if (BUILD_TESTING)
 		tests/unit/test_core_types.cpp
 	)
 	lvg_configure_build_tree_example(light_vulkan_graphics_unit_tests)
+	if (TARGET LightVulkanGraphicsExamples)
+		add_dependencies(LightVulkanGraphicsExamples light_vulkan_graphics_unit_tests)
+	endif()
 	add_test(
 		NAME light_vulkan_graphics_unit_tests
 		COMMAND light_vulkan_graphics_unit_tests
