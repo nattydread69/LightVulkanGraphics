@@ -619,12 +619,25 @@ if (BUILD_TESTING)
 		tests/unit/test_core_types.cpp
 	)
 	lvg_configure_build_tree_example(light_vulkan_graphics_unit_tests)
+
+	add_executable(worker_skinning_sanity
+		tests/worker_skinning_sanity.cpp
+	)
+	lvg_configure_build_tree_example(worker_skinning_sanity)
+	target_compile_definitions(worker_skinning_sanity PRIVATE
+		LVG_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+	)
+
 	if (TARGET LightVulkanGraphicsExamples)
 		add_dependencies(LightVulkanGraphicsExamples light_vulkan_graphics_unit_tests)
 	endif()
 	add_test(
 		NAME light_vulkan_graphics_unit_tests
 		COMMAND light_vulkan_graphics_unit_tests
+	)
+	add_test(
+		NAME worker_skinning_sanity
+		COMMAND worker_skinning_sanity
 	)
 
 	if (LVG_BUILD_EXAMPLES)

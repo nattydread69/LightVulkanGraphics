@@ -20,6 +20,7 @@
 #include "FBXLoader.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "RiggedObject.h"
+#include "RiggedSkinning.h"
 #include "SceneGraph.h"
 
 #if defined(_WIN32)
@@ -5627,11 +5628,6 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			}
 
 			const auto& boneTransforms = riggedObject->getBoneTransforms();
-			glm::mat4 globalInverse = model->globalInverseTransform;
-			const bool useSkinningBindCorrection =
-			    model->usesSkinningBindCorrection &&
-			    boneTransforms.size() == model->bones.size();
-
 			for (auto& meshData : instance.meshes)
 			{
 				const RiggedMesh* mesh = meshData.mesh;
@@ -5652,33 +5648,8 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 					finalBoneMatrices.resize(mesh->bones.size(), glm::mat4(1.0f));
 					for (size_t i = 0; i < mesh->bones.size(); ++i)
 					{
-						const Bone& bone = mesh->bones[i];
-						glm::mat4 finalMat = glm::mat4(1.0f);
-						auto it = model->boneMapping.find(bone.name);
-						if (it != model->boneMapping.end() &&
-						    it->second < static_cast<int>(boneTransforms.size()))
-						{
-							glm::mat4 globalBone = boneTransforms[it->second];
-							if (useSkinningBindCorrection)
-							{
-								// Assimp's offset matrix already maps mesh bind vertices into
-								// the skin bind basis. Rebuilding another corrected bind
-								// hierarchy here cancels the imported animation delta for
-								// Worker.fbx and leaves the arms in the horizontal bind pose.
-								finalMat = globalInverse * globalBone * bone.offsetMatrix;
-							}
-							else
-							{
-								const Bone& globalBoneBind = model->bones[it->second];
-								// Default to the node-bind path for ordinary rigs. The corrected
-								// skin-bind path is only enabled when bind mismatch is detected.
-								finalMat = globalInverse *
-								           globalBone *
-								           glm::inverse(globalBoneBind.globalBindTransform) *
-								           mesh->globalBindTransform;
-							}
-						}
-						finalBoneMatrices[i] = finalMat;
+						finalBoneMatrices[i] =
+						    detail::buildRiggedFinalBoneMatrix(*model, *mesh, mesh->bones[i], boneTransforms);
 					}
 				}
 
