@@ -427,7 +427,7 @@ void RiggedObject::calculateBoneTransforms()
             {
                 if (channel->rotationKeys.size() == 1)
                 {
-                    rotation = channel->rotationKeys[0].rotation;
+                    rotation = glm::normalize(channel->rotationKeys[0].rotation);
                 }
                 else
                 {
@@ -441,13 +441,15 @@ void RiggedObject::calculateBoneTransforms()
                             timeInTicks,
                             channel->rotationKeys[keyIndex].time,
                             channel->rotationKeys[nextKeyIndex].time);
-                        rotation = glm::slerp(channel->rotationKeys[keyIndex].rotation,
-                                              channel->rotationKeys[nextKeyIndex].rotation,
-                                              factor);
+                        const glm::quat sampledRotation =
+                            glm::slerp(channel->rotationKeys[keyIndex].rotation,
+                                       channel->rotationKeys[nextKeyIndex].rotation,
+                                       factor);
+                        rotation = glm::normalize(sampledRotation);
                     }
                     else
                     {
-                        rotation = channel->rotationKeys[keyIndex].rotation;
+                        rotation = glm::normalize(channel->rotationKeys[keyIndex].rotation);
                     }
                 }
             }
