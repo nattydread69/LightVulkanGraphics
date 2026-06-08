@@ -629,7 +629,10 @@ if (BUILD_TESTING)
 	)
 
 	if (TARGET LightVulkanGraphicsExamples)
-		add_dependencies(LightVulkanGraphicsExamples light_vulkan_graphics_unit_tests)
+		add_dependencies(LightVulkanGraphicsExamples
+			light_vulkan_graphics_unit_tests
+			worker_skinning_sanity
+		)
 	endif()
 	add_test(
 		NAME light_vulkan_graphics_unit_tests

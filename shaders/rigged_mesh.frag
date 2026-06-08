@@ -4,8 +4,7 @@
 layout(location=0) in vec3 vNrmWS;
 layout(location=1) in vec3 vColor;
 layout(location=2) in vec3 vPosWS;
-layout(location=3) in float vShapeType;
-layout(location=4) in vec2 vTexCoord;
+layout(location=3) in vec2 vTexCoord;
 
 // Output
 layout(location=0) out vec4 outColor;

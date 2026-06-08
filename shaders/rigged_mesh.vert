@@ -11,7 +11,6 @@ layout(location=4) in vec4 iM1;
 layout(location=5) in vec4 iM2;
 layout(location=6) in vec4 iM3;
 layout(location=7) in vec3 iColor;
-layout(location=8) in float iShapeType;  // 9 for rigged meshes
 
 // Uniform buffer
 layout(binding = 0) uniform UBO 
@@ -25,8 +24,7 @@ layout(binding = 0) uniform UBO
 layout(location=0) out vec3 vNrmWS;
 layout(location=1) out vec3 vColor;
 layout(location=2) out vec3 vPosWS;
-layout(location=3) out float vShapeType;
-layout(location=4) out vec2 vTexCoord;
+layout(location=3) out vec2 vTexCoord;
 
 void main() 
 {
@@ -43,7 +41,6 @@ void main()
     vNrmWS = normalize(nrmWS);
     
     vColor = iColor;
-    vShapeType = iShapeType;
     vTexCoord = inUV;
 
     gl_Position = U.uProj * U.uView * posWS;

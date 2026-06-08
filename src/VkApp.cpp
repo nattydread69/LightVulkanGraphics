@@ -46,6 +46,7 @@
 
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
@@ -99,6 +100,7 @@ namespace lightGraphics
 	static_assert(offsetof(Instance, color) == sizeof(glm::mat4), "Instance color offset changed");
 	static_assert(offsetof(Instance, shapeType) == sizeof(glm::mat4) + sizeof(glm::vec3),
 	              "Instance shapeType offset changed");
+	static_assert(sizeof(Instance) == sizeof(float) * 20, "Instance size must match vertex input stride");
 	static_assert(std::is_standard_layout_v<GpuLight>, "GpuLight must use a stable standard layout");
 	static_assert(sizeof(GpuLight) == sizeof(glm::vec4) * 5, "GpuLight size must match shader layout");
 	static_assert(std::is_standard_layout_v<LightingBufferObject>,
@@ -417,6 +419,298 @@ namespace lightGraphics
 			}
 			return std::nullopt;
 #endif
+		}
+
+		std::string normalizeEnvironmentToken(std::string value)
+		{
+			std::transform(value.begin(),
+			               value.end(),
+			               value.begin(),
+			               [](unsigned char c)
+			               {
+				               if (c == '_' || c == ' ')
+				               {
+					               return '-';
+				               }
+				               return static_cast<char>(std::tolower(c));
+			               });
+			return value;
+		}
+
+		std::optional<detail::RiggedSkinningBindCorrectionMode> riggedSkinningModeFromEnvironment()
+		{
+			const auto value = getEnvironmentVariable("LIGHT_VULKAN_GRAPHICS_RIGGED_SKINNING_MODE");
+			if (!value || value->empty())
+			{
+				return std::nullopt;
+			}
+
+			const std::string mode = normalizeEnvironmentToken(*value);
+			if (mode == "offset" || mode == "offset-only" || mode == "gpu")
+			{
+				return detail::RiggedSkinningBindCorrectionMode::OffsetOnly;
+			}
+			if (mode == "mesh-bind" || mode == "meshbind" || mode == "cpu")
+			{
+				return detail::RiggedSkinningBindCorrectionMode::MeshBind;
+			}
+			if (mode == "mesh-bind-without-scale" ||
+			    mode == "mesh-bind-no-scale" ||
+			    mode == "meshbind-without-scale" ||
+			    mode == "meshbind-no-scale")
+			{
+				return detail::RiggedSkinningBindCorrectionMode::MeshBindWithoutScale;
+			}
+
+			return std::nullopt;
+		}
+
+		detail::RiggedSkinningBindCorrectionMode defaultRiggedSkinningModeForDevice(VkPhysicalDeviceType deviceType)
+		{
+			return deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU
+			    ? detail::RiggedSkinningBindCorrectionMode::MeshBind
+			    : detail::RiggedSkinningBindCorrectionMode::OffsetOnly;
+		}
+
+		const char* riggedSkinningModeName(detail::RiggedSkinningBindCorrectionMode mode)
+		{
+			switch (mode)
+			{
+				case detail::RiggedSkinningBindCorrectionMode::OffsetOnly:
+					return "offset-only";
+				case detail::RiggedSkinningBindCorrectionMode::MeshBind:
+					return "mesh-bind";
+				case detail::RiggedSkinningBindCorrectionMode::MeshBindWithoutScale:
+					return "mesh-bind-without-scale";
+				default:
+					return "unknown";
+			}
+		}
+
+		struct RiggedSkinningPoseStats
+		{
+			glm::vec3 min{std::numeric_limits<float>::max()};
+			glm::vec3 max{std::numeric_limits<float>::lowest()};
+			float maxExtent = 0.0f;
+			float maxEdgeRatio = 0.0f;
+			size_t nonFiniteVertices = 0;
+			bool valid = false;
+
+			void addPoint(const glm::vec3& point)
+			{
+				min = glm::min(min, point);
+				max = glm::max(max, point);
+				valid = true;
+			}
+
+			void finalize()
+			{
+				if (!valid)
+				{
+					maxExtent = 0.0f;
+					return;
+				}
+
+				const glm::vec3 size = max - min;
+				maxExtent = std::max({size.x, size.y, size.z});
+			}
+		};
+
+		glm::vec3 skinRiggedPosition(const RiggedVertex& vertex,
+		                             const std::vector<glm::mat4>& finalBoneMatrices)
+		{
+			glm::vec4 blended(0.0f);
+			bool usedWeights = false;
+			for (int k = 0; k < 4; ++k)
+			{
+				const int boneIndex = vertex.boneIndices[k];
+				const float weight = vertex.boneWeights[k];
+				if (boneIndex >= 0 &&
+				    boneIndex < static_cast<int>(finalBoneMatrices.size()) &&
+				    weight > 0.0f)
+				{
+					blended +=
+					    (finalBoneMatrices[boneIndex] * glm::vec4(vertex.position, 1.0f)) *
+					    weight;
+					usedWeights = true;
+				}
+			}
+
+			return usedWeights ? glm::vec3(blended) : vertex.position;
+		}
+
+		RiggedSkinningPoseStats evaluateRiggedSkinningPose(
+		    const RiggedModel& model,
+		    const std::vector<glm::mat4>& boneTransforms,
+		    detail::RiggedSkinningBindCorrectionMode mode)
+		{
+			RiggedSkinningPoseStats stats;
+			for (const auto& mesh : model.meshes)
+			{
+				if (mesh.vertices.empty())
+				{
+					continue;
+				}
+
+				std::vector<glm::mat4> finalBoneMatrices(mesh.bones.size(), glm::mat4(1.0f));
+				if (!mesh.bones.empty() && !boneTransforms.empty())
+				{
+					for (size_t i = 0; i < mesh.bones.size(); ++i)
+					{
+						finalBoneMatrices[i] =
+						    detail::buildRiggedFinalBoneMatrix(
+						        model,
+						        mesh,
+						        mesh.bones[i],
+						        boneTransforms,
+						        mode);
+					}
+				}
+
+				std::vector<glm::vec3> skinned(mesh.vertices.size(), glm::vec3(0.0f));
+				for (size_t vertexIndex = 0; vertexIndex < mesh.vertices.size(); ++vertexIndex)
+				{
+					const glm::vec3 position =
+					    skinRiggedPosition(mesh.vertices[vertexIndex], finalBoneMatrices);
+					skinned[vertexIndex] = position;
+					if (!isFiniteVec3(position))
+					{
+						++stats.nonFiniteVertices;
+						continue;
+					}
+
+					stats.addPoint(position);
+				}
+
+				for (size_t index = 0; index + 2 < mesh.indices.size(); index += 3)
+				{
+					const uint32_t tri[3] = {
+					    mesh.indices[index + 0],
+					    mesh.indices[index + 1],
+					    mesh.indices[index + 2]
+					};
+					if (tri[0] >= mesh.vertices.size() ||
+					    tri[1] >= mesh.vertices.size() ||
+					    tri[2] >= mesh.vertices.size())
+					{
+						continue;
+					}
+
+					for (int edge = 0; edge < 3; ++edge)
+					{
+						const uint32_t a = tri[edge];
+						const uint32_t b = tri[(edge + 1) % 3];
+						const float sourceLength =
+						    glm::length(mesh.vertices[a].position - mesh.vertices[b].position);
+						const float posedLength = glm::length(skinned[a] - skinned[b]);
+						if (sourceLength > 1.0e-6f && std::isfinite(posedLength))
+						{
+							stats.maxEdgeRatio =
+							    std::max(stats.maxEdgeRatio, posedLength / sourceLength);
+						}
+					}
+				}
+			}
+
+			stats.finalize();
+			return stats;
+		}
+
+		RiggedSkinningPoseStats evaluateRiggedSourcePose(const RiggedModel& model)
+		{
+			RiggedSkinningPoseStats stats;
+			for (const auto& mesh : model.meshes)
+			{
+				for (const auto& vertex : mesh.vertices)
+				{
+					if (!isFiniteVec3(vertex.position))
+					{
+						++stats.nonFiniteVertices;
+						continue;
+					}
+
+					stats.addPoint(vertex.position);
+				}
+			}
+
+			stats.finalize();
+			return stats;
+		}
+
+		bool isPlausibleRiggedPose(const RiggedSkinningPoseStats& stats,
+		                           float minimumExtent)
+		{
+			return stats.valid &&
+			       stats.nonFiniteVertices == 0 &&
+			       stats.maxExtent >= minimumExtent &&
+			       stats.maxEdgeRatio < 8.0f;
+		}
+
+		std::string riggedPoseStatsSummary(const RiggedSkinningPoseStats& stats)
+		{
+			std::ostringstream message;
+			if (!stats.valid)
+			{
+				message << "invalid";
+				return message.str();
+			}
+
+			message << "extent=" << stats.maxExtent
+			        << ", edgeRatio=" << stats.maxEdgeRatio
+			        << ", nonFinite=" << stats.nonFiniteVertices;
+			return message.str();
+		}
+
+		detail::RiggedSkinningBindCorrectionMode chooseRiggedSkinningMode(
+		    const RiggedModel& model,
+		    const std::vector<glm::mat4>& boneTransforms,
+		    detail::RiggedSkinningBindCorrectionMode defaultMode)
+		{
+			const std::array<detail::RiggedSkinningBindCorrectionMode, 3> modes = {
+			    detail::RiggedSkinningBindCorrectionMode::OffsetOnly,
+			    detail::RiggedSkinningBindCorrectionMode::MeshBind,
+			    detail::RiggedSkinningBindCorrectionMode::MeshBindWithoutScale
+			};
+
+			std::array<RiggedSkinningPoseStats, modes.size()> stats{};
+			const RiggedSkinningPoseStats sourceStats = evaluateRiggedSourcePose(model);
+			const float minimumExtent = sourceStats.valid
+			    ? std::max(sourceStats.maxExtent * 0.05f, 1.0e-4f)
+			    : 1.0e-4f;
+			float smallestPlausibleExtent = std::numeric_limits<float>::max();
+			std::optional<size_t> bestIndex;
+			std::optional<size_t> defaultIndex;
+			for (size_t i = 0; i < modes.size(); ++i)
+			{
+				stats[i] = evaluateRiggedSkinningPose(model, boneTransforms, modes[i]);
+				if (modes[i] == defaultMode)
+				{
+					defaultIndex = i;
+				}
+
+				if (!isPlausibleRiggedPose(stats[i], minimumExtent))
+				{
+					continue;
+				}
+
+				if (!bestIndex || stats[i].maxExtent < smallestPlausibleExtent)
+				{
+					bestIndex = i;
+					smallestPlausibleExtent = stats[i].maxExtent;
+				}
+			}
+
+			if (defaultIndex &&
+			    isPlausibleRiggedPose(stats[*defaultIndex], minimumExtent) &&
+			    (!bestIndex ||
+			     stats[*defaultIndex].maxExtent <=
+			         std::max(smallestPlausibleExtent * 1.25f,
+			                  smallestPlausibleExtent + 0.25f)))
+			{
+				return defaultMode;
+			}
+
+			return bestIndex ? modes[*bestIndex] : defaultMode;
 		}
 
 #if defined(_WIN32)
@@ -2080,6 +2374,7 @@ namespace lightGraphics
 			throw std::runtime_error("No suitable GPU with graphics, presentation, and swapchain support");
 
 		physicalDevice_ = bestPhysicalDevice;
+		physicalDeviceType_ = bestSupport->properties.deviceType;
 		qFamGfx = bestSupport->graphicsFamily;
 		qFamPresent = bestSupport->presentFamily;
 		supportsNonSolidFill_ = bestSupport->features.fillModeNonSolid == VK_TRUE;
@@ -2703,7 +2998,7 @@ namespace lightGraphics
 		binds[0].binding = 0; binds[0].stride = sizeof(Vertex);   binds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 		binds[1].binding = 1; binds[1].stride = sizeof(Instance); binds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
 
-		std::array<VkVertexInputAttributeDescription, 9> attrs{};
+		std::array<VkVertexInputAttributeDescription, 8> attrs{};
 		attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, pos)};
 		attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, nrm)};
 		attrs[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
@@ -2712,7 +3007,6 @@ namespace lightGraphics
 		attrs[5] = {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Instance, model) + sizeof(glm::vec4)*2};
 		attrs[6] = {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(Instance, model) + sizeof(glm::vec4)*3};
 		attrs[7] = {7, 1, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Instance, color)};
-		attrs[8] = {8, 1, VK_FORMAT_R32_SFLOAT, offsetof(Instance, shapeType)};
 
 		VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 		vi.vertexBindingDescriptionCount = 2;
@@ -2731,7 +3025,7 @@ namespace lightGraphics
 
 		VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
 		rs.polygonMode = VK_POLYGON_MODE_FILL;
-		rs.cullMode = VK_CULL_MODE_BACK_BIT;
+		rs.cullMode = VK_CULL_MODE_NONE;
 		rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rs.lineWidth = 1.0f;
 
@@ -3596,6 +3890,43 @@ void VkApp::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
 		// Create using the raw helper
 		createBufferRaw(size, usage, properties, out.buffer, out.memory);
 		out.size = size;
+	}
+
+	void VkApp::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size)
+	{
+		if (src == VK_NULL_HANDLE || dst == VK_NULL_HANDLE || size == 0)
+		{
+			return;
+		}
+
+		VkCommandBuffer cmd = beginSingleTimeCommands();
+
+		VkBufferCopy copyRegion{};
+		copyRegion.srcOffset = 0;
+		copyRegion.dstOffset = 0;
+		copyRegion.size = size;
+		vkCmdCopyBuffer(cmd, src, dst, 1, &copyRegion);
+
+		VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.buffer = dst;
+		barrier.offset = 0;
+		barrier.size = size;
+		vkCmdPipelineBarrier(cmd,
+		                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+		                     VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+		                     0,
+		                     0,
+		                     nullptr,
+		                     1,
+		                     &barrier,
+		                     0,
+		                     nullptr);
+
+		endSingleTimeCommands(cmd);
 	}
 
 	// New raw helper that the rest of this file can use
@@ -4689,6 +5020,19 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				{
 					logMessage(LogLevel::Debug, "Found shader: " + candidatePath.string());
 				}
+				if (shaderName.find("rigged_mesh.") == 0)
+				{
+					const std::string message =
+					    "Using rigged shader '" + shaderName + "': " + candidatePath.string();
+					if (logCallback_ || debugOutput)
+					{
+						logMessage(LogLevel::Info, message);
+					}
+					else
+					{
+						consoleInfoStream() << message << std::endl;
+					}
+				}
 				return candidatePath.string();
 			}
 		}
@@ -4930,18 +5274,58 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 
 			instanceData.uprightCorrection = model->axisCorrection;
 
+			{
+				const auto overrideMode = riggedSkinningModeFromEnvironment();
+				const auto defaultMode = defaultRiggedSkinningModeForDevice(physicalDeviceType_);
+				const auto mode = overrideMode.value_or(
+				    chooseRiggedSkinningMode(*model,
+				                              riggedObject->getBoneTransforms(),
+				                              defaultMode));
+				instanceData.skinningCorrectionMode = mode;
+
+				const RiggedSkinningPoseStats selectedStats =
+				    evaluateRiggedSkinningPose(*model,
+				                                riggedObject->getBoneTransforms(),
+				                                mode);
+				std::ostringstream message;
+				message << "[RiggedMesh] Skinning correction mode: "
+				        << riggedSkinningModeName(mode);
+				if (overrideMode)
+				{
+					message << " (environment override";
+				}
+				else
+				{
+					message << " (auto, default "
+					        << riggedSkinningModeName(defaultMode);
+				}
+				message << ", " << riggedPoseStatsSummary(selectedStats) << ')';
+				if (logCallback_ || debugOutput)
+				{
+					logMessage(LogLevel::Info, message.str());
+				}
+				else
+				{
+					consoleInfoStream() << message.str() << std::endl;
+				}
+			}
+
 		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 		{
 			createBuffer(sizeof(Instance),
-			             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			             instanceData.instanceBuffers[frameIndex]);
+			createBuffer(sizeof(Instance),
+			             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			             instanceData.instanceUploadBuffers[frameIndex]);
 			VK_CHECK(vkMapMemory(device_,
-			                     instanceData.instanceBuffers[frameIndex].memory,
+			                     instanceData.instanceUploadBuffers[frameIndex].memory,
 			                     0,
 			                     sizeof(Instance),
 			                     0,
-			                     &instanceData.instanceBufferMapped[frameIndex]));
+			                     &instanceData.instanceUploadMapped[frameIndex]));
 		}
 
 		for (const auto& mesh : model->meshes)
@@ -4968,25 +5352,36 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 			{
 				createBuffer(vbSize,
-				             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-				             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				             meshData.vertexBuffers[frameIndex]);
+				createBuffer(vbSize,
+				             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				             meshData.vertexUploadBuffers[frameIndex]);
 				VK_CHECK(vkMapMemory(device_,
-				                     meshData.vertexBuffers[frameIndex].memory,
+				                     meshData.vertexUploadBuffers[frameIndex].memory,
 				                     0,
 				                     vbSize,
 				                     0,
-				                     &meshData.vertexBufferMapped[frameIndex]));
+				                     &meshData.vertexUploadMapped[frameIndex]));
 			}
 			createBuffer(ibSize,
-			             VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			             VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+			             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 			             meshData.indexBuffer);
 
+			detail::Buffer indexUploadBuffer;
+			createBuffer(ibSize,
+			             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			             indexUploadBuffer);
 			void* mapped = nullptr;
-			VK_CHECK(vkMapMemory(device_, meshData.indexBuffer.memory, 0, ibSize, 0, &mapped));
+			VK_CHECK(vkMapMemory(device_, indexUploadBuffer.memory, 0, ibSize, 0, &mapped));
 			std::memcpy(mapped, mesh.indices.data(), static_cast<size_t>(ibSize));
-			vkUnmapMemory(device_, meshData.indexBuffer.memory);
+			vkUnmapMemory(device_, indexUploadBuffer.memory);
+			copyBuffer(indexUploadBuffer.buffer, meshData.indexBuffer.buffer, ibSize);
+			destroyBuffer(device_, indexUploadBuffer);
 
 			if (!mesh.diffuseTexturePath.empty())
 			{
@@ -5613,6 +6008,45 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			VK_CHECK(vkWaitForFences(device_, 1, &inFlight_[frameIndex], VK_TRUE, UINT64_MAX));
 		}
 
+		VkCommandBuffer uploadCmd = VK_NULL_HANDLE;
+		auto recordUploadCopy = [&](const detail::Buffer& src, const detail::Buffer& dst, VkDeviceSize size)
+		{
+			if (src.buffer == VK_NULL_HANDLE || dst.buffer == VK_NULL_HANDLE || size == 0)
+			{
+				return;
+			}
+
+			if (uploadCmd == VK_NULL_HANDLE)
+			{
+				uploadCmd = beginSingleTimeCommands();
+			}
+
+			VkBufferCopy copyRegion{};
+			copyRegion.srcOffset = 0;
+			copyRegion.dstOffset = 0;
+			copyRegion.size = size;
+			vkCmdCopyBuffer(uploadCmd, src.buffer, dst.buffer, 1, &copyRegion);
+
+			VkBufferMemoryBarrier barrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+			barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT;
+			barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			barrier.buffer = dst.buffer;
+			barrier.offset = 0;
+			barrier.size = size;
+			vkCmdPipelineBarrier(uploadCmd,
+			                     VK_PIPELINE_STAGE_TRANSFER_BIT,
+			                     VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
+			                     0,
+			                     0,
+			                     nullptr,
+			                     1,
+			                     &barrier,
+			                     0,
+			                     nullptr);
+		};
+
 		for (auto& instance : riggedInstances_)
 		{
 			auto riggedObject = instance.object;
@@ -5628,6 +6062,7 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			}
 
 			const auto& boneTransforms = riggedObject->getBoneTransforms();
+			const auto skinningCorrectionMode = instance.skinningCorrectionMode;
 			for (auto& meshData : instance.meshes)
 			{
 				const RiggedMesh* mesh = meshData.mesh;
@@ -5649,7 +6084,12 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 					for (size_t i = 0; i < mesh->bones.size(); ++i)
 					{
 						finalBoneMatrices[i] =
-						    detail::buildRiggedFinalBoneMatrix(*model, *mesh, mesh->bones[i], boneTransforms);
+						    detail::buildRiggedFinalBoneMatrix(
+						        *model,
+						        *mesh,
+						        mesh->bones[i],
+						        boneTransforms,
+						        skinningCorrectionMode);
 					}
 				}
 
@@ -5730,8 +6170,11 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				}
 
 				detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[frameIndex];
-				void* frameVertexMapped = meshData.vertexBufferMapped[frameIndex];
-				if (!meshData.skinnedVertices.empty() && frameVertexBuffer.memory != VK_NULL_HANDLE)
+				detail::Buffer& frameVertexUploadBuffer = meshData.vertexUploadBuffers[frameIndex];
+				void* frameVertexMapped = meshData.vertexUploadMapped[frameIndex];
+				if (!meshData.skinnedVertices.empty() &&
+				    frameVertexBuffer.buffer != VK_NULL_HANDLE &&
+				    frameVertexUploadBuffer.memory != VK_NULL_HANDLE)
 				{
 					VkDeviceSize vbSize = sizeof(Vertex) * meshData.skinnedVertices.size();
 					if (frameVertexMapped != nullptr)
@@ -5741,10 +6184,11 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 					else
 					{
 						void* mapped = nullptr;
-						VK_CHECK(vkMapMemory(device_, frameVertexBuffer.memory, 0, vbSize, 0, &mapped));
+						VK_CHECK(vkMapMemory(device_, frameVertexUploadBuffer.memory, 0, vbSize, 0, &mapped));
 						std::memcpy(mapped, meshData.skinnedVertices.data(), static_cast<size_t>(vbSize));
-						vkUnmapMemory(device_, frameVertexBuffer.memory);
+						vkUnmapMemory(device_, frameVertexUploadBuffer.memory);
 					}
+					recordUploadCopy(frameVertexUploadBuffer, frameVertexBuffer, vbSize);
 				}
 			}
 
@@ -5764,8 +6208,10 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			riggedInstance.shapeType = static_cast<float>(lightGraphics::ShapeType::HUMAN);
 
 			detail::Buffer& frameInstanceBuffer = instance.instanceBuffers[frameIndex];
-			void* frameInstanceMapped = instance.instanceBufferMapped[frameIndex];
-			if (frameInstanceBuffer.memory != VK_NULL_HANDLE)
+			detail::Buffer& frameInstanceUploadBuffer = instance.instanceUploadBuffers[frameIndex];
+			void* frameInstanceMapped = instance.instanceUploadMapped[frameIndex];
+			if (frameInstanceBuffer.buffer != VK_NULL_HANDLE &&
+			    frameInstanceUploadBuffer.memory != VK_NULL_HANDLE)
 			{
 				if (frameInstanceMapped != nullptr)
 				{
@@ -5774,11 +6220,17 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				else
 				{
 					void* mapped = nullptr;
-					VK_CHECK(vkMapMemory(device_, frameInstanceBuffer.memory, 0, sizeof(Instance), 0, &mapped));
+					VK_CHECK(vkMapMemory(device_, frameInstanceUploadBuffer.memory, 0, sizeof(Instance), 0, &mapped));
 					std::memcpy(mapped, &riggedInstance, sizeof(Instance));
-					vkUnmapMemory(device_, frameInstanceBuffer.memory);
+					vkUnmapMemory(device_, frameInstanceUploadBuffer.memory);
 				}
+				recordUploadCopy(frameInstanceUploadBuffer, frameInstanceBuffer, sizeof(Instance));
 			}
+		}
+
+		if (uploadCmd != VK_NULL_HANDLE)
+		{
+			endSingleTimeCommands(uploadCmd);
 		}
 	}
 
@@ -5786,24 +6238,26 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 	{
 		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 		{
-			if (instance.instanceBufferMapped[frameIndex] != nullptr &&
-			    instance.instanceBuffers[frameIndex].memory != VK_NULL_HANDLE)
+			if (instance.instanceUploadMapped[frameIndex] != nullptr &&
+			    instance.instanceUploadBuffers[frameIndex].memory != VK_NULL_HANDLE)
 			{
-				vkUnmapMemory(device_, instance.instanceBuffers[frameIndex].memory);
-				instance.instanceBufferMapped[frameIndex] = nullptr;
+				vkUnmapMemory(device_, instance.instanceUploadBuffers[frameIndex].memory);
+				instance.instanceUploadMapped[frameIndex] = nullptr;
 			}
+			destroyBuffer(device_, instance.instanceUploadBuffers[frameIndex]);
 			destroyBuffer(device_, instance.instanceBuffers[frameIndex]);
 		}
 		for (auto& mesh : instance.meshes)
 		{
 			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 			{
-				if (mesh.vertexBufferMapped[frameIndex] != nullptr &&
-				    mesh.vertexBuffers[frameIndex].memory != VK_NULL_HANDLE)
+				if (mesh.vertexUploadMapped[frameIndex] != nullptr &&
+				    mesh.vertexUploadBuffers[frameIndex].memory != VK_NULL_HANDLE)
 				{
-					vkUnmapMemory(device_, mesh.vertexBuffers[frameIndex].memory);
-					mesh.vertexBufferMapped[frameIndex] = nullptr;
+					vkUnmapMemory(device_, mesh.vertexUploadBuffers[frameIndex].memory);
+					mesh.vertexUploadMapped[frameIndex] = nullptr;
 				}
+				destroyBuffer(device_, mesh.vertexUploadBuffers[frameIndex]);
 				destroyBuffer(device_, mesh.vertexBuffers[frameIndex]);
 			}
 			destroyBuffer(device_, mesh.indexBuffer);

@@ -43,6 +43,8 @@ struct GLFWwindow;
 
 namespace lightGraphics::detail
 {
+	enum class RiggedSkinningBindCorrectionMode : int;
+
 	struct Vertex
 	{
 		glm::vec3 pos;
@@ -344,6 +346,7 @@ namespace lightGraphics
 		VkDebugUtilsMessengerEXT debugMessenger_ = VK_NULL_HANDLE;
 		VkSurfaceKHR surface_ = VK_NULL_HANDLE;
 		VkPhysicalDevice physicalDevice_ = VK_NULL_HANDLE;
+		VkPhysicalDeviceType physicalDeviceType_ = VK_PHYSICAL_DEVICE_TYPE_OTHER;
 		VkDevice device_ = VK_NULL_HANDLE;
 		VkQueue graphicsQueue_ = VK_NULL_HANDLE;
 		VkQueue presentQueue_ = VK_NULL_HANDLE;
@@ -455,7 +458,8 @@ namespace lightGraphics
 		{
 			const RiggedMesh* mesh = nullptr;
 			detail::Buffer vertexBuffers[MAX_FRAMES_IN_FLIGHT]{};
-			void* vertexBufferMapped[MAX_FRAMES_IN_FLIGHT]{};
+			detail::Buffer vertexUploadBuffers[MAX_FRAMES_IN_FLIGHT]{};
+			void* vertexUploadMapped[MAX_FRAMES_IN_FLIGHT]{};
 			detail::Buffer indexBuffer;
 			std::vector<detail::Vertex> skinnedVertices;
 			uint32_t indexCount = 0;
@@ -465,9 +469,11 @@ namespace lightGraphics
 		{
 			std::shared_ptr<RiggedObject> object;
 			detail::Buffer instanceBuffers[MAX_FRAMES_IN_FLIGHT]{};
-			void* instanceBufferMapped[MAX_FRAMES_IN_FLIGHT]{};
+			detail::Buffer instanceUploadBuffers[MAX_FRAMES_IN_FLIGHT]{};
+			void* instanceUploadMapped[MAX_FRAMES_IN_FLIGHT]{};
 			glm::mat4 uprightCorrection = glm::mat4(1.0f);
 			std::optional<glm::mat4> transformMatrixOverride;
+			detail::RiggedSkinningBindCorrectionMode skinningCorrectionMode{};
 			int activeAnimationIndex = -1;
 			bool animationLoop = true;
 			std::vector<RiggedMeshRenderData> meshes;
@@ -626,6 +632,7 @@ namespace lightGraphics
 		void storeShapeGeometryOffsets();
 
 		void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags props, detail::Buffer& out);
+		void copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size);
 
 
 		void createBufferRaw(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,

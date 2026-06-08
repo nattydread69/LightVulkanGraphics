@@ -81,7 +81,9 @@ namespace
 
 	PoseStats evaluatePose(const lightGraphics::RiggedModel& model,
 	                       const lightGraphics::RiggedMesh& mesh,
-	                       const std::vector<glm::mat4>& boneTransforms)
+	                       const std::vector<glm::mat4>& boneTransforms,
+	                       lightGraphics::detail::RiggedSkinningBindCorrectionMode correctionMode =
+	                           lightGraphics::detail::RiggedSkinningBindCorrectionMode::OffsetOnly)
 	{
 		PoseStats stats;
 		std::vector<glm::vec3> skinned(mesh.vertices.size(), glm::vec3(0.0f));
@@ -90,7 +92,12 @@ namespace
 		for (size_t i = 0; i < mesh.bones.size(); ++i)
 		{
 			finalBoneMatrices[i] =
-			    lightGraphics::detail::buildRiggedFinalBoneMatrix(model, mesh, mesh.bones[i], boneTransforms);
+			    lightGraphics::detail::buildRiggedFinalBoneMatrix(
+			        model,
+			        mesh,
+			        mesh.bones[i],
+			        boneTransforms,
+			        correctionMode);
 		}
 
 		for (size_t i = 0; i < mesh.vertices.size(); ++i)
@@ -146,12 +153,14 @@ namespace
 
 	Bounds combinedPoseBounds(const lightGraphics::RiggedModel& model,
 	                          const std::vector<glm::mat4>& boneTransforms,
-	                          size_t& nonFiniteVertices)
+	                          size_t& nonFiniteVertices,
+	                          lightGraphics::detail::RiggedSkinningBindCorrectionMode correctionMode =
+	                              lightGraphics::detail::RiggedSkinningBindCorrectionMode::OffsetOnly)
 	{
 		Bounds bounds;
 		for (const auto& mesh : model.meshes)
 		{
-			const PoseStats stats = evaluatePose(model, mesh, boneTransforms);
+			const PoseStats stats = evaluatePose(model, mesh, boneTransforms, correctionMode);
 			nonFiniteVertices += stats.nonFiniteVertices;
 			if (stats.bounds.valid)
 			{
@@ -166,6 +175,15 @@ namespace
 	{
 		const glm::vec3 size = bounds.max - bounds.min;
 		return std::max({size.x, size.y, size.z});
+	}
+
+	std::string boundsSummary(const Bounds& bounds)
+	{
+		std::ostringstream message;
+		message << "min=(" << bounds.min.x << ", " << bounds.min.y << ", " << bounds.min.z
+		        << "), max=(" << bounds.max.x << ", " << bounds.max.y << ", " << bounds.max.z
+		        << "), extent=" << maxExtent(bounds);
+		return message.str();
 	}
 
 	float horizontalExtentX(const Bounds& bounds)
@@ -208,7 +226,8 @@ namespace
 		require(combinedBounds.valid,
 		        "Worker bind pose produced no skinned vertices");
 		require(maxExtent(combinedBounds) < 2.5f,
-		        "Worker bind pose produced implausibly large bounds");
+		        "Worker bind pose produced implausibly large bounds: " +
+		        boundsSummary(combinedBounds));
 		require(horizontalExtentX(combinedBounds) < 0.9f,
 		        "Worker bind pose stayed in the source T-pose arm span");
 

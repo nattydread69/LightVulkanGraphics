@@ -10,10 +10,46 @@
 
 namespace lightGraphics::detail
 {
+	enum class RiggedSkinningBindCorrectionMode : int
+	{
+		OffsetOnly,
+		MeshBind,
+		MeshBindWithoutScale
+	};
+
+	inline glm::mat4 removeAffineScale(const glm::mat4& transform)
+	{
+		glm::mat4 result = transform;
+		float scaleSum = 0.0f;
+		int scaleCount = 0;
+		for (int column = 0; column < 3; ++column)
+		{
+			const glm::vec3 axis = glm::vec3(result[column]);
+			const float length = glm::length(axis);
+			if (length > 1.0e-6f)
+			{
+				result[column] = glm::vec4(axis / length, 0.0f);
+				scaleSum += length;
+				++scaleCount;
+			}
+		}
+		if (scaleCount > 0)
+		{
+			const float uniformScale = scaleSum / static_cast<float>(scaleCount);
+			if (uniformScale > 1.0e-6f)
+			{
+				result[3] = glm::vec4(glm::vec3(result[3]) / uniformScale, result[3].w);
+			}
+		}
+		return result;
+	}
+
 	inline glm::mat4 buildRiggedFinalBoneMatrix(const RiggedModel& model,
 	                                            const RiggedMesh& mesh,
 	                                            const Bone& meshBone,
-	                                            const std::vector<glm::mat4>& boneTransforms)
+	                                            const std::vector<glm::mat4>& boneTransforms,
+	                                            RiggedSkinningBindCorrectionMode correctionMode =
+	                                                RiggedSkinningBindCorrectionMode::OffsetOnly)
 	{
 		auto it = model.boneMapping.find(meshBone.name);
 		if (it == model.boneMapping.end() ||
@@ -30,12 +66,21 @@ namespace lightGraphics::detail
 		if (model.usesSkinningBindCorrection &&
 		    boneTransforms.size() == model.bones.size())
 		{
-			// Convert baked mesh vertices back through the mesh node before
-			// applying the FBX bone offset, then return to model space.
-			return model.globalInverseTransform *
-			       globalBone *
-			       meshBone.offsetMatrix *
-			       mesh.globalBindTransform;
+			glm::mat4 finalMatrix =
+			    model.globalInverseTransform *
+			    globalBone *
+			    meshBone.offsetMatrix;
+
+			if (correctionMode == RiggedSkinningBindCorrectionMode::MeshBind)
+			{
+				finalMatrix *= mesh.globalBindTransform;
+			}
+			else if (correctionMode == RiggedSkinningBindCorrectionMode::MeshBindWithoutScale)
+			{
+				finalMatrix *= removeAffineScale(mesh.globalBindTransform);
+			}
+
+			return finalMatrix;
 		}
 
 		return model.globalInverseTransform *
