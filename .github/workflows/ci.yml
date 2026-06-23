@@ -72,7 +72,7 @@ jobs:
         run: ctest --test-dir build --output-on-failure
 
   windows-build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v4
