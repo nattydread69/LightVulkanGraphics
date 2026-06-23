@@ -2948,11 +2948,12 @@ namespace lightGraphics
 		gp.renderPass=renderPass_; gp.subpass=0;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapePipeline_));
 
-		// Create a depth-disabled overlay variant for debug drawing (render "through" meshes)
+		// Overlay debug drawing gets a fresh depth buffer later in the frame:
+		// it renders through scene meshes but still self-occludes correctly.
 		VkPipelineDepthStencilStateCreateInfo dsOverlay = ds;
-		dsOverlay.depthTestEnable = VK_FALSE;
-		dsOverlay.depthWriteEnable = VK_FALSE;
-		dsOverlay.depthCompareOp = VK_COMPARE_OP_ALWAYS;
+		dsOverlay.depthTestEnable = VK_TRUE;
+		dsOverlay.depthWriteEnable = VK_TRUE;
+		dsOverlay.depthCompareOp = VK_COMPARE_OP_LESS;
 		gp.pDepthStencilState = &dsOverlay;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapeOverlayPipeline_));
 
@@ -7146,9 +7147,21 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			// No rigged pipeline available; skip rendering rigged meshes
 		}
 
-		// Draw overlay debug shapes (e.g. collision capsules) "through" the mesh
+		// Draw overlay debug shapes (e.g. collision capsules) through scene meshes.
+		// Clear only depth so overlays are not hidden by the skinned mesh, then
+		// depth-test the overlays against each other during this pass.
 		if (indexed && useInstancing && hasOverlayObjects && flexibleShapeOverlayPipeline_ != VK_NULL_HANDLE)
 		{
+			VkClearAttachment depthClear{};
+			depthClear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+			depthClear.clearValue.depthStencil = {1.0f, 0};
+			VkClearRect clearRect{};
+			clearRect.rect.offset = {0, 0};
+			clearRect.rect.extent = swapChainExtent_;
+			clearRect.baseArrayLayer = 0;
+			clearRect.layerCount = 1;
+			vkCmdClearAttachments(cmd, 1, &depthClear, 1, &clearRect);
+
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeOverlayPipeline_);
 
 			if (!descriptorSets_.empty())
