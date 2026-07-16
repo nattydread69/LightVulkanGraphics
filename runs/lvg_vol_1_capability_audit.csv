@@ -1,0 +1,9 @@
+capability,status,publicApiAvailable,requiredForVolumeRendering,notes
+custom mesh submission,AvailablePublicApi,true,true,Static and capacity-bounded dynamic indexed meshes
+custom material pipelines,AvailablePublicApi,true,true,Blend depth cull polygon shader selection
+3D texture upload,AvailablePublicApi,true,true,Staged upload and update with five declared formats
+transfer function,AvailablePublicApi,true,true,Sorted interpolated 256 sample lookup and four presets
+volume proxy raymarching,AvailablePublicApi,true,true,Proxy cube front-to-back scalar raymarcher
+clipping,AvailablePublicApi,true,true,World plane and normalized clip box
+transparent sorting,PartiallyAvailable,true,true,Pass separation with submission order
+frame capture,Missing,false,false,Blockers documented

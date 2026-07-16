@@ -1,0 +1,7 @@
+blocker,impact,recommendation
+framebuffer capture,No programmatic PNG output,Add transfer-source swapchain and asynchronous reusable readback
+arbitrary descriptor layouts,Custom shaders must use documented ABI,Add descriptor schema and resource binding handles
+transparent sorting,Intersecting transparent meshes depend on registration order,Add optional stable camera-distance sort keys
+order independent transparency,Intersecting volumes and surfaces are order dependent,Consider weighted blended OIT in a later milestone
+3D mipmap generation,Texture3D generateMipmaps is rejected,Add per-level blit or compute downsampling
+storage images,Compute-written volumes are not supported,Expose storage image descriptors and synchronization

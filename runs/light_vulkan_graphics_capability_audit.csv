@@ -1,0 +1,17 @@
+capability,status,existingFiles,publicApiAvailable,requiredForVolumeRendering,notes
+custom mesh submission,AvailableInternalOnly,src/VkApp.cpp,false,true,Procedural and rigged meshes only
+static mesh buffers,AvailableInternalOnly,src/VkApp.cpp,false,true,Internal packed and rigged buffers
+dynamic mesh buffers,PartiallyAvailable,src/VkApp.cpp,false,true,Internal instance and skinned buffers
+custom vertex attributes,Missing,include/VkApp.h,false,true,No public vertex layout
+custom shader modules,AvailableInternalOnly,src/VkApp.cpp,false,true,Fixed internal shader set
+custom material/pipeline creation,AvailableInternalOnly,src/VkApp.cpp,false,true,Fixed internal pipelines
+2D texture upload,AvailableInternalOnly,src/VkApp.cpp,false,false,Rigged texture path only
+3D texture upload,Missing,,false,true,No 3D image path
+storage images,Missing,,false,false,No storage descriptors
+descriptor set extension points,Missing,src/VkApp.cpp,false,true,Layouts fixed internally
+uniform buffer extension points,Missing,src/VkApp.cpp,false,true,Camera and lighting buffers fixed internally
+alpha blending,AvailableInternalOnly,src/VkApp.cpp,false,true,Pipeline state not public
+depth write control,Missing,src/VkApp.cpp,false,true,Always enabled in scene pipelines
+transparent sorting,Missing,src/VkApp.cpp,false,true,No transparent pass
+offscreen/framebuffer capture,Missing,src/VkApp.cpp,false,false,Presentation only
+postprocess/fullscreen passes,Missing,src/VkApp.cpp,false,false,No public render target pass

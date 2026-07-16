@@ -1,11 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(libLightVulkanGraphics VERSION 2.0.0 LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(LVG_BUILD_EXAMPLES "Build bundled example executables" ON)
+option(LVG_BUILD_VOLUME_EXAMPLES "Build volume rendering examples" ON)
+option(LVG_BUILD_VULKAN_INTEGRATION_TESTS "Build Vulkan tests that require a GPU" OFF)
 option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project targets" ON)
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
@@ -370,6 +372,13 @@ set(UNLIT_FS_SPV ${SPV_DIR}/unlit.frag.spv)
 set(SHADOW_VS_SRC ${SHADER_DIR}/shadow_depth.vert)
 set(SHADOW_VS_SPV ${SPV_DIR}/shadow_depth.vert.spv)
 
+# Custom mesh and volume shaders
+set(CUSTOM_MESH_VS_SPV ${SPV_DIR}/custom_mesh.vert.spv)
+set(CUSTOM_MESH_FS_SPV ${SPV_DIR}/custom_mesh.frag.spv)
+set(CUSTOM_MESH_UNLIT_FS_SPV ${SPV_DIR}/custom_mesh_unlit.frag.spv)
+set(VOLUME_VS_SPV ${SPV_DIR}/volume_raymarch.vert.spv)
+set(VOLUME_FS_SPV ${SPV_DIR}/volume_raymarch.frag.spv)
+
 # Compile original sphere shaders
 add_custom_command(
 	OUTPUT ${VS_SPV}
@@ -448,6 +457,37 @@ add_custom_command(
 	COMMENT "Compiling ${SHADOW_VS_SRC}"
 )
 
+add_custom_command(
+	OUTPUT ${CUSTOM_MESH_VS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=vert -o ${CUSTOM_MESH_VS_SPV} ${SHADER_DIR}/custom_mesh.vert
+	DEPENDS ${SHADER_DIR}/custom_mesh.vert
+	COMMENT "Compiling custom mesh vertex shader"
+)
+add_custom_command(
+	OUTPUT ${CUSTOM_MESH_FS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=frag -o ${CUSTOM_MESH_FS_SPV} ${SHADER_DIR}/custom_mesh.frag
+	DEPENDS ${SHADER_DIR}/custom_mesh.frag
+	COMMENT "Compiling custom mesh fragment shader"
+)
+add_custom_command(
+	OUTPUT ${CUSTOM_MESH_UNLIT_FS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=frag -o ${CUSTOM_MESH_UNLIT_FS_SPV} ${SHADER_DIR}/custom_mesh_unlit.frag
+	DEPENDS ${SHADER_DIR}/custom_mesh_unlit.frag
+	COMMENT "Compiling unlit custom mesh fragment shader"
+)
+add_custom_command(
+	OUTPUT ${VOLUME_VS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=vert -o ${VOLUME_VS_SPV} ${SHADER_DIR}/volume_raymarch.vert
+	DEPENDS ${SHADER_DIR}/volume_raymarch.vert
+	COMMENT "Compiling volume raymarch vertex shader"
+)
+add_custom_command(
+	OUTPUT ${VOLUME_FS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=frag -o ${VOLUME_FS_SPV} ${SHADER_DIR}/volume_raymarch.frag
+	DEPENDS ${SHADER_DIR}/volume_raymarch.frag
+	COMMENT "Compiling volume raymarch fragment shader"
+)
+
 # Create shader target that depends on all compiled shaders
 add_custom_target(Shaders ALL DEPENDS
 	${VS_SPV} ${FS_SPV}
@@ -456,6 +496,8 @@ add_custom_target(Shaders ALL DEPENDS
 	${WIRE_VS_SPV} ${WIRE_FS_SPV}
 	${UNLIT_VS_SPV} ${UNLIT_FS_SPV}
 	${SHADOW_VS_SPV}
+	${CUSTOM_MESH_VS_SPV} ${CUSTOM_MESH_FS_SPV} ${CUSTOM_MESH_UNLIT_FS_SPV}
+	${VOLUME_VS_SPV} ${VOLUME_FS_SPV}
 )
 
 # Ensure shaders build whenever the lib builds (so install will have them)
@@ -614,11 +656,22 @@ if (LVG_BUILD_EXAMPLES)
 	)
 endif()
 
+if (LVG_BUILD_VOLUME_EXAMPLES)
+	add_executable(VolumeFogExample examples/VolumeFogExample/main.cpp)
+	lvg_configure_build_tree_example(VolumeFogExample)
+	if (TARGET LightVulkanGraphicsExamples)
+		add_dependencies(LightVulkanGraphicsExamples VolumeFogExample)
+	endif()
+endif()
+
 if (BUILD_TESTING)
 	add_executable(light_vulkan_graphics_unit_tests
 		tests/unit/test_core_types.cpp
 	)
 	lvg_configure_build_tree_example(light_vulkan_graphics_unit_tests)
+	target_compile_definitions(light_vulkan_graphics_unit_tests PRIVATE
+		LVG_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+	)
 
 	add_executable(worker_skinning_sanity
 		tests/worker_skinning_sanity.cpp
@@ -642,6 +695,17 @@ if (BUILD_TESTING)
 		NAME worker_skinning_sanity
 		COMMAND worker_skinning_sanity
 	)
+
+	if (LVG_BUILD_VULKAN_INTEGRATION_TESTS)
+		add_executable(volume_vulkan_integration_test
+			tests/volume_vulkan_integration.cpp
+		)
+		lvg_configure_build_tree_example(volume_vulkan_integration_test)
+		add_test(
+			NAME volume_vulkan_integration_test
+			COMMAND volume_vulkan_integration_test
+		)
+	endif()
 
 	if (LVG_BUILD_EXAMPLES)
 		add_test(

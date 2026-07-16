@@ -1,0 +1,7 @@
+limitation,impact,recommendation
+intersecting transparent content,results remain order dependent,use application sort keys or future weighted blended OIT
+manual sort keys,no automatic camera-distance updates,recompute keys when camera-relative ordering changes
+legacy drawVolume overload,retains VOL-1 after-transparent placement,use DrawOptions with RenderLayer::Volume
+framebuffer capture,no programmatic capture,implement negotiated asynchronous readback in LVG-VOL-3
+3D mipmaps,high-frequency volumes cannot use generated mip chains,add per-level blit or compute downsampling
+fixed descriptor ABI,custom volume shaders cannot declare arbitrary bindings,add descriptor schemas and binding handles

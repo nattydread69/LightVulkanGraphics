@@ -1,0 +1,8 @@
+feature,status,implementation,tests,notes
+custom_mesh,implemented,include/VolumeRendering.h;src/VkAppVolume.cpp,GPU-free validation,Fixed public vertex layout
+material_state,implemented,include/VolumeRendering.h;src/VkAppVolume.cpp,GPU-free config,Custom SPIR-V and built-in lit/unlit
+texture3d,implemented,src/VkAppVolume.cpp,GPU-free size validation,R32 scalar baseline plus format mapping
+transfer_function,implemented,src/VolumeRendering.cpp,GPU-free sorting and interpolation,Four presets
+volume_raymarch,implemented,shaders/volume_raymarch.vert;shaders/volume_raymarch.frag,GPU test optional,Proxy cube and clipping
+transparent_pass,partial,src/VkAppVolume.cpp,GPU-free material config,Submission-order transparent meshes
+frame_capture,blocked,docs/frame_capture_blockers.md,none,Requires swapchain and readback work

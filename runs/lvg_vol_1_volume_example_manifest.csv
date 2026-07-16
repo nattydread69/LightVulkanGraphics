@@ -1,0 +1,2 @@
+example,field,resolution,textureFormat,transferFunction,referenceGeometry,camera
+VolumeFogExample,toroidal Gaussian,64x64x64,R32_SFLOAT,DensityDeficitCyan,custom mesh torus,automatic orbit

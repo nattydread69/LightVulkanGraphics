@@ -1,0 +1,8 @@
+feature,status,implementation,tests,notes
+exponential_extinction,implemented,include/VolumeRendering.h;shaders/volume_raymarch.frag,GPU-free validation;shader build,Default for new descriptions
+step_length_normalization,implemented,shaders/volume_raymarch.frag,GPU-free configuration,World-space step divided by positive reference length
+render_layers,implemented,include/VolumeRendering.h;src/VkAppVolume.cpp,GPU-free ordering,Explicit overloads preserve simple API
+transparent_sort_keys,implemented,src/VkAppVolume.cpp,GPU-free ordering,Layer then key then submission index
+multiple_volume_order,implemented,src/VkAppVolume.cpp,GPU-free ordering,Deterministic but intersecting volumes remain approximate
+frame_capture,blocked,docs/frame_capture.md;docs/frame_capture_blockers.md,documentation audit,Requires negotiated transfer-source swapchain and readback lifecycle
+volume_example,implemented,examples/VolumeFogExample/main.cpp,examples build,Linear 64-step and exponential 256-step comparison

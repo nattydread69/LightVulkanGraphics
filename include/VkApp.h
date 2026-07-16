@@ -20,6 +20,7 @@
 
 #include "Camera.h"
 #include "Light.h"
+#include "VolumeRendering.h"
 #include "pObject.h"
 
 #include <vulkan/vulkan.h>
@@ -294,6 +295,52 @@ namespace lightGraphics
 		void setRenderMode(RenderMode mode);
 		VkPipeline getCurrentPipeline();
 
+		// Client-defined mesh, material, texture, and volume resources.
+		MeshHandle createStaticMesh(const MeshData& meshData);
+		MeshHandle createDynamicMesh(
+			std::size_t maximumVertexCount,
+			std::size_t maximumIndexCount);
+		void updateDynamicMesh(MeshHandle handle, const MeshData& meshData);
+		void drawMesh(
+			MeshHandle handle,
+			const Transform& transform,
+			MaterialHandle material);
+		void drawMesh(
+			MeshHandle handle,
+			const Transform& transform,
+			MaterialHandle material,
+			const DrawOptions& options);
+		void clearMeshDraws();
+		void destroyMesh(MeshHandle handle);
+
+		MaterialHandle createMaterial(const MaterialDescription& description);
+		void destroyMaterial(MaterialHandle handle);
+
+		Texture3DHandle createTexture3D(
+			const Texture3DDescription& description,
+			const void* data,
+			std::size_t byteSize);
+		void updateTexture3D(
+			Texture3DHandle handle,
+			const void* data,
+			std::size_t byteSize);
+		void destroyTexture3D(Texture3DHandle handle);
+
+		TransferFunctionHandle createTransferFunction(
+			const std::vector<TransferFunctionPoint>& points);
+		TransferFunctionHandle createTransferFunction(
+			TransferFunctionPreset preset);
+		void destroyTransferFunction(TransferFunctionHandle handle);
+
+		VolumeHandle createVolume(const VolumeRenderDescription& description);
+		void updateVolume(
+			VolumeHandle handle,
+			const VolumeRenderDescription& description);
+		void drawVolume(VolumeHandle handle);
+		void drawVolume(VolumeHandle handle, const DrawOptions& options);
+		void hideVolume(VolumeHandle handle);
+		void destroyVolume(VolumeHandle handle);
+
 		GLFWwindow* getWindowPointer() const { return window_; }
 
 	private:
@@ -412,6 +459,7 @@ namespace lightGraphics
 		// Descriptors / UBOs
 		VkDescriptorSetLayout descriptorSetLayout_ = VK_NULL_HANDLE;
 		VkDescriptorSetLayout textureSetLayout_ = VK_NULL_HANDLE;
+		VkDescriptorSetLayout volumeSetLayout_ = VK_NULL_HANDLE;
 		VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
 		VkDescriptorPool textureDescriptorPool_ = VK_NULL_HANDLE;
 		std::vector<VkBuffer> uniformBuffers_;
@@ -481,6 +529,96 @@ namespace lightGraphics
 		std::vector<RiggedInstanceRenderData> riggedInstances_;
 		std::unordered_map<std::string, std::shared_ptr<detail::Texture>> textureCache_;
 		std::shared_ptr<detail::Texture> defaultTexture_;
+
+		struct CustomMeshResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			bool dynamic = false;
+			std::size_t maximumVertexCount = 0;
+			std::size_t maximumIndexCount = 0;
+			detail::Buffer vertexBuffer;
+			detail::Buffer indexBuffer;
+			std::uint32_t vertexCount = 0;
+			std::uint32_t indexCount = 0;
+		};
+
+		struct MaterialResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			MaterialDescription description;
+			VkPipeline pipeline = VK_NULL_HANDLE;
+			VkPipelineLayout layout = VK_NULL_HANDLE;
+		};
+
+		struct Texture3DResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			Texture3DDescription description;
+			VkImage image = VK_NULL_HANDLE;
+			VkDeviceMemory memory = VK_NULL_HANDLE;
+			VkImageView view = VK_NULL_HANDLE;
+			VkSampler sampler = VK_NULL_HANDLE;
+		};
+
+		struct TransferFunctionResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			std::vector<TransferFunctionPoint> points;
+			std::shared_ptr<detail::Texture> texture;
+		};
+
+		struct VolumeResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			bool visible = false;
+			VolumeRenderDescription description;
+			MeshHandle proxyMesh;
+			VkDescriptorSet descriptor = VK_NULL_HANDLE;
+			DrawOptions drawOptions{RenderLayer::Overlay, 0.0f};
+			std::uint64_t submissionIndex = 0;
+		};
+
+		struct MeshDrawRequest
+		{
+			MeshHandle mesh;
+			MaterialHandle material;
+			Transform transform;
+			DrawOptions drawOptions;
+			std::uint64_t submissionIndex = 0;
+		};
+
+		enum class OrderedDrawKind
+		{
+			Mesh,
+			Volume
+		};
+
+		struct OrderedDrawResource
+		{
+			OrderedDrawKind kind = OrderedDrawKind::Mesh;
+			std::size_t index = 0;
+		};
+
+		std::vector<CustomMeshResource> customMeshes_;
+		std::vector<std::uint32_t> freeCustomMeshes_;
+		std::vector<MaterialResource> materials_;
+		std::vector<std::uint32_t> freeMaterials_;
+		std::vector<Texture3DResource> textures3D_;
+		std::vector<std::uint32_t> freeTextures3D_;
+		std::vector<TransferFunctionResource> transferFunctions_;
+		std::vector<std::uint32_t> freeTransferFunctions_;
+		std::vector<VolumeResource> volumes_;
+		std::vector<std::uint32_t> freeVolumes_;
+		std::vector<MeshDrawRequest> meshDrawRequests_;
+		VkPipeline volumePipeline_ = VK_NULL_HANDLE;
+		VkPipelineLayout volumePipelineLayout_ = VK_NULL_HANDLE;
+		std::vector<OrderedDrawResource> orderedDrawResources_;
+		std::uint64_t nextDrawSubmissionIndex_ = 1;
 
 	private:
 		void logMessage(LogLevel level, const std::string& message) const;
@@ -562,6 +700,7 @@ namespace lightGraphics
 		void createWireframePipeline();
 		void createUnlitPipeline();
 		void createLinePipeline();
+		void createVolumePipeline();
 		void createCommandPool();
 		void createDepthResources();
 		void createShadowResources();
@@ -603,6 +742,12 @@ namespace lightGraphics
 
 		VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectMask);
 		void copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, uint32_t height);
+		void copyBufferToImage3D(
+			VkBuffer buffer,
+			VkImage image,
+			std::uint32_t width,
+			std::uint32_t height,
+			std::uint32_t depth);
 
 		// One‑shot command helpers
 		VkCommandBuffer beginSingleTimeCommands();
@@ -650,13 +795,35 @@ namespace lightGraphics
 		void destroyBuffer(VkDevice device, detail::Buffer& buf);
 		void createTextureDescriptorPool();
 		void destroyTextureResources();
-		std::shared_ptr<detail::Texture> createTextureFromPixels(const void* pixels, uint32_t width, uint32_t height);
+		std::shared_ptr<detail::Texture> createTextureFromPixels(
+			const void* pixels,
+			uint32_t width,
+			uint32_t height,
+			VkSamplerAddressMode addressMode = VK_SAMPLER_ADDRESS_MODE_REPEAT);
 		std::shared_ptr<detail::Texture> createSolidColorTexture(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
 		std::shared_ptr<detail::Texture> getOrCreateSolidColorTexture(const glm::vec4& color);
 		std::shared_ptr<detail::Texture> createTextureFromFile(const std::string& path);
 		std::shared_ptr<detail::Texture> createTextureFromEmbedded(const EmbeddedTextureData& source, const std::string& cacheKey);
 		std::shared_ptr<detail::Texture> getOrCreateTexture(const std::string& path);
 		void destroyTexture(detail::Texture& texture);
+		void destroyCustomResources();
+		void rebuildCustomPipelines();
+		VkPipeline createMaterialPipeline(
+			const MaterialDescription& description,
+			VkPipelineLayout layout);
+		void createVolumeDescriptor(VolumeResource& volume);
+		void rebuildOrderedDrawResources();
+		void drawOrderedCustomResources(
+			VkCommandBuffer commandBuffer,
+			std::uint32_t imageIndex);
+		void drawCustomMeshRequest(
+			VkCommandBuffer commandBuffer,
+			std::uint32_t imageIndex,
+			const MeshDrawRequest& request);
+		void drawVolumeResource(
+			VkCommandBuffer commandBuffer,
+			std::uint32_t imageIndex,
+			const VolumeResource& volume);
 
 
 		std::vector<detail::Buffer> uniformBuffers2_;          // using Buffer struct

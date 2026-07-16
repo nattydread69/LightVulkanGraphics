@@ -1,0 +1,6 @@
+entry,layer,sortKey,submissionIndex,expectedOrder,notes
+opaqueReference,opaque,8,9,1,layer has priority over key
+volumeNear,volume,-2,1,2,equal keys retain submission order
+volumeFar,volume,-2,2,3,second deterministic volume
+volumeLate,volume,10,3,4,higher key draws later
+transparentOverlay,transparent,2,4,5,transparent layer follows volume

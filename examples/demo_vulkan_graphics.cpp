@@ -26,8 +26,10 @@
 #include <glm/gtc/quaternion.hpp>
 #include <filesystem>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -105,6 +107,22 @@ public:
 	void cleanup() override
 	{
 		lightGraphics::consoleInfoStream() << "Cleaning up demo model..." << std::endl;
+		if (fogVolume_.isValid())
+		{
+			app_.hideVolume(fogVolume_);
+			app_.destroyVolume(fogVolume_);
+			fogVolume_ = {};
+		}
+		if (fogTransferFunction_.isValid())
+		{
+			app_.destroyTransferFunction(fogTransferFunction_);
+			fogTransferFunction_ = {};
+		}
+		if (fogTexture_.isValid())
+		{
+			app_.destroyTexture3D(fogTexture_);
+			fogTexture_ = {};
+		}
 	}
 
 private:
@@ -152,6 +170,7 @@ private:
 		              glm::quat(1.0f, 0.0f, 0.0f, 0.0f), "Worker Shadow Ground", 0.0f);
 
 		createRiggedWorker();
+		createVolumetricFog();
 		configureDemoShadows();
 
 		for (size_t i = 0; i < app_.getObjectCount(); ++i)
@@ -167,6 +186,90 @@ private:
 		lightGraphics::consoleInfoStream() << "  WASD/QE: Move camera" << std::endl;
 		lightGraphics::consoleInfoStream() << "  Mouse: Look around" << std::endl;
 		lightGraphics::consoleInfoStream() << "  ESC: Exit" << std::endl;
+	}
+
+	void createVolumetricFog()
+	{
+		constexpr std::uint32_t resolution = 48;
+		std::vector<float> field(
+			static_cast<std::size_t>(resolution) * resolution * resolution);
+		for (std::uint32_t z = 0; z < resolution; ++z)
+		{
+			for (std::uint32_t y = 0; y < resolution; ++y)
+			{
+				for (std::uint32_t x = 0; x < resolution; ++x)
+				{
+					const glm::vec3 position = glm::vec3(x, y, z) /
+						static_cast<float>(resolution - 1) * 2.0f - 1.0f;
+					const glm::vec3 stretched{
+						position.x * 0.85f,
+						position.y * 1.25f,
+						position.z};
+					const float cloudDistance = glm::length(stretched);
+					const float cloudT = std::clamp(
+						(0.48f - cloudDistance) / 0.32f,
+						0.0f,
+						1.0f);
+					const float cloudFade =
+						cloudT * cloudT * (3.0f - 2.0f * cloudT);
+					const float billow = 0.82f + 0.18f *
+						std::sin(position.x * 8.0f) *
+						std::sin(position.y * 7.0f) *
+						std::sin(position.z * 9.0f);
+					// Force the scalar field smoothly to zero before every proxy face.
+					// This prevents trilinear filtering and accumulated low opacity from
+					// revealing the otherwise axis-aligned volume boundary.
+					const float edgeDistance = std::min({
+						1.0f - std::abs(position.x),
+						1.0f - std::abs(position.y),
+						1.0f - std::abs(position.z)});
+					const float edgeT = std::clamp(edgeDistance / 0.42f, 0.0f, 1.0f);
+					const float edgeFade = edgeT * edgeT * (3.0f - 2.0f * edgeT);
+					const std::size_t index = x + resolution * (y + resolution * z);
+					field[index] = std::clamp(
+						cloudFade * cloudFade * billow *
+							edgeFade * edgeFade,
+						0.0f,
+						1.0f);
+				}
+			}
+		}
+
+		lightGraphics::Texture3DDescription textureDescription;
+		textureDescription.width = resolution;
+		textureDescription.height = resolution;
+		textureDescription.depth = resolution;
+		textureDescription.format = lightGraphics::TextureFormat::R32_SFLOAT;
+		fogTexture_ = app_.createTexture3D(
+			textureDescription,
+			field.data(),
+			field.size() * sizeof(float));
+
+		fogTransferFunction_ = app_.createTransferFunction({
+			{0.0f, glm::vec4(0.0f)},
+			{0.25f, glm::vec4(0.18f, 0.32f, 0.42f, 0.0f)},
+			{0.55f, glm::vec4(0.30f, 0.68f, 0.82f, 0.22f)},
+			{1.0f, glm::vec4(0.72f, 0.92f, 1.0f, 0.68f)}});
+
+		lightGraphics::VolumeRenderDescription volumeDescription;
+		volumeDescription.volumeTexture = fogTexture_;
+		volumeDescription.transferFunction = fogTransferFunction_;
+		volumeDescription.volumeMin = {-0.35f, 0.65f, -1.35f};
+		volumeDescription.volumeMax = {2.35f, 3.35f, 1.35f};
+		volumeDescription.opacityModel =
+			lightGraphics::VolumeOpacityModel::ExponentialExtinction;
+		volumeDescription.opacityScale = 1.4f;
+		volumeDescription.referenceStepLength = 1.0f;
+		volumeDescription.normalizeOpacityByStepLength = true;
+		volumeDescription.raymarchSteps = 160;
+		volumeDescription.enableJitter = true;
+		volumeDescription.enableEarlyTermination = true;
+		fogVolume_ = app_.createVolume(volumeDescription);
+		app_.drawVolume(fogVolume_,
+			{lightGraphics::RenderLayer::Volume, 0.0f});
+
+		lightGraphics::consoleInfoStream()
+			<< "Added volumetric fog to the upper-middle demo region" << std::endl;
 	}
 
 	void createRiggedWorker()
@@ -265,6 +368,9 @@ private:
 	}
 
 	std::shared_ptr<lightGraphics::RiggedObject> worker_;
+	lightGraphics::Texture3DHandle fogTexture_;
+	lightGraphics::TransferFunctionHandle fogTransferFunction_;
+	lightGraphics::VolumeHandle fogVolume_;
 };
 
 class DemoApp

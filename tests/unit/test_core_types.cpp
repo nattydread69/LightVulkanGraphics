@@ -1,4 +1,5 @@
 #include "SceneGraph.h"
+#include "VolumeRendering.h"
 #include "VkApp.h"
 #include "pObject.h"
 
@@ -6,7 +7,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
+#include <filesystem>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -75,6 +78,24 @@ namespace
 		}
 
 		throw std::runtime_error(message + ": expected std::out_of_range");
+	}
+
+	template <typename Exception, typename Function>
+	void requireThrows(Function&& function, const std::string& message)
+	{
+		try
+		{
+			function();
+		}
+		catch (const Exception&)
+		{
+			return;
+		}
+		catch (const std::exception& error)
+		{
+			throw std::runtime_error(message + ": unexpected exception: " + error.what());
+		}
+		throw std::runtime_error(message + ": expected exception was not thrown");
 	}
 
 	void testTransformIdentity()
@@ -220,6 +241,165 @@ namespace
 		require(nearlyEqual(app.getObject(0).getSize(), glm::vec3(1.0f)),
 		        "VkApp updateObjectProperties should leave size untouched for invalid batches");
 	}
+
+	lightGraphics::MeshData makeTriangle()
+	{
+		lightGraphics::MeshData mesh;
+		mesh.vertices.resize(3);
+		mesh.vertices[0].position = {0.0f, 0.0f, 0.0f};
+		mesh.vertices[1].position = {1.0f, 0.0f, 0.0f};
+		mesh.vertices[2].position = {0.0f, 1.0f, 0.0f};
+		mesh.indices = {0, 1, 2};
+		return mesh;
+	}
+
+	void testMeshValidation()
+	{
+		const lightGraphics::MeshData triangle = makeTriangle();
+		lightGraphics::validateMeshData(triangle);
+		lightGraphics::validateDynamicMeshCapacity(32, 96);
+		lightGraphics::validateDynamicMeshUpdate(3, 3, triangle);
+		auto invalidIndex = triangle;
+		invalidIndex.indices[2] = 3;
+		requireThrows<std::out_of_range>(
+			[&invalidIndex]() { lightGraphics::validateMeshData(invalidIndex); },
+			"mesh validation should reject out-of-range indices");
+		requireThrows<std::length_error>(
+			[&triangle]() { lightGraphics::validateDynamicMeshUpdate(2, 3, triangle); },
+			"dynamic mesh validation should enforce vertex capacity");
+	}
+
+	void testTexture3DValidation()
+	{
+		lightGraphics::Texture3DDescription description;
+		description.width = 4;
+		description.height = 8;
+		description.depth = 16;
+		description.format = lightGraphics::TextureFormat::R32_SFLOAT;
+		require(lightGraphics::texture3DByteSize(description) == 4u * 8u * 16u * 4u,
+			"R32 Texture3D byte size should include all voxels");
+		description.format = lightGraphics::TextureFormat::R8_UNORM;
+		require(lightGraphics::texture3DByteSize(description) == 4u * 8u * 16u,
+			"R8 Texture3D byte size should use one byte per voxel");
+		description.width = 0;
+		requireThrows<std::invalid_argument>(
+			[&description]() { lightGraphics::validateTexture3DDescription(description); },
+			"Texture3D validation should reject zero dimensions");
+	}
+
+	void testTransferFunctionSampling()
+	{
+		const std::vector<lightGraphics::TransferFunctionPoint> points{
+			{1.0f, {1.0f, 0.0f, 0.0f, 1.0f}},
+			{0.0f, {0.0f, 0.0f, 0.0f, 0.0f}}};
+		const auto sorted = lightGraphics::normalizeTransferFunctionPoints(points);
+		require(sorted.front().scalar == 0.0f && sorted.back().scalar == 1.0f,
+			"transfer points should be sorted by scalar");
+		const auto pixels = lightGraphics::sampleTransferFunctionRgba8(points, 3);
+		require(pixels.size() == 12 && pixels[4] == 128 && pixels[7] == 128,
+			"transfer sampling should linearly interpolate color and opacity");
+		for (int preset = 0; preset < 4; ++preset)
+		{
+			require(lightGraphics::transferFunctionPreset(
+				static_cast<lightGraphics::TransferFunctionPreset>(preset)).size() >= 2,
+				"every transfer-function preset should contain a usable ramp");
+		}
+	}
+
+	void testMaterialClippingAndVolumeValidation()
+	{
+		lightGraphics::MaterialDescription material;
+		material.alphaBlendingEnabled = true;
+		material.depthTestEnabled = true;
+		material.depthWriteEnabled = false;
+		material.cullMode = lightGraphics::CullMode::Back;
+		lightGraphics::validateMaterialDescription(material);
+		require(material.alphaBlendingEnabled && !material.depthWriteEnabled,
+			"transparent material state should preserve independent depth-write control");
+
+		lightGraphics::ClippingDescription clipping;
+		clipping.clipPlaneEnabled = true;
+		clipping.clipPlaneNormal = {0.0f, 1.0f, 0.0f};
+		clipping.clipBoxEnabled = true;
+		clipping.clipBoxMinimum = {0.1f, 0.2f, 0.3f};
+		clipping.clipBoxMaximum = {0.9f, 0.8f, 0.7f};
+		lightGraphics::validateClippingDescription(clipping);
+
+		lightGraphics::VolumeRenderDescription volume;
+		volume.volumeTexture = {0, 1};
+		volume.transferFunction = {0, 1};
+		volume.clipping = clipping;
+		lightGraphics::validateVolumeRenderDescription(volume);
+		require(volume.opacityModel ==
+			lightGraphics::VolumeOpacityModel::ExponentialExtinction,
+			"new volumes should default to exponential extinction");
+		require(volume.normalizeOpacityByStepLength,
+			"new volumes should normalize opacity by physical step length");
+		volume.referenceStepLength = 0.0f;
+		requireThrows<std::invalid_argument>(
+			[&volume]() { lightGraphics::validateVolumeRenderDescription(volume); },
+			"volume validation should reject a zero reference step length");
+		volume.referenceStepLength = 1.0f;
+		volume.raymarchSteps = 1;
+		requireThrows<std::invalid_argument>(
+			[&volume]() { lightGraphics::validateVolumeRenderDescription(volume); },
+			"volume validation should reject unusable raymarch step counts");
+	}
+
+	void testVolumeOpacityAndRenderOrdering()
+	{
+		require(std::string(lightGraphics::volumeOpacityModelName(
+			lightGraphics::VolumeOpacityModel::LinearAlpha)) == "linearAlpha",
+			"linear opacity model should have a stable public name");
+		require(lightGraphics::parseVolumeOpacityModel("Exponential Extinction") ==
+			lightGraphics::VolumeOpacityModel::ExponentialExtinction,
+			"opacity model parser should ignore case and separators");
+		require(lightGraphics::parseRenderLayer("transparent") ==
+			lightGraphics::RenderLayer::Transparent,
+			"render layer parser should map public names");
+
+		std::vector<lightGraphics::DrawOrderEntry> entries{
+			{lightGraphics::RenderLayer::Transparent, 2.0f, 4},
+			{lightGraphics::RenderLayer::Volume, 10.0f, 3},
+			{lightGraphics::RenderLayer::Volume, -2.0f, 2},
+			{lightGraphics::RenderLayer::Volume, -2.0f, 1},
+			{lightGraphics::RenderLayer::Opaque, 8.0f, 9}};
+		entries = lightGraphics::sortDrawOrder(std::move(entries));
+		require(entries[0].layer == lightGraphics::RenderLayer::Opaque,
+			"render layers should sort before their sort keys");
+		require(entries[1].sortKey == -2.0f && entries[1].submissionIndex == 1 &&
+			entries[2].sortKey == -2.0f && entries[2].submissionIndex == 2 &&
+			entries[3].sortKey == 10.0f,
+			"multiple volumes should sort by key then submission index");
+		require(entries.back().layer == lightGraphics::RenderLayer::Transparent,
+			"transparent layer should follow the volume layer");
+		requireThrows<std::invalid_argument>(
+			[]()
+			{
+				lightGraphics::validateDrawOptions(
+					{lightGraphics::RenderLayer::Volume,
+						std::numeric_limits<float>::infinity()});
+			},
+			"draw options should reject non-finite sort keys");
+	}
+
+	void testVolumeTwoReportsAndDocumentation()
+	{
+		const std::filesystem::path sourceDirectory = LVG_SOURCE_DIR;
+		for (const std::filesystem::path& relativePath : {
+			std::filesystem::path("docs/frame_capture.md"),
+			std::filesystem::path("docs/volume_rendering.md"),
+			std::filesystem::path("runs/lvg_vol_2_feature_status.csv"),
+			std::filesystem::path("runs/lvg_vol_2_opacity_model_audit.csv"),
+			std::filesystem::path("runs/lvg_vol_2_render_order_audit.csv"),
+			std::filesystem::path("runs/lvg_vol_2_frame_capture_status.csv"),
+			std::filesystem::path("runs/lvg_vol_2_known_limitations.csv")})
+		{
+			require(std::filesystem::is_regular_file(sourceDirectory / relativePath),
+				"LVG-VOL-2 documentation/report is missing: " +
+				relativePath.string());
+		}
+	}
 }
 
 int main()
@@ -231,6 +411,12 @@ int main()
 		testSceneNodeHandleBasics();
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();
+		testMeshValidation();
+		testTexture3DValidation();
+		testTransferFunctionSampling();
+		testMaterialClippingAndVolumeValidation();
+		testVolumeOpacityAndRenderOrdering();
+		testVolumeTwoReportsAndDocumentation();
 	}
 	catch (const std::exception& error)
 	{

@@ -1139,6 +1139,7 @@ namespace lightGraphics
 		cleanupSwapChain();
 
 			// Scene resources teardown here
+			destroyCustomResources();
 			destroyRiggedInstances();
 			destroyTextureResources();
 			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
@@ -1223,6 +1224,24 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, linePipeline_, nullptr);
 			linePipeline_ = VK_NULL_HANDLE;
 		}
+		if (volumePipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, volumePipeline_, nullptr);
+			volumePipeline_ = VK_NULL_HANDLE;
+		}
+		if (volumePipelineLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipelineLayout(device_, volumePipelineLayout_, nullptr);
+			volumePipelineLayout_ = VK_NULL_HANDLE;
+		}
+		for (MaterialResource& material : materials_)
+		{
+			if (material.pipeline != VK_NULL_HANDLE)
+			{
+				vkDestroyPipeline(device_, material.pipeline, nullptr);
+				material.pipeline = VK_NULL_HANDLE;
+			}
+		}
 		if (riggedPipeline_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipeline(device_, riggedPipeline_, nullptr);
@@ -1299,6 +1318,11 @@ namespace lightGraphics
 		{
 			vkDestroyDescriptorSetLayout(device_, textureSetLayout_, nullptr);
 			textureSetLayout_ = VK_NULL_HANDLE;
+		}
+		if (volumeSetLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyDescriptorSetLayout(device_, volumeSetLayout_, nullptr);
+			volumeSetLayout_ = VK_NULL_HANDLE;
 		}
 		if (descriptorSetLayout_ != VK_NULL_HANDLE)
 		{
@@ -2618,6 +2642,19 @@ namespace lightGraphics
 		samplerLayoutInfo.bindingCount = 1;
 		samplerLayoutInfo.pBindings = &samplerBinding;
 		VK_CHECK(vkCreateDescriptorSetLayout(device_, &samplerLayoutInfo, nullptr, &textureSetLayout_));
+
+		std::array<VkDescriptorSetLayoutBinding, 2> volumeBindings{};
+		for (std::uint32_t index = 0; index < volumeBindings.size(); ++index)
+		{
+			volumeBindings[index].binding = index;
+			volumeBindings[index].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+			volumeBindings[index].descriptorCount = 1;
+			volumeBindings[index].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		}
+		VkDescriptorSetLayoutCreateInfo volumeLayoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+		volumeLayoutInfo.bindingCount = static_cast<std::uint32_t>(volumeBindings.size());
+		volumeLayoutInfo.pBindings = volumeBindings.data();
+		VK_CHECK(vkCreateDescriptorSetLayout(device_, &volumeLayoutInfo, nullptr, &volumeSetLayout_));
 	}
 
 	void VkApp::createGraphicsPipeline()
@@ -2642,6 +2679,9 @@ namespace lightGraphics
 
 		// Create rigged rendering pipeline (needs sampler descriptor set)
 		createRiggedPipeline();
+
+		createVolumePipeline();
+		rebuildCustomPipelines();
 	}
 
 	void VkApp::createShadowPipeline()
@@ -3594,6 +3634,14 @@ namespace lightGraphics
 			srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
 			dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
 		}
+		else if (oldLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+		{
+			barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+			barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+			srcStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+			dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		}
 		else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
 		{
 			barrier.srcAccessMask = 0;
@@ -4081,7 +4129,11 @@ void VkApp::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
 		}
 	}
 
-	std::shared_ptr<Texture> VkApp::createTextureFromPixels(const void* pixels, uint32_t width, uint32_t height)
+	std::shared_ptr<Texture> VkApp::createTextureFromPixels(
+		const void* pixels,
+		uint32_t width,
+		uint32_t height,
+		VkSamplerAddressMode addressMode)
 	{
 		if (!pixels || width == 0 || height == 0)
 		{
@@ -4135,9 +4187,9 @@ void VkApp::copyBufferToImage(VkBuffer buffer, VkImage image, uint32_t width, ui
 		VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 		samplerInfo.magFilter = VK_FILTER_LINEAR;
 		samplerInfo.minFilter = VK_FILTER_LINEAR;
-		samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-		samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-		samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+		samplerInfo.addressModeU = addressMode;
+		samplerInfo.addressModeV = addressMode;
+		samplerInfo.addressModeW = addressMode;
 		samplerInfo.anisotropyEnable = VK_FALSE;
 		samplerInfo.maxAnisotropy = 1.0f;
 		samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
@@ -6930,7 +6982,13 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 			vbCount++;
 		}
 
-		if (!hasRegularObjects && riggedInstances_.empty())
+		bool hasVisibleVolume = false;
+		for (const VolumeResource& volume : volumes_)
+		{
+			hasVisibleVolume = hasVisibleVolume || (volume.alive && volume.visible);
+		}
+		if (!hasRegularObjects && riggedInstances_.empty() &&
+			meshDrawRequests_.empty() && !hasVisibleVolume)
 		{
 			// Nothing to draw
 			vkCmdEndRenderPass(cmd);
@@ -7217,6 +7275,9 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 				runningFirst += countForShape;
 			}
 		}
+
+		// Custom meshes and volumes share a stable application-controlled order.
+		drawOrderedCustomResources(cmd, imageIndex);
 
 		vkCmdEndRenderPass(cmd);
 

@@ -1,0 +1,3 @@
+model,default,stepLengthUsed,normalization,formula,stepCountStability,notes
+linearAlpha,0,0,none,transferAlpha*opacityScale,poor,VOL-1 compatibility mode
+exponentialExtinction,1,1,worldSpace/referenceStepLength,1-exp(-densityScale*transferAlpha*opacityScale*normalizedStepLength),substantially improved,referenceStepLength must be finite and positive

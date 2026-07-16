@@ -1,0 +1,4 @@
+feature,status,publicApi,reason,nextStep
+framebufferCapture,blocked,0,swapchain transfer-source usage and reusable synchronized readback are not implemented,LVG-VOL-3 asynchronous capture queue
+pngEncoding,blocked,0,no writer dependency is currently shipped,add encoder after format conversion
+rawReadback,blocked,0,no general readback buffer lifecycle exists,add per-frame buffers recreated with swapchain
