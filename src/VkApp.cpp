@@ -1617,6 +1617,7 @@ namespace lightGraphics
 		createDescriptorPool();
 		createDescriptorSets();
 		createCommandBuffers();
+		rebuildScreenTextMeshes();
 	}
 
 	void VkApp::cleanupSwapChain()

@@ -269,6 +269,58 @@ namespace
 			"dynamic mesh validation should enforce vertex capacity");
 	}
 
+	void testScreenTextMesh()
+	{
+		lightGraphics::ScreenTextDescription description;
+		description.text = "Kamae\nready";
+		description.positionPixels = {20.0f, 30.0f};
+		description.scale = 2.0f;
+		description.color = {1.0f, 0.8f, 0.2f, 0.75f};
+		description.maximumCharacters = 32;
+		lightGraphics::validateScreenTextDescription(description);
+
+		const lightGraphics::MeshData mesh =
+			lightGraphics::buildScreenTextMesh(description, 800, 600);
+		lightGraphics::validateMeshData(mesh);
+		require(mesh.vertices.size() % 4 == 0 &&
+			mesh.indices.size() % 6 == 0,
+			"screen text should contain indexed quads");
+		require(nearlyEqual(mesh.vertices.front().color, description.color),
+			"screen text should preserve its requested color");
+		for (const lightGraphics::MeshVertex& vertex : mesh.vertices)
+		{
+			require(vertex.position.x >= -1.0f &&
+				vertex.position.x <= 1.0f &&
+				vertex.position.y >= -1.0f &&
+				vertex.position.y <= 1.0f,
+				"on-screen text vertices should use normalized device coordinates");
+		}
+
+		description.visible = false;
+		const lightGraphics::MeshData hidden =
+			lightGraphics::buildScreenTextMesh(description, 800, 600);
+		require(hidden.indices.size() == 3 &&
+			hidden.vertices.front().color.a == 0.0f,
+			"hidden screen text should produce an invisible placeholder");
+
+		description.visible = true;
+		description.maximumCharacters = 2;
+		requireThrows<std::length_error>(
+			[&description]()
+			{
+				lightGraphics::validateScreenTextDescription(description);
+			},
+			"screen text should enforce its declared character capacity");
+		requireThrows<std::invalid_argument>(
+			[]()
+			{
+				lightGraphics::ScreenTextDescription invalid;
+				invalid.text = "text";
+				(void)lightGraphics::buildScreenTextMesh(invalid, 0, 600);
+			},
+			"screen text should reject zero framebuffer dimensions");
+	}
+
 	void testTexture3DValidation()
 	{
 		lightGraphics::Texture3DDescription description;
@@ -412,6 +464,7 @@ int main()
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();
 		testMeshValidation();
+		testScreenTextMesh();
 		testTexture3DValidation();
 		testTransferFunctionSampling();
 		testMaterialClippingAndVolumeValidation();

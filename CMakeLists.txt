@@ -376,6 +376,8 @@ set(SHADOW_VS_SPV ${SPV_DIR}/shadow_depth.vert.spv)
 set(CUSTOM_MESH_VS_SPV ${SPV_DIR}/custom_mesh.vert.spv)
 set(CUSTOM_MESH_FS_SPV ${SPV_DIR}/custom_mesh.frag.spv)
 set(CUSTOM_MESH_UNLIT_FS_SPV ${SPV_DIR}/custom_mesh_unlit.frag.spv)
+set(SCREEN_TEXT_VS_SPV ${SPV_DIR}/screen_text.vert.spv)
+set(SCREEN_TEXT_FS_SPV ${SPV_DIR}/screen_text.frag.spv)
 set(VOLUME_VS_SPV ${SPV_DIR}/volume_raymarch.vert.spv)
 set(VOLUME_FS_SPV ${SPV_DIR}/volume_raymarch.frag.spv)
 
@@ -476,6 +478,18 @@ add_custom_command(
 	COMMENT "Compiling unlit custom mesh fragment shader"
 )
 add_custom_command(
+	OUTPUT ${SCREEN_TEXT_VS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=vert -o ${SCREEN_TEXT_VS_SPV} ${SHADER_DIR}/screen_text.vert
+	DEPENDS ${SHADER_DIR}/screen_text.vert
+	COMMENT "Compiling screen text vertex shader"
+)
+add_custom_command(
+	OUTPUT ${SCREEN_TEXT_FS_SPV}
+	COMMAND ${GLSLC} -fshader-stage=frag -o ${SCREEN_TEXT_FS_SPV} ${SHADER_DIR}/screen_text.frag
+	DEPENDS ${SHADER_DIR}/screen_text.frag
+	COMMENT "Compiling screen text fragment shader"
+)
+add_custom_command(
 	OUTPUT ${VOLUME_VS_SPV}
 	COMMAND ${GLSLC} -fshader-stage=vert -o ${VOLUME_VS_SPV} ${SHADER_DIR}/volume_raymarch.vert
 	DEPENDS ${SHADER_DIR}/volume_raymarch.vert
@@ -497,6 +511,7 @@ add_custom_target(Shaders ALL DEPENDS
 	${UNLIT_VS_SPV} ${UNLIT_FS_SPV}
 	${SHADOW_VS_SPV}
 	${CUSTOM_MESH_VS_SPV} ${CUSTOM_MESH_FS_SPV} ${CUSTOM_MESH_UNLIT_FS_SPV}
+	${SCREEN_TEXT_VS_SPV} ${SCREEN_TEXT_FS_SPV}
 	${VOLUME_VS_SPV} ${VOLUME_FS_SPV}
 )
 

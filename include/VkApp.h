@@ -316,6 +316,17 @@ namespace lightGraphics
 		MaterialHandle createMaterial(const MaterialDescription& description);
 		void destroyMaterial(MaterialHandle handle);
 
+		ScreenTextHandle createScreenText(
+			const ScreenTextDescription& description);
+		void updateScreenText(
+			ScreenTextHandle handle,
+			const ScreenTextDescription& description);
+		void updateScreenText(
+			ScreenTextHandle handle,
+			const std::string& text);
+		void setScreenTextVisible(ScreenTextHandle handle, bool visible);
+		void destroyScreenText(ScreenTextHandle handle);
+
 		Texture3DHandle createTexture3D(
 			const Texture3DDescription& description,
 			const void* data,
@@ -552,6 +563,14 @@ namespace lightGraphics
 			VkPipelineLayout layout = VK_NULL_HANDLE;
 		};
 
+		struct ScreenTextResource
+		{
+			std::uint32_t generation = 1;
+			bool alive = false;
+			ScreenTextDescription description;
+			MeshHandle mesh;
+		};
+
 		struct Texture3DResource
 		{
 			std::uint32_t generation = 1;
@@ -608,6 +627,9 @@ namespace lightGraphics
 		std::vector<std::uint32_t> freeCustomMeshes_;
 		std::vector<MaterialResource> materials_;
 		std::vector<std::uint32_t> freeMaterials_;
+		std::vector<ScreenTextResource> screenTexts_;
+		std::vector<std::uint32_t> freeScreenTexts_;
+		MaterialHandle screenTextMaterial_;
 		std::vector<Texture3DResource> textures3D_;
 		std::vector<std::uint32_t> freeTextures3D_;
 		std::vector<TransferFunctionResource> transferFunctions_;
@@ -806,6 +828,9 @@ namespace lightGraphics
 		std::shared_ptr<detail::Texture> createTextureFromEmbedded(const EmbeddedTextureData& source, const std::string& cacheKey);
 		std::shared_ptr<detail::Texture> getOrCreateTexture(const std::string& path);
 		void destroyTexture(detail::Texture& texture);
+		MaterialHandle getOrCreateScreenTextMaterial();
+		void updateScreenTextMesh(ScreenTextResource& resource);
+		void rebuildScreenTextMeshes();
 		void destroyCustomResources();
 		void rebuildCustomPipelines();
 		VkPipeline createMaterialPipeline(

@@ -398,6 +398,13 @@ public:
 
 		app_.setCameraLookAt(kDemoCameraPosition, kDemoCameraTarget,
 		                     glm::vec3(0.0f, 1.0f, 0.0f));
+		lightGraphics::ScreenTextDescription welcomeText;
+		welcomeText.text = "Welcome to the lightVulkanGraphics engine!";
+		welcomeText.positionPixels = {24.0f, 24.0f};
+		welcomeText.scale = 2.0f;
+		welcomeText.color = {1.0f, 0.95f, 0.65f, 1.0f};
+		welcomeText.maximumCharacters = 64;
+		welcomeText_ = app_.createScreenText(welcomeText);
 		app_.finalizeScene();
 
 		window_ = app_.getWindowPointer();
@@ -427,6 +434,11 @@ public:
 		if (currentPhysicsModel_)
 		{
 			currentPhysicsModel_->cleanup();
+		}
+		if (welcomeText_.isValid())
+		{
+			app_.destroyScreenText(welcomeText_);
+			welcomeText_ = {};
 		}
 	}
 
@@ -543,6 +555,7 @@ private:
 
 	static constexpr int kInstancePrimingFrames = 2;
 	lightGraphics::lightVulkanGraphics app_;
+	lightGraphics::ScreenTextHandle welcomeText_;
 	GLFWwindow* window_ = nullptr;
 	std::unique_ptr<PhysicsModel> currentPhysicsModel_;
 	ModelType currentModel_ = ModelType::Demo;

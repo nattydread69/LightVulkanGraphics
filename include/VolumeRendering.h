@@ -29,12 +29,14 @@ struct ResourceHandle
 
 struct MeshTag;
 struct MaterialTag;
+struct ScreenTextTag;
 struct Texture3DTag;
 struct TransferFunctionTag;
 struct VolumeTag;
 
 using MeshHandle = ResourceHandle<MeshTag>;
 using MaterialHandle = ResourceHandle<MaterialTag>;
+using ScreenTextHandle = ResourceHandle<ScreenTextTag>;
 using Texture3DHandle = ResourceHandle<Texture3DTag>;
 using TransferFunctionHandle = ResourceHandle<TransferFunctionTag>;
 using VolumeHandle = ResourceHandle<VolumeTag>;
@@ -51,6 +53,17 @@ struct MeshData
 {
 	std::vector<MeshVertex> vertices;
 	std::vector<std::uint32_t> indices;
+};
+
+struct ScreenTextDescription
+{
+	std::string text;
+	glm::vec2 positionPixels{16.0f, 16.0f};
+	float scale = 1.0f;
+	glm::vec4 color{1.0f};
+	std::size_t maximumCharacters = 256;
+	bool visible = true;
+	float sortKey = 1000.0f;
 };
 
 enum class CullMode
@@ -199,6 +212,12 @@ struct GraphicsCapabilityRecord
 };
 
 void validateMeshData(const MeshData& meshData);
+void validateScreenTextDescription(
+	const ScreenTextDescription& description);
+[[nodiscard]] MeshData buildScreenTextMesh(
+	const ScreenTextDescription& description,
+	std::uint32_t framebufferWidth,
+	std::uint32_t framebufferHeight);
 void validateDynamicMeshCapacity(
 	std::size_t maximumVertexCount,
 	std::size_t maximumIndexCount);

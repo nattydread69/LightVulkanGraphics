@@ -1072,6 +1072,9 @@ void VkApp::drawOrderedCustomResources(
 
 void VkApp::destroyCustomResources()
 {
+	screenTexts_.clear();
+	freeScreenTexts_.clear();
+	screenTextMaterial_ = {};
 	for (VolumeResource& volume : volumes_)
 	{
 		if (volume.descriptor != VK_NULL_HANDLE && textureDescriptorPool_ != VK_NULL_HANDLE)
