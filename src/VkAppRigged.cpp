@@ -766,6 +766,10 @@ namespace lightGraphics
 
 		riggedInstances_.push_back(std::move(instanceData));
 
+		const std::uint32_t newIndex = static_cast<std::uint32_t>(riggedInstances_.size() - 1);
+		const std::uint32_t slot = allocateHandleSlot(riggedObjectSlots_, freeRiggedObjectSlots_, newIndex);
+		riggedObjectSlotForIndex_.push_back(slot);
+
 		// Populate buffers with the current pose
 		updateRiggedInstances();
 
@@ -775,6 +779,13 @@ namespace lightGraphics
 		}
 
 		return riggedInstances_.size() - 1;
+	}
+
+	RiggedObjectHandle VkApp::addRiggedObjectHandle(const std::shared_ptr<RiggedObject>& riggedObject)
+	{
+		const size_t index = addRiggedObject(riggedObject);
+		const std::uint32_t slot = riggedObjectSlotForIndex_[index];
+		return RiggedObjectHandle{slot, riggedObjectSlots_[slot].generation};
 	}
 
 	void VkApp::removeRiggedObject(size_t index)
@@ -789,9 +800,38 @@ namespace lightGraphics
 			VK_CHECK(vkDeviceWaitIdle(device_));
 		}
 
+		releaseHandleSlot(riggedObjectSlots_, freeRiggedObjectSlots_, riggedObjectSlotForIndex_[index]);
+		riggedObjectSlotForIndex_.erase(riggedObjectSlotForIndex_.begin() + static_cast<std::ptrdiff_t>(index));
+		reindexHandleSlotsFrom(riggedObjectSlots_, riggedObjectSlotForIndex_, index);
+
 		destroyRiggedInstance(riggedInstances_[index]);
 		riggedInstances_.erase(riggedInstances_.begin() + static_cast<std::ptrdiff_t>(index));
 		sceneGraph_->onRiggedObjectRemoved(index);
+	}
+
+	void VkApp::removeRiggedObject(RiggedObjectHandle handle)
+	{
+		removeRiggedObject(resolveRiggedObjectHandle(handle));
+	}
+
+	bool VkApp::isRiggedObjectHandleValid(RiggedObjectHandle handle) const noexcept
+	{
+		return isHandleSlotValid(riggedObjectSlots_, handle.index, handle.generation);
+	}
+
+	size_t VkApp::resolveRiggedObjectHandle(RiggedObjectHandle handle) const
+	{
+		return resolveHandleSlot(riggedObjectSlots_, handle.index, handle.generation, "Rigged object");
+	}
+
+	RiggedObjectHandle VkApp::riggedObjectHandleAt(size_t index) const
+	{
+		if (index >= riggedObjectSlotForIndex_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("riggedObjectHandleAt", index, riggedObjectSlotForIndex_.size()));
+		}
+		const std::uint32_t slot = riggedObjectSlotForIndex_[index];
+		return RiggedObjectHandle{slot, riggedObjectSlots_[slot].generation};
 	}
 
 	void VkApp::setRiggedObjectTransformMatrixOverride(size_t index, const glm::mat4& transform)
@@ -1093,5 +1133,10 @@ namespace lightGraphics
 			destroyRiggedInstance(instance);
 		}
 		riggedInstances_.clear();
+		for (std::uint32_t slot : riggedObjectSlotForIndex_)
+		{
+			releaseHandleSlot(riggedObjectSlots_, freeRiggedObjectSlots_, slot);
+		}
+		riggedObjectSlotForIndex_.clear();
 	}
 }

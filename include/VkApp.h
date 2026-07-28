@@ -115,6 +115,18 @@ namespace lightGraphics::detail
 		uint32_t height = 0;
 		std::string path;
 	};
+
+	// Maps a generation-checked handle to the current position of its object in a
+	// dense, compacting vector (e.g. _objects_, lights_, riggedInstances_). The
+	// vector itself keeps shifting elements down on removal exactly as before;
+	// only currentIndex is kept in sync, so a handle stays valid for its object's
+	// whole lifetime even when unrelated earlier entries are removed.
+	struct HandleSlot
+	{
+		std::uint32_t generation = 1;
+		bool alive = false;
+		std::uint32_t currentIndex = 0;
+	};
 }
 
 namespace lightGraphics
@@ -123,6 +135,13 @@ namespace lightGraphics
 	class SceneGraph;
 	struct EmbeddedTextureData;
 	struct RiggedMesh;
+
+	struct ObjectTag;
+	struct LightTag;
+	struct RiggedObjectTag;
+	using ObjectHandle = ResourceHandle<ObjectTag>;
+	using LightHandle = ResourceHandle<LightTag>;
+	using RiggedObjectHandle = ResourceHandle<RiggedObjectTag>;
 
 	class VkApp
 	{
@@ -151,26 +170,36 @@ namespace lightGraphics
 
 		// Object management
 		// The raw pointer overload copies the object; the caller keeps ownership.
-		void addObject(lightGraphics::pObject *newObject);
-		void addObject(const lightGraphics::pObject& obj);
-		void addObject(lightGraphics::ShapeType type, const glm::vec3& position,
+		ObjectHandle addObject(lightGraphics::pObject *newObject);
+		ObjectHandle addObject(const lightGraphics::pObject& obj);
+		ObjectHandle addObject(lightGraphics::ShapeType type, const glm::vec3& position,
 		               const glm::vec3& size, const glm::vec4& color,
 		               const glm::quat& rotation = glm::quat(1,0,0,0),
 		               const std::string& name = "", float mass = 1.0f);
-		void addHexahedral(const glm::vec3& position, const glm::vec3& size,
+		ObjectHandle addHexahedral(const glm::vec3& position, const glm::vec3& size,
 		                   const glm::vec4& color,
 		                   const glm::quat& rotation = glm::quat(1,0,0,0),
 		                   const std::string& name = "Hexahedral",
 		                   float mass = 1.0f);
 		void removeObject(size_t index);
+		void removeObject(ObjectHandle handle);
 		void clearObjects();
 		void updateObject(size_t index, const lightGraphics::pObject& obj);
 		size_t getObjectCount() const { return _objects_.size(); }
 		const lightGraphics::pObject& getObject(size_t index) const { return _objects_[index]; }
+		bool isObjectHandleValid(ObjectHandle handle) const noexcept;
+		size_t resolveObjectHandle(ObjectHandle handle) const;
+		ObjectHandle objectHandleAt(size_t index) const;
 		size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject);
+		RiggedObjectHandle addRiggedObjectHandle(const std::shared_ptr<RiggedObject>& riggedObject);
 		void removeRiggedObject(size_t index);
+		void removeRiggedObject(RiggedObjectHandle handle);
 		size_t getRiggedObjectCount() const { return riggedInstances_.size(); }
+		bool isRiggedObjectHandleValid(RiggedObjectHandle handle) const noexcept;
+		size_t resolveRiggedObjectHandle(RiggedObjectHandle handle) const;
+		RiggedObjectHandle riggedObjectHandleAt(size_t index) const;
 		size_t addLight(const lightGraphics::LightSource& light);
+		LightHandle addLightHandle(const lightGraphics::LightSource& light);
 		size_t addDirectionalLight(const glm::vec3& direction,
 		                           const glm::vec3& color = glm::vec3(1.0f),
 		                           float intensity = 1.0f,
@@ -189,10 +218,14 @@ namespace lightGraphics
 		                    float outerConeAngleRadians = glm::radians(30.0f),
 		                    const std::string& name = "");
 		void removeLight(size_t index);
+		void removeLight(LightHandle handle);
 		void clearLights();
 		void updateLight(size_t index, const lightGraphics::LightSource& light);
 		size_t getLightCount() const { return lights_.size(); }
 		const lightGraphics::LightSource& getLight(size_t index) const { return lights_[index]; }
+		bool isLightHandleValid(LightHandle handle) const noexcept;
+		size_t resolveLightHandle(LightHandle handle) const;
+		LightHandle lightHandleAt(size_t index) const;
 		void setLightPosition(size_t index, const glm::vec3& position);
 		void setLightDirection(size_t index, const glm::vec3& direction);
 		void setLightColor(size_t index, const glm::vec3& color);
@@ -514,6 +547,9 @@ namespace lightGraphics
 		std::vector<std::optional<glm::mat4>> objectModelMatrixOverrides_;
 		std::vector<lightGraphics::LightSource> lights_;
 		std::vector<std::optional<glm::mat4>> lightTransformMatrixOverrides_;
+		std::vector<detail::HandleSlot> lightSlots_;
+		std::vector<std::uint32_t> freeLightSlots_;
+		std::vector<std::uint32_t> lightSlotForIndex_;
 		glm::vec3 ambientLight_{0.1f, 0.1f, 0.15f};
 		bool lightingDataDirty_ = true;
 		// Double-buffered (per-frame) instance buffers to avoid stalls
@@ -546,6 +582,9 @@ namespace lightGraphics
 			std::vector<RiggedMeshRenderData> meshes;
 		};
 		std::vector<RiggedInstanceRenderData> riggedInstances_;
+		std::vector<detail::HandleSlot> riggedObjectSlots_;
+		std::vector<std::uint32_t> freeRiggedObjectSlots_;
+		std::vector<std::uint32_t> riggedObjectSlotForIndex_;
 		std::unordered_map<std::string, std::shared_ptr<detail::Texture>> textureCache_;
 		std::shared_ptr<detail::Texture> defaultTexture_;
 
@@ -687,6 +726,26 @@ namespace lightGraphics
 		void ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize);
 		detail::Instance makeInstanceForObject(size_t index) const;
 		void clearObjectModelMatrixOverrideInternal(size_t index);
+
+		// Shared bookkeeping for the generation-checked handle indirection tables
+		// (objectSlots_/lightSlots_/riggedObjectSlots_). Each table maps a handle
+		// to the current position of its entry within a dense, compacting vector.
+		static std::uint32_t allocateHandleSlot(std::vector<detail::HandleSlot>& slots,
+		                                        std::vector<std::uint32_t>& freeSlots,
+		                                        std::uint32_t currentIndex);
+		static void releaseHandleSlot(std::vector<detail::HandleSlot>& slots,
+		                              std::vector<std::uint32_t>& freeSlots,
+		                              std::uint32_t slot);
+		static void reindexHandleSlotsFrom(std::vector<detail::HandleSlot>& slots,
+		                                   const std::vector<std::uint32_t>& slotForIndex,
+		                                   std::size_t startIndex);
+		static bool isHandleSlotValid(const std::vector<detail::HandleSlot>& slots,
+		                              std::uint32_t index,
+		                              std::uint32_t generation) noexcept;
+		static std::size_t resolveHandleSlot(const std::vector<detail::HandleSlot>& slots,
+		                                     std::uint32_t index,
+		                                     std::uint32_t generation,
+		                                     const char* what);
 		void updateRiggedInstances();
 		void destroyRiggedInstance(RiggedInstanceRenderData& instance);
 		void destroyRiggedInstances();
@@ -864,6 +923,9 @@ namespace lightGraphics
 		std::vector<VkFence> imagesInFlight_;
 
 		std::vector<lightGraphics::pObject> _objects_;
+		std::vector<detail::HandleSlot> objectSlots_;
+		std::vector<std::uint32_t> freeObjectSlots_;
+		std::vector<std::uint32_t> objectSlotForIndex_;
 		std::unique_ptr<SceneGraph> sceneGraph_;
 
 		// Physics update callback

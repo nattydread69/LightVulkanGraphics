@@ -28,7 +28,65 @@ namespace lightGraphics
 		}
 	}
 
-	void VkApp::addObject(lightGraphics::pObject *newObject)
+	std::uint32_t VkApp::allocateHandleSlot(std::vector<detail::HandleSlot>& slots,
+	                                        std::vector<std::uint32_t>& freeSlots,
+	                                        std::uint32_t currentIndex)
+	{
+		std::uint32_t slot;
+		if (freeSlots.empty())
+		{
+			slot = static_cast<std::uint32_t>(slots.size());
+			slots.emplace_back();
+		}
+		else
+		{
+			slot = freeSlots.back();
+			freeSlots.pop_back();
+		}
+		slots[slot].alive = true;
+		slots[slot].currentIndex = currentIndex;
+		return slot;
+	}
+
+	void VkApp::releaseHandleSlot(std::vector<detail::HandleSlot>& slots,
+	                              std::vector<std::uint32_t>& freeSlots,
+	                              std::uint32_t slot)
+	{
+		slots[slot].alive = false;
+		++slots[slot].generation;
+		freeSlots.push_back(slot);
+	}
+
+	void VkApp::reindexHandleSlotsFrom(std::vector<detail::HandleSlot>& slots,
+	                                   const std::vector<std::uint32_t>& slotForIndex,
+	                                   std::size_t startIndex)
+	{
+		for (std::size_t i = startIndex; i < slotForIndex.size(); ++i)
+		{
+			slots[slotForIndex[i]].currentIndex = static_cast<std::uint32_t>(i);
+		}
+	}
+
+	bool VkApp::isHandleSlotValid(const std::vector<detail::HandleSlot>& slots,
+	                              std::uint32_t index,
+	                              std::uint32_t generation) noexcept
+	{
+		return index < slots.size() && slots[index].alive && slots[index].generation == generation;
+	}
+
+	std::size_t VkApp::resolveHandleSlot(const std::vector<detail::HandleSlot>& slots,
+	                                     std::uint32_t index,
+	                                     std::uint32_t generation,
+	                                     const char* what)
+	{
+		if (!isHandleSlotValid(slots, index, generation))
+		{
+			throw std::out_of_range(std::string(what) + " handle is invalid or stale");
+		}
+		return slots[index].currentIndex;
+	}
+
+	ObjectHandle VkApp::addObject(lightGraphics::pObject *newObject)
 	{
 		if (!newObject)
 		{
@@ -42,13 +100,19 @@ namespace lightGraphics
 		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
+		const std::uint32_t newIndex = static_cast<std::uint32_t>(_objects_.size() - 1);
+		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
+		objectSlotForIndex_.push_back(slot);
+
 		if (sceneFinalized_)
 		{
 			updateInstanceData(); // Update rendering data only if scene is finalized
 		}
+
+		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
 
-	void VkApp::addObject(const lightGraphics::pObject& obj)
+	ObjectHandle VkApp::addObject(const lightGraphics::pObject& obj)
 	{
 		_objects_.push_back(obj);
 
@@ -57,13 +121,19 @@ namespace lightGraphics
 		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
+		const std::uint32_t newIndex = static_cast<std::uint32_t>(_objects_.size() - 1);
+		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
+		objectSlotForIndex_.push_back(slot);
+
 		if (sceneFinalized_)
 		{
 			updateInstanceData();
 		}
+
+		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
 
-	void VkApp::addObject(lightGraphics::ShapeType type, const glm::vec3& position,
+	ObjectHandle VkApp::addObject(lightGraphics::ShapeType type, const glm::vec3& position,
 						const glm::vec3& size, const glm::vec4& color,
 						const glm::quat& rotation, const std::string& name, float mass)
 	{
@@ -74,10 +144,16 @@ namespace lightGraphics
 		objectModelMatrixOverrides_.push_back(std::nullopt);
 		instanceDataDirty_ = true;
 
+		const std::uint32_t newIndex = static_cast<std::uint32_t>(_objects_.size() - 1);
+		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
+		objectSlotForIndex_.push_back(slot);
+
 		if (sceneFinalized_)
 		{
 			updateInstanceData();
 		}
+
+		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
 
 	glm::mat4 VkApp::getObjectModelMatrix(size_t index) const
@@ -240,6 +316,10 @@ namespace lightGraphics
 			throw std::out_of_range(makeObjectIndexMessage("removeObject", index, _objects_.size()));
 		}
 
+		releaseHandleSlot(objectSlots_, freeObjectSlots_, objectSlotForIndex_[index]);
+		objectSlotForIndex_.erase(objectSlotForIndex_.begin() + static_cast<std::ptrdiff_t>(index));
+		reindexHandleSlotsFrom(objectSlots_, objectSlotForIndex_, index);
+
 		_objects_.erase(_objects_.begin() + static_cast<std::ptrdiff_t>(index));
 		if (index < dirtyObjects_.size())
 		{
@@ -261,18 +341,48 @@ namespace lightGraphics
 		}
 	}
 
-	void VkApp::addHexahedral(const glm::vec3& position, const glm::vec3& size,
+	void VkApp::removeObject(ObjectHandle handle)
+	{
+		removeObject(resolveObjectHandle(handle));
+	}
+
+	bool VkApp::isObjectHandleValid(ObjectHandle handle) const noexcept
+	{
+		return isHandleSlotValid(objectSlots_, handle.index, handle.generation);
+	}
+
+	size_t VkApp::resolveObjectHandle(ObjectHandle handle) const
+	{
+		return resolveHandleSlot(objectSlots_, handle.index, handle.generation, "Object");
+	}
+
+	ObjectHandle VkApp::objectHandleAt(size_t index) const
+	{
+		if (index >= objectSlotForIndex_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("objectHandleAt", index, objectSlotForIndex_.size()));
+		}
+		const std::uint32_t slot = objectSlotForIndex_[index];
+		return ObjectHandle{slot, objectSlots_[slot].generation};
+	}
+
+	ObjectHandle VkApp::addHexahedral(const glm::vec3& position, const glm::vec3& size,
 							const glm::vec4& color,
 							const glm::quat& rotation,
 							const std::string& name,
 							float mass)
 	{
-		addObject(lightGraphics::ShapeType::HEX, position, size, color, rotation, name, mass);
+		return addObject(lightGraphics::ShapeType::HEX, position, size, color, rotation, name, mass);
 	}
 
 	void VkApp::clearObjects()
 	{
 		const size_t removedCount = _objects_.size();
+		for (std::uint32_t slot : objectSlotForIndex_)
+		{
+			releaseHandleSlot(objectSlots_, freeObjectSlots_, slot);
+		}
+		objectSlotForIndex_.clear();
 		_objects_.clear();
 		dirtyObjects_.clear();
 		objectModelMatrixOverrides_.clear();

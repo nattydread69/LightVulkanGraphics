@@ -242,6 +242,92 @@ namespace
 		        "VkApp updateObjectProperties should leave size untouched for invalid batches");
 	}
 
+	void testVkAppObjectHandleValidity()
+	{
+		lightGraphics::VkApp app;
+		const lightGraphics::ObjectHandle handleA = app.addObject(makeCubeObject("A"));
+		const lightGraphics::ObjectHandle handleB = app.addObject(makeCubeObject("B"));
+		const lightGraphics::ObjectHandle handleC = app.addObject(makeCubeObject("C"));
+
+		require(app.isObjectHandleValid(handleA) && app.isObjectHandleValid(handleB) &&
+		            app.isObjectHandleValid(handleC),
+		        "ObjectHandle: freshly added handles should be valid");
+		require(app.resolveObjectHandle(handleA) == 0 &&
+		            app.resolveObjectHandle(handleB) == 1 &&
+		            app.resolveObjectHandle(handleC) == 2,
+		        "ObjectHandle: handles should resolve to their insertion order initially");
+
+		// Removing an earlier object shifts the dense storage; the surviving
+		// handles must keep tracking their own objects rather than becoming
+		// stale or aliasing a shifted-in neighbor.
+		app.removeObject(0);
+		require(!app.isObjectHandleValid(handleA),
+		        "ObjectHandle: handle to a removed object should become invalid");
+		require(app.isObjectHandleValid(handleB) && app.resolveObjectHandle(handleB) == 0,
+		        "ObjectHandle: unrelated handle should follow its object after a shift");
+		require(app.isObjectHandleValid(handleC) && app.resolveObjectHandle(handleC) == 1,
+		        "ObjectHandle: unrelated handle should follow its object after a shift");
+
+		requireOutOfRange([&app, handleA]() { app.resolveObjectHandle(handleA); },
+		                  "ObjectHandle: resolving a stale handle should throw");
+		requireOutOfRange([&app, handleA]() { app.removeObject(handleA); },
+		                  "ObjectHandle: removing via a stale handle should throw");
+
+		app.removeObject(handleB);
+		require(app.getObjectCount() == 1, "ObjectHandle: removeObject(handle) should remove the object");
+		require(app.isObjectHandleValid(handleC) && app.resolveObjectHandle(handleC) == 0,
+		        "ObjectHandle: surviving handle should track its object through repeated shifts");
+
+		const lightGraphics::ObjectHandle handleD = app.addObject(makeCubeObject("D"));
+		require(app.isObjectHandleValid(handleD), "ObjectHandle: newly added handle should be valid");
+		require(!app.isObjectHandleValid(handleA) && !app.isObjectHandleValid(handleB),
+		        "ObjectHandle: reused slots must not resurrect old handles");
+
+		const lightGraphics::ObjectHandle handleAtZero = app.objectHandleAt(0);
+		require(app.resolveObjectHandle(handleAtZero) == app.resolveObjectHandle(handleC),
+		        "ObjectHandle: objectHandleAt should resolve to the same object as the surviving handle");
+	}
+
+	void testVkAppLightHandleValidity()
+	{
+		lightGraphics::VkApp app;
+		app.clearLights(); // VkApp seeds a default light; start from a clean slate
+		lightGraphics::LightSource light;
+		light.color = glm::vec3(1.0f);
+		light.intensity = 1.0f;
+
+		const lightGraphics::LightHandle handleA = app.addLightHandle(light);
+		const lightGraphics::LightHandle handleB = app.addLightHandle(light);
+		const lightGraphics::LightHandle handleC = app.addLightHandle(light);
+
+		require(app.isLightHandleValid(handleA) && app.isLightHandleValid(handleB) &&
+		            app.isLightHandleValid(handleC),
+		        "LightHandle: freshly added handles should be valid");
+
+		app.removeLight(0);
+		require(!app.isLightHandleValid(handleA),
+		        "LightHandle: handle to a removed light should become invalid");
+		require(app.isLightHandleValid(handleB) && app.resolveLightHandle(handleB) == 0,
+		        "LightHandle: unrelated handle should follow its light after a shift");
+		require(app.isLightHandleValid(handleC) && app.resolveLightHandle(handleC) == 1,
+		        "LightHandle: unrelated handle should follow its light after a shift");
+
+		requireOutOfRange([&app, handleA]() { app.resolveLightHandle(handleA); },
+		                  "LightHandle: resolving a stale handle should throw");
+		requireOutOfRange([&app, handleA]() { app.removeLight(handleA); },
+		                  "LightHandle: removing via a stale handle should throw");
+
+		app.removeLight(handleB);
+		require(app.getLightCount() == 1, "LightHandle: removeLight(handle) should remove the light");
+		require(app.isLightHandleValid(handleC) && app.resolveLightHandle(handleC) == 0,
+		        "LightHandle: surviving handle should track its light through repeated shifts");
+
+		const lightGraphics::LightHandle handleD = app.addLightHandle(light);
+		require(app.isLightHandleValid(handleD), "LightHandle: newly added handle should be valid");
+		require(!app.isLightHandleValid(handleA) && !app.isLightHandleValid(handleB),
+		        "LightHandle: reused slots must not resurrect old handles");
+	}
+
 	lightGraphics::MeshData makeTriangle()
 	{
 		lightGraphics::MeshData mesh;
@@ -463,6 +549,8 @@ int main()
 		testSceneNodeHandleBasics();
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();
+		testVkAppObjectHandleValidity();
+		testVkAppLightHandleValidity();
 		testMeshValidation();
 		testScreenTextMesh();
 		testTexture3DValidation();

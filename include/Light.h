@@ -14,7 +14,6 @@
 namespace lightGraphics
 {
 	constexpr std::size_t MaxForwardLights = 16;
-	using LightHandle = std::size_t;
 
 	enum class LightType : int
 	{

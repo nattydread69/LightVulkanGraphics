@@ -80,6 +80,11 @@ namespace lightGraphics
 
 		lights_.push_back(normalizedLight);
 		lightTransformMatrixOverrides_.push_back(std::nullopt);
+
+		const std::uint32_t newIndex = static_cast<std::uint32_t>(lights_.size() - 1);
+		const std::uint32_t slot = allocateHandleSlot(lightSlots_, freeLightSlots_, newIndex);
+		lightSlotForIndex_.push_back(slot);
+
 		if (lights_.size() == lightGraphics::MaxForwardLights + 1)
 		{
 			logMessage(LogLevel::Warning,
@@ -88,6 +93,13 @@ namespace lightGraphics
 		}
 		markLightingDirty();
 		return lights_.size() - 1;
+	}
+
+	LightHandle VkApp::addLightHandle(const lightGraphics::LightSource& light)
+	{
+		const size_t index = addLight(light);
+		const std::uint32_t slot = lightSlotForIndex_[index];
+		return LightHandle{slot, lightSlots_[slot].generation};
 	}
 
 	size_t VkApp::addDirectionalLight(const glm::vec3& direction,
@@ -149,6 +161,10 @@ namespace lightGraphics
 			throw std::out_of_range(makeLightIndexMessage("removeLight", index, lights_.size()));
 		}
 
+		releaseHandleSlot(lightSlots_, freeLightSlots_, lightSlotForIndex_[index]);
+		lightSlotForIndex_.erase(lightSlotForIndex_.begin() + static_cast<std::ptrdiff_t>(index));
+		reindexHandleSlotsFrom(lightSlots_, lightSlotForIndex_, index);
+
 		lights_.erase(lights_.begin() + static_cast<std::ptrdiff_t>(index));
 		if (index < lightTransformMatrixOverrides_.size())
 		{
@@ -158,9 +174,39 @@ namespace lightGraphics
 		markLightingDirty();
 	}
 
+	void VkApp::removeLight(LightHandle handle)
+	{
+		removeLight(resolveLightHandle(handle));
+	}
+
+	bool VkApp::isLightHandleValid(LightHandle handle) const noexcept
+	{
+		return isHandleSlotValid(lightSlots_, handle.index, handle.generation);
+	}
+
+	size_t VkApp::resolveLightHandle(LightHandle handle) const
+	{
+		return resolveHandleSlot(lightSlots_, handle.index, handle.generation, "Light");
+	}
+
+	LightHandle VkApp::lightHandleAt(size_t index) const
+	{
+		if (index >= lightSlotForIndex_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("lightHandleAt", index, lightSlotForIndex_.size()));
+		}
+		const std::uint32_t slot = lightSlotForIndex_[index];
+		return LightHandle{slot, lightSlots_[slot].generation};
+	}
+
 	void VkApp::clearLights()
 	{
 		const size_t removedCount = lights_.size();
+		for (std::uint32_t slot : lightSlotForIndex_)
+		{
+			releaseHandleSlot(lightSlots_, freeLightSlots_, slot);
+		}
+		lightSlotForIndex_.clear();
 		lights_.clear();
 		lightTransformMatrixOverrides_.clear();
 		for (size_t i = 0; i < removedCount; ++i)

@@ -378,6 +378,9 @@ namespace lightGraphics
 		defaultLight.name = "Default Directional Light";
 		lights_.push_back(defaultLight);
 		lightTransformMatrixOverrides_.push_back(std::nullopt);
+
+		const std::uint32_t slot = allocateHandleSlot(lightSlots_, freeLightSlots_, 0);
+		lightSlotForIndex_.push_back(slot);
 	}
 
 	VkApp::~VkApp()
