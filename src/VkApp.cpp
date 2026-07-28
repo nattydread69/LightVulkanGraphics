@@ -909,17 +909,14 @@ namespace lightGraphics
 			level = LogLevel::Debug;
 		}
 
+		// Routed exclusively through logMessage() so debugOutput (see setDebugOutput /
+		// LightVulkanGraphicsCreateInfo::enableDebugOutput, both default false) is the
+		// single switch for validation-layer chatter, independent of general console
+		// output. A log callback still receives messages even when debugOutput is off.
 		std::string message = std::string("[Validation] ") + messageText;
-		if (app && (app->debugOutput || app->logCallback_))
+		if (app)
 		{
 			app->logMessage(level, message);
-		}
-		else
-		{
-			auto& stream = (level == LogLevel::Error || level == LogLevel::Warning)
-			             ? consoleErrorStream()
-			             : consoleInfoStream();
-			stream << message << std::endl;
 		}
 
 		return VK_FALSE;

@@ -24,5 +24,8 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Invalid object indices in remove/update APIs now throw `std::out_of_range` consistently instead of being ignored.
 - Object state method implementations were split out of `src/VkApp.cpp` into `src/VkAppObjectState.cpp`.
 
+### Fixed
+- The Vulkan validation-layer debug messenger printed to the console unconditionally, ignoring `debugOutput` / `LightVulkanGraphicsCreateInfo::enableDebugOutput` (both default `false`). It now always routes through `logMessage()`, so that flag is the sole switch for validation-layer chatter.
+
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.
