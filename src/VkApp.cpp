@@ -5770,6 +5770,35 @@ std::shared_ptr<Texture> VkApp::createTextureFromEmbedded(const EmbeddedTextureD
 		addObject(lightGraphics::ShapeType::CYLINDER, cylinderCenter, size, color, rotation, name, mass);
 	}
 
+	void VkApp::computeArrowTransform(const glm::vec3& tail, const glm::vec3& tip, float shaftRadius,
+	                                   glm::vec3& outPosition, glm::quat& outRotation, glm::vec3& outScale)
+	{
+		// Matches the head/shaft proportions baked into generateAllShapeGeometry's
+		// ARROW mesh (headRadius 0.3, headLength 0.6, shaftRadius 0.1, shaftLength 0.4
+		// along +Y), so a caller-chosen shaftRadius and tail/tip pair reproduce it exactly.
+		constexpr float kArrowMeshShaftRadius = 0.1f;
+		constexpr float kArrowMeshShaftFraction = 0.4f;
+
+		glm::vec3 direction = tip - tail;
+		float length = glm::length(direction);
+		if (length < 0.001f)
+		{
+			outPosition = tail;
+			outRotation = glm::quat(1, 0, 0, 0);
+			outScale = glm::vec3(0.0f);
+			return;
+		}
+
+		glm::vec3 normalizedDir = direction / length;
+		outRotation = rotationFromDirection(normalizedDir, glm::vec3(0, 1, 0));
+
+		float radiusScale = shaftRadius / kArrowMeshShaftRadius;
+		outScale = glm::vec3(radiusScale, length, radiusScale);
+
+		// The mesh's local origin sits at the shaft/head boundary, not the tail.
+		outPosition = tail + normalizedDir * (kArrowMeshShaftFraction * length);
+	}
+
 	// ==================== PERFORMANCE OPTIMIZATION METHODS ====================
 
 	void VkApp::markObjectDirty(size_t index)

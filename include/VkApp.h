@@ -276,6 +276,14 @@ namespace lightGraphics
 		                                  const glm::vec4& color, const std::string& name = "Connector",
 		                                  float mass = 1.0f);
 
+		// Arrow orientation helper. The built-in ARROW mesh (ShapeType::ARROW) is authored
+		// along +Y with its local origin at the shaft/head boundary rather than at the tail,
+		// so placing one to visually span two world-space points needs this instead of the
+		// plain position/size/rotation used by the cylinder helpers above. Callers typically
+		// pass the result straight to setObjectPosition/setObjectRotation/setObjectScale.
+		void computeArrowTransform(const glm::vec3& tail, const glm::vec3& tip, float shaftRadius,
+		                           glm::vec3& outPosition, glm::quat& outRotation, glm::vec3& outScale);
+
 		// ==================== LATTICE GENERATION API ====================
 
 		// Convert pObjects to rendering data

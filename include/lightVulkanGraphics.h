@@ -110,6 +110,13 @@ namespace lightGraphics
                                         const glm::vec4& color, const std::string& name = "Connector",
                                         float mass = 1.0f);
 
+        // Arrow helper (retain for discoverability, call base)
+        void computeArrowTransform(const glm::vec3& tail, const glm::vec3& tip, float shaftRadius,
+                                   glm::vec3& outPosition, glm::quat& outRotation, glm::vec3& outScale)
+        {
+            VkApp::computeArrowTransform(tail, tip, shaftRadius, outPosition, outRotation, outScale);
+        }
+
         // Hexahedral helper
         void addHexahedral(const glm::vec3& position, const glm::vec3& size,
                            const glm::vec4& color,
