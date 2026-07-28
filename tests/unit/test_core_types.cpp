@@ -244,6 +244,59 @@ namespace
 		        "VkApp updateObjectProperties should leave size untouched for invalid batches");
 	}
 
+	void testVkAppObjectDescription()
+	{
+		lightGraphics::VkApp app;
+
+		lightGraphics::ObjectDescription description;
+		description.type = lightGraphics::ShapeType::CAPSULE;
+		description.position = glm::vec3(1.0f, 2.0f, 3.0f);
+		description.size = glm::vec3(0.5f, 1.5f, 0.5f);
+		description.color = glm::vec4(0.25f, 0.5f, 0.75f, 1.0f);
+		description.rotation = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		description.name = "DescribedCapsule";
+		description.mass = 2.5f;
+		description.immovable = true;
+		description.texturePath = "capsule.png";
+
+		const lightGraphics::ObjectHandle handle = app.addObject(description);
+		require(app.isObjectHandleValid(handle),
+		        "ObjectDescription: addObject(description) should return a valid handle");
+		require(app.getObjectCount() == 1,
+		        "ObjectDescription: addObject(description) should add exactly one object");
+
+		const size_t index = app.resolveObjectHandle(handle);
+		const lightGraphics::ObjectDescription roundTrip = app.getObjectDescription(index);
+		require(roundTrip.type == description.type,
+		        "ObjectDescription: getObjectDescription should preserve type");
+		require(nearlyEqual(roundTrip.position, description.position),
+		        "ObjectDescription: getObjectDescription should preserve position");
+		require(nearlyEqual(roundTrip.size, description.size),
+		        "ObjectDescription: getObjectDescription should preserve size");
+		require(nearlyEqual(roundTrip.color, description.color),
+		        "ObjectDescription: getObjectDescription should preserve color");
+		require(roundTrip.name == description.name,
+		        "ObjectDescription: getObjectDescription should preserve name");
+		require(nearlyEqual(roundTrip.mass, description.mass),
+		        "ObjectDescription: getObjectDescription should preserve mass");
+		require(roundTrip.immovable == description.immovable,
+		        "ObjectDescription: getObjectDescription should preserve immovable");
+		require(roundTrip.texturePath == description.texturePath,
+		        "ObjectDescription: getObjectDescription should preserve texturePath");
+
+		lightGraphics::ObjectDescription updated = description;
+		updated.position = glm::vec3(9.0f, 9.0f, 9.0f);
+		updated.name = "UpdatedCapsule";
+		app.updateObject(index, updated);
+		require(nearlyEqual(app.getObjectDescription(index).position, updated.position),
+		        "ObjectDescription: updateObject(description) should apply the new position");
+		require(app.getObjectDescription(index).name == "UpdatedCapsule",
+		        "ObjectDescription: updateObject(description) should apply the new name");
+
+		requireOutOfRange([&app]() { app.getObjectDescription(app.getObjectCount()); },
+		                  "ObjectDescription: getObjectDescription should reject invalid indices");
+	}
+
 	void testVkAppObjectHandleValidity()
 	{
 		lightGraphics::VkApp app;
@@ -595,6 +648,7 @@ int main()
 		testSceneNodeHandleBasics();
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();
+		testVkAppObjectDescription();
 		testVkAppObjectHandleValidity();
 		testVkAppLightHandleValidity();
 		testVkAppHeadlessRiggedObject();

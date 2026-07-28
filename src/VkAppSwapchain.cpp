@@ -713,7 +713,7 @@ namespace lightGraphics
 
 				instances[i].model = translation * rotation * scale;
 				instances[i].color = glm::vec3(obj.getColour());
-				instances[i].shapeType = static_cast<float>(obj._type);
+				instances[i].shapeType = static_cast<float>(obj.getType());
 			}
 
 			std::memcpy(ptr, instances.data(), static_cast<size_t>(instBytes));

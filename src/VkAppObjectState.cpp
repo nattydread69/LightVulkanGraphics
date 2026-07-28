@@ -156,6 +156,47 @@ namespace lightGraphics
 		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
 
+	ObjectHandle VkApp::addObject(const lightGraphics::ObjectDescription& description)
+	{
+		lightGraphics::pObject obj(description.type,
+		                           description.position,
+		                           description.size,
+		                           description.color,
+		                           description.rotation,
+		                           description.name,
+		                           description.mass);
+		if (description.immovable)
+		{
+			obj.setImmovable();
+		}
+		if (!description.texturePath.empty())
+		{
+			obj.setTexturePath(description.texturePath);
+		}
+		return addObject(obj);
+	}
+
+	ObjectDescription VkApp::getObjectDescription(size_t index) const
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("getObjectDescription", index, _objects_.size()));
+		}
+
+		const lightGraphics::pObject& obj = _objects_[index];
+		ObjectDescription description;
+		description.type = obj.getType();
+		description.position = obj.getPosition();
+		description.size = obj.getSize();
+		description.color = obj.getColour();
+		description.rotation = obj.getRotation();
+		description.name = obj.getName();
+		description.mass = obj.getMass();
+		description.immovable = obj.isImmovable();
+		description.texturePath = obj.getTexturePath();
+		return description;
+	}
+
 	glm::mat4 VkApp::getObjectModelMatrix(size_t index) const
 	{
 		if (index >= _objects_.size())
@@ -412,6 +453,26 @@ namespace lightGraphics
 		{
 			markObjectDirty(index);
 		}
+	}
+
+	void VkApp::updateObject(size_t index, const lightGraphics::ObjectDescription& description)
+	{
+		lightGraphics::pObject obj(description.type,
+		                           description.position,
+		                           description.size,
+		                           description.color,
+		                           description.rotation,
+		                           description.name,
+		                           description.mass);
+		if (description.immovable)
+		{
+			obj.setImmovable();
+		}
+		if (!description.texturePath.empty())
+		{
+			obj.setTexturePath(description.texturePath);
+		}
+		updateObject(index, obj);
 	}
 
 	void VkApp::updateObjectPositions(const std::vector<std::pair<size_t, glm::vec3>>& updates)

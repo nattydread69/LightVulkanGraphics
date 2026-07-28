@@ -2264,7 +2264,7 @@ namespace lightGraphics
 		Instance instance{};
 		instance.model = getObjectModelMatrix(index);
 		instance.color = glm::vec3(obj.getColour());
-		instance.shapeType = static_cast<float>(obj._type);
+		instance.shapeType = static_cast<float>(obj.getType());
 		return instance;
 	}
 
@@ -2679,7 +2679,7 @@ namespace lightGraphics
 		{
 			for (size_t i = 0; i < _objects_.size(); ++i)
 			{
-				const int shapeType = static_cast<int>(_objects_[i]._type);
+				const int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType < 0 || shapeType >= 8)
 				{
 					continue;
@@ -2944,7 +2944,7 @@ namespace lightGraphics
 
 			for (size_t i = 0; i < _objects_.size(); ++i)
 			{
-				int shapeType = static_cast<int>(_objects_[i]._type);
+				int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType >= 0 && shapeType < 8)
 				{
 					// Objects with this name prefix are treated as debug overlays and

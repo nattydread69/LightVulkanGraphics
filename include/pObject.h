@@ -50,6 +50,23 @@ namespace lightGraphics
 		HUMAN = 9
 	};
 
+	/// A plain-data description of an object, independent of the legacy
+	/// pObject class. Preferred for new code: VkApp::addObject,
+	/// VkApp::updateObject, and VkApp::getObjectDescription all accept or
+	/// return this instead of requiring a pObject.
+	struct ObjectDescription
+	{
+		ShapeType type = ShapeType::SPHERE;
+		glm::vec3 position{0.0f};
+		glm::vec3 size{1.0f};
+		glm::vec4 color{1.0f};
+		glm::quat rotation{1.0f, 0.0f, 0.0f, 0.0f};
+		std::string name;
+		float mass = 1.0f;
+		bool immovable = false;
+		std::string texturePath;
+	};
+
 	/** Object class to hold data for objects common to both graphics and physics geometries
 	_type denotes the geometry
 
@@ -65,12 +82,13 @@ namespace lightGraphics
 				std::string const &name,
 				float       const mass);
 		virtual ~pObject() {}
+		ShapeType getType() const { return _type; }
 		glm::vec3 getPosition() const { return _center; }
 		glm::vec3 getSize()     const { return _size; }
 		glm::vec4 getColour()   const { return _colour; }
 		pReal getMass() const { return _mass; }
 		std::string getName() const { return _name; }
-		std::string getTexturePath() { return _texturePath; }
+		std::string getTexturePath() const { return _texturePath; }
 		glm::quat getRotation() const { return _rotation; }
 		glm::mat4 getRotationMatrix() const;
 		bool isImmovable() const { return _immovable; }

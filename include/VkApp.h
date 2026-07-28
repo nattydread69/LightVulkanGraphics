@@ -176,6 +176,7 @@ namespace lightGraphics
 		               const glm::vec3& size, const glm::vec4& color,
 		               const glm::quat& rotation = glm::quat(1,0,0,0),
 		               const std::string& name = "", float mass = 1.0f);
+		ObjectHandle addObject(const lightGraphics::ObjectDescription& description);
 		ObjectHandle addHexahedral(const glm::vec3& position, const glm::vec3& size,
 		                   const glm::vec4& color,
 		                   const glm::quat& rotation = glm::quat(1,0,0,0),
@@ -185,8 +186,10 @@ namespace lightGraphics
 		void removeObject(ObjectHandle handle);
 		void clearObjects();
 		void updateObject(size_t index, const lightGraphics::pObject& obj);
+		void updateObject(size_t index, const lightGraphics::ObjectDescription& description);
 		size_t getObjectCount() const { return _objects_.size(); }
 		const lightGraphics::pObject& getObject(size_t index) const { return _objects_[index]; }
+		lightGraphics::ObjectDescription getObjectDescription(size_t index) const;
 		bool isObjectHandleValid(ObjectHandle handle) const noexcept;
 		size_t resolveObjectHandle(ObjectHandle handle) const;
 		ObjectHandle objectHandleAt(size_t index) const;
