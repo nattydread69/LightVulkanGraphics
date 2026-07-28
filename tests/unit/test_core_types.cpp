@@ -1,3 +1,5 @@
+#include "FBXLoader.h"
+#include "RiggedObject.h"
 #include "SceneGraph.h"
 #include "VolumeRendering.h"
 #include "VkApp.h"
@@ -328,6 +330,50 @@ namespace
 		        "LightHandle: reused slots must not resurrect old handles");
 	}
 
+	void testVkAppHeadlessRiggedObject()
+	{
+		lightGraphics::VkApp app;
+		require(!app.isDeviceInitialized(),
+		        "VkApp should report no device before init() is called");
+
+#ifdef LVG_SOURCE_DIR
+		const std::filesystem::path modelPath =
+		    std::filesystem::path(LVG_SOURCE_DIR) / "assets" / "Worker.fbx";
+#else
+		const std::filesystem::path modelPath =
+		    std::filesystem::path("assets") / "Worker.fbx";
+#endif
+
+		lightGraphics::FBXLoader loader;
+		auto model = loader.loadModel(modelPath.string());
+		require(model != nullptr, "failed to load Worker.fbx: " + loader.getLastError());
+
+		auto riggedObject = std::make_shared<lightGraphics::RiggedObject>(
+		    glm::vec3(0.0f),
+		    glm::vec3(1.0f),
+		    glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+		    "HeadlessWorker",
+		    1.0f,
+		    model);
+
+		// The whole point: registering a rigged object (mesh validation,
+		// skinning-mode selection, handle bookkeeping) must not require a
+		// GLFW window or Vulkan device.
+		const lightGraphics::RiggedObjectHandle handle = app.addRiggedObjectHandle(riggedObject);
+		require(app.isRiggedObjectHandleValid(handle),
+		        "addRiggedObjectHandle should succeed without a Vulkan device");
+		require(app.getRiggedObjectCount() == 1,
+		        "addRiggedObjectHandle should register the rigged object without a device");
+		require(app.resolveRiggedObjectHandle(handle) == 0,
+		        "RiggedObjectHandle should resolve to its insertion index");
+
+		app.removeRiggedObject(handle);
+		require(app.getRiggedObjectCount() == 0,
+		        "removeRiggedObject(handle) should work without a device");
+		require(!app.isRiggedObjectHandleValid(handle),
+		        "RiggedObjectHandle should become invalid after removal");
+	}
+
 	lightGraphics::MeshData makeTriangle()
 	{
 		lightGraphics::MeshData mesh;
@@ -551,6 +597,7 @@ int main()
 		testVkAppObjectIndexValidation();
 		testVkAppObjectHandleValidity();
 		testVkAppLightHandleValidity();
+		testVkAppHeadlessRiggedObject();
 		testMeshValidation();
 		testScreenTextMesh();
 		testTexture3DValidation();

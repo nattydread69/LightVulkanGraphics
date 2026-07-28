@@ -236,6 +236,11 @@ namespace lightGraphics
 		glm::vec3 getAmbientLight() const { return ambientLight_; }
 		void setShadowRenderingEnabled(bool enabled) { shadowRenderingEnabled_ = enabled; }
 		bool getShadowRenderingEnabled() const { return shadowRenderingEnabled_; }
+		// True once init() has created a Vulkan device. Scene-building APIs
+		// (objects, lights, rigged objects) are safe to call before that: no
+		// GLFW window or Vulkan device is required to build up and inspect
+		// scene content, only to render it.
+		bool isDeviceInitialized() const noexcept { return device_ != VK_NULL_HANDLE; }
 		glm::mat4 getObjectModelMatrix(size_t index) const;
 		void setObjectModelMatrixOverride(size_t index, const glm::mat4& model);
 		void clearObjectModelMatrixOverride(size_t index);

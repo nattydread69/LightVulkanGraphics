@@ -629,22 +629,29 @@ namespace lightGraphics
 				}
 			}
 
-		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+		// GPU resource creation is skipped without a device so scene content can
+		// be built up (mesh validation, skinning-mode selection, handle
+		// bookkeeping) headlessly, e.g. for testing. updateRiggedInstances()
+		// already tolerates VK_NULL_HANDLE buffers/textures below.
+		if (device_ != VK_NULL_HANDLE)
 		{
-			createBuffer(sizeof(Instance),
-			             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			             instanceData.instanceBuffers[frameIndex]);
-			createBuffer(sizeof(Instance),
-			             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			             instanceData.instanceUploadBuffers[frameIndex]);
-			VK_CHECK(vkMapMemory(device_,
-			                     instanceData.instanceUploadBuffers[frameIndex].memory,
-			                     0,
-			                     sizeof(Instance),
-			                     0,
-			                     &instanceData.instanceUploadMapped[frameIndex]));
+			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			{
+				createBuffer(sizeof(Instance),
+				             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				             instanceData.instanceBuffers[frameIndex]);
+				createBuffer(sizeof(Instance),
+				             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+				             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+				             instanceData.instanceUploadBuffers[frameIndex]);
+				VK_CHECK(vkMapMemory(device_,
+				                     instanceData.instanceUploadBuffers[frameIndex].memory,
+				                     0,
+				                     sizeof(Instance),
+				                     0,
+				                     &instanceData.instanceUploadMapped[frameIndex]));
+			}
 		}
 
 		for (const auto& mesh : model->meshes)
@@ -668,97 +675,100 @@ namespace lightGraphics
 			VkDeviceSize vbSize = sizeof(Vertex) * mesh.vertices.size();
 			VkDeviceSize ibSize = sizeof(uint32_t) * mesh.indices.size();
 
-			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			if (device_ != VK_NULL_HANDLE)
 			{
-				createBuffer(vbSize,
-				             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+				for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+				{
+					createBuffer(vbSize,
+					             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+					             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+					             meshData.vertexBuffers[frameIndex]);
+					createBuffer(vbSize,
+					             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+					             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+					             meshData.vertexUploadBuffers[frameIndex]);
+					VK_CHECK(vkMapMemory(device_,
+					                     meshData.vertexUploadBuffers[frameIndex].memory,
+					                     0,
+					                     vbSize,
+					                     0,
+					                     &meshData.vertexUploadMapped[frameIndex]));
+				}
+				createBuffer(ibSize,
+				             VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
 				             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				             meshData.vertexBuffers[frameIndex]);
-				createBuffer(vbSize,
+				             meshData.indexBuffer);
+
+				detail::Buffer indexUploadBuffer;
+				createBuffer(ibSize,
 				             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
 				             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-				             meshData.vertexUploadBuffers[frameIndex]);
-				VK_CHECK(vkMapMemory(device_,
-				                     meshData.vertexUploadBuffers[frameIndex].memory,
-				                     0,
-				                     vbSize,
-				                     0,
-				                     &meshData.vertexUploadMapped[frameIndex]));
-			}
-			createBuffer(ibSize,
-			             VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			             meshData.indexBuffer);
+				             indexUploadBuffer);
+				void* mapped = nullptr;
+				VK_CHECK(vkMapMemory(device_, indexUploadBuffer.memory, 0, ibSize, 0, &mapped));
+				std::memcpy(mapped, mesh.indices.data(), static_cast<size_t>(ibSize));
+				vkUnmapMemory(device_, indexUploadBuffer.memory);
+				copyBuffer(indexUploadBuffer.buffer, meshData.indexBuffer.buffer, ibSize);
+				destroyBuffer(device_, indexUploadBuffer);
 
-			detail::Buffer indexUploadBuffer;
-			createBuffer(ibSize,
-			             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-			             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-			             indexUploadBuffer);
-			void* mapped = nullptr;
-			VK_CHECK(vkMapMemory(device_, indexUploadBuffer.memory, 0, ibSize, 0, &mapped));
-			std::memcpy(mapped, mesh.indices.data(), static_cast<size_t>(ibSize));
-			vkUnmapMemory(device_, indexUploadBuffer.memory);
-			copyBuffer(indexUploadBuffer.buffer, meshData.indexBuffer.buffer, ibSize);
-			destroyBuffer(device_, indexUploadBuffer);
-
-			if (!mesh.diffuseTexturePath.empty())
-			{
-				if (debugOutput)
+				if (!mesh.diffuseTexturePath.empty())
 				{
-					logMessage(LogLevel::Debug, "[RiggedMesh] Loading texture: " + mesh.diffuseTexturePath);
-				}
-				meshData.texture = getOrCreateTexture(mesh.diffuseTexturePath);
-			}
-
-			if (!meshData.texture && mesh.embeddedTexture)
-			{
-				const std::string cacheKey = !mesh.embeddedTextureKey.empty()
-					? mesh.embeddedTextureKey
-					: mesh.diffuseTexturePath;
-
-				if (!cacheKey.empty())
-				{
-					auto cacheIt = textureCache_.find(cacheKey);
-					if (cacheIt != textureCache_.end())
+					if (debugOutput)
 					{
-						meshData.texture = cacheIt->second;
+						logMessage(LogLevel::Debug, "[RiggedMesh] Loading texture: " + mesh.diffuseTexturePath);
+					}
+					meshData.texture = getOrCreateTexture(mesh.diffuseTexturePath);
+				}
+
+				if (!meshData.texture && mesh.embeddedTexture)
+				{
+					const std::string cacheKey = !mesh.embeddedTextureKey.empty()
+						? mesh.embeddedTextureKey
+						: mesh.diffuseTexturePath;
+
+					if (!cacheKey.empty())
+					{
+						auto cacheIt = textureCache_.find(cacheKey);
+						if (cacheIt != textureCache_.end())
+						{
+							meshData.texture = cacheIt->second;
+						}
+						else
+						{
+							meshData.texture = createTextureFromEmbedded(*mesh.embeddedTexture, cacheKey);
+							if (meshData.texture)
+							{
+								textureCache_[cacheKey] = meshData.texture;
+							}
+						}
 					}
 					else
 					{
-						meshData.texture = createTextureFromEmbedded(*mesh.embeddedTexture, cacheKey);
-						if (meshData.texture)
-						{
-							textureCache_[cacheKey] = meshData.texture;
-						}
+						meshData.texture = createTextureFromEmbedded(*mesh.embeddedTexture, "embedded_texture");
 					}
 				}
-				else
-				{
-					meshData.texture = createTextureFromEmbedded(*mesh.embeddedTexture, "embedded_texture");
-				}
-			}
 
-			if (!meshData.texture)
-			{
-				meshData.texture = getOrCreateSolidColorTexture(mesh.diffuseColor);
-				if (debugOutput)
+				if (!meshData.texture)
 				{
-					std::ostringstream message;
-					message << "[RiggedMesh] Using material color fallback for '" << mesh.materialName
-					        << "' (" << mesh.diffuseColor.r << ", " << mesh.diffuseColor.g << ", "
-					        << mesh.diffuseColor.b << ", " << mesh.diffuseColor.a << ")";
-					logMessage(LogLevel::Debug, message.str());
+					meshData.texture = getOrCreateSolidColorTexture(mesh.diffuseColor);
+					if (debugOutput)
+					{
+						std::ostringstream message;
+						message << "[RiggedMesh] Using material color fallback for '" << mesh.materialName
+						        << "' (" << mesh.diffuseColor.r << ", " << mesh.diffuseColor.g << ", "
+						        << mesh.diffuseColor.b << ", " << mesh.diffuseColor.a << ")";
+						logMessage(LogLevel::Debug, message.str());
+					}
 				}
-			}
 
-			if (!meshData.texture)
-			{
-				if (debugOutput)
+				if (!meshData.texture)
 				{
-					logMessage(LogLevel::Debug, "[RiggedMesh] Texture and material color fallback unavailable; using default texture");
+					if (debugOutput)
+					{
+						logMessage(LogLevel::Debug, "[RiggedMesh] Texture and material color fallback unavailable; using default texture");
+					}
+					meshData.texture = defaultTexture_;
 				}
-				meshData.texture = defaultTexture_;
 			}
 
 			instanceData.meshes.push_back(std::move(meshData));
