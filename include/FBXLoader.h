@@ -52,6 +52,19 @@ namespace lightGraphics
         glm::vec3 bindScale    = glm::vec3(1.0f);
         int parentIndex;         // Index of parent bone (-1 for root)
         std::vector<int> children; // Indices of child bones
+        // True if some mesh actually skins vertices to this bone (i.e. `offsetMatrix`
+        // and `skinningGlobalBindTransform` were populated from real skin-cluster
+        // data, not just copied from the node-hierarchy walk as a fallback). Used to
+        // decide, per bone, whether the authoritative skin-cluster bind pose can be
+        // used for skinning instead of the node-hierarchy-derived one.
+        bool hasSkinBindTransform = false;
+        // For a mesh-local Bone entry (RiggedMesh::bones), the resolved index into
+        // RiggedModel::bones for the global bone of the same name, cached once at
+        // load time so per-frame skinning (buildRiggedFinalBoneMatrix) doesn't have
+        // to repeat a string-keyed boneMapping lookup for every mesh-bone, every
+        // mesh, every instance, every frame. -1 if no matching global bone exists.
+        // Meaningless on a RiggedModel::bones entry itself.
+        int cachedGlobalBoneIndex = -1;
     };
 
     // Structure to hold animation keyframe data
@@ -79,6 +92,11 @@ namespace lightGraphics
         float duration;  // Duration in seconds
         float ticksPerSecond;
         std::vector<AnimationChannel> channels;
+        // Bone name -> index into channels, built once when this animation is
+        // loaded (see FBXLoader::processAnimations). Lets per-frame bone-transform
+        // evaluation (RiggedObject::calculateBoneTransforms) do a single map
+        // lookup per bone instead of a linear scan over every channel.
+        std::map<std::string, int> channelIndexByBoneName;
     };
 
     // Structure to hold vertex data with bone weights
@@ -125,6 +143,11 @@ namespace lightGraphics
         std::map<std::string, int> boneMapping; // Global bone name to index mapping
         glm::mat4 axisCorrection = glm::mat4(1.0f);
         glm::mat4 globalInverseTransform;
+        // Diagnostic only: true if the node-hierarchy-walked bind pose disagreed
+        // meaningfully with the skin cluster's own bind pose for several bones (see
+        // FBXLoader::loadModel). Skinning itself no longer branches on this — the
+        // skin-cluster-derived bind pose (Bone::hasSkinBindTransform) is always
+        // preferred per-bone, since it is the FBX file's authoritative bind data.
         bool usesSkinningBindCorrection = false;
     };
 
@@ -170,6 +193,10 @@ namespace lightGraphics
 
         // Bone hierarchy processing
         void buildBoneHierarchy(aiNode* node, int parentIndex, RiggedModel& model);
+        // Not called by this library's own runtime path today — RiggedObject computes
+        // per-frame bone transforms itself (RiggedObject::calculateBoneTransforms()).
+        // Kept correct and available as a private utility for future use rather than
+        // removed, since it mirrors that same, already-tested composition logic.
         void calculateBoneTransforms(RiggedModel& model, float animationTime, int animationIndex);
         void calculateBoneTransform(const std::string& boneName, float animationTime,
                                   const Animation& animation, const std::vector<Bone>& bones,

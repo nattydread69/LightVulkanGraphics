@@ -59,11 +59,11 @@ namespace lightGraphics
 
 		LightingBufferObject lighting = buildLightingBufferObject();
 		std::memcpy(dst, &lighting, sizeof(lighting));
-		lightingDataDirty_ = false;
 	}
 
 	size_t VkApp::addLight(const lightGraphics::LightSource& light)
 	{
+		assertOwnerThread("addLight");
 		LightSource normalizedLight = light;
 		if (glm::length(normalizedLight.direction) > 0.0f)
 		{
@@ -156,6 +156,7 @@ namespace lightGraphics
 
 	void VkApp::removeLight(size_t index)
 	{
+		assertOwnerThread("removeLight");
 		if (index >= lights_.size())
 		{
 			throw std::out_of_range(makeLightIndexMessage("removeLight", index, lights_.size()));
@@ -201,6 +202,7 @@ namespace lightGraphics
 
 	void VkApp::clearLights()
 	{
+		assertOwnerThread("clearLights");
 		const size_t removedCount = lights_.size();
 		for (std::uint32_t slot : lightSlotForIndex_)
 		{
@@ -343,7 +345,15 @@ namespace lightGraphics
 
 	void VkApp::markLightingDirty()
 	{
-		lightingDataDirty_ = true;
+		// Currently a no-op: updateLightingBuffer() always rebuilds the full
+		// lighting UBO unconditionally, since it's per-swapchain-image (not
+		// per-frame) and a naive single dirty flag would risk one image's buffer
+		// staying stale after a change while another image's already cleared it.
+		// Call sites are kept (rather than removed) because they correctly mark
+		// every point that actually changes lighting data — a real fix would need
+		// per-image-index dirty tracking (see the equivalent, correctly-done
+		// per-mesh pose-unchanged skip in VkAppRigged.cpp's updateRiggedInstances)
+		// rather than this single flag.
 	}
 
 	LightSource VkApp::lightForUpload(size_t index) const
@@ -446,6 +456,12 @@ namespace lightGraphics
 		const size_t lightCount = std::min(lights_.size(), lightGraphics::MaxForwardLights);
 		lighting.ambientAndCount = glm::vec4(ambientLight_, static_cast<float>(lightCount));
 
+		// Reset the shadow-matrix cache for this frame; entries stay at identity
+		// (never read, since recordShadowPass only trusts an index if the
+		// corresponding light actually cast a shadow further below) unless
+		// overwritten in the loop.
+		cachedShadowMatrices_.assign(lightCount, glm::mat4(1.0f));
+
 		for (size_t i = 0; i < lightCount; ++i)
 		{
 			const LightSource light = lightForUpload(i);
@@ -473,7 +489,9 @@ namespace lightGraphics
 			                                glm::clamp(light.shadowStrength, 0.0f, 1.0f));
 			if (canCastShadow)
 			{
-				lighting.shadowMatrices[i] = shadowMatrixForLight(i);
+				const glm::mat4 shadowMatrix = shadowMatrixForLight(i);
+				lighting.shadowMatrices[i] = shadowMatrix;
+				cachedShadowMatrices_[i] = shadowMatrix;
 			}
 		}
 

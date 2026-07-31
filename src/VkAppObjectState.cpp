@@ -88,6 +88,7 @@ namespace lightGraphics
 
 	ObjectHandle VkApp::addObject(lightGraphics::pObject *newObject)
 	{
+		assertOwnerThread("addObject");
 		if (!newObject)
 		{
 			throw std::invalid_argument("addObject: object pointer is null");
@@ -114,6 +115,7 @@ namespace lightGraphics
 
 	ObjectHandle VkApp::addObject(const lightGraphics::pObject& obj)
 	{
+		assertOwnerThread("addObject");
 		_objects_.push_back(obj);
 
 		// Initialize dirty tracking for new object
@@ -137,6 +139,7 @@ namespace lightGraphics
 						const glm::vec3& size, const glm::vec4& color,
 						const glm::quat& rotation, const std::string& name, float mass)
 	{
+		assertOwnerThread("addObject");
 		_objects_.emplace_back(type, position, size, color, rotation, name, mass);
 
 		// Initialize dirty tracking for new object
@@ -352,6 +355,7 @@ namespace lightGraphics
 
 	void VkApp::removeObject(size_t index)
 	{
+		assertOwnerThread("removeObject");
 		if (index >= _objects_.size())
 		{
 			throw std::out_of_range(makeObjectIndexMessage("removeObject", index, _objects_.size()));
@@ -418,6 +422,7 @@ namespace lightGraphics
 
 	void VkApp::clearObjects()
 	{
+		assertOwnerThread("clearObjects");
 		const size_t removedCount = _objects_.size();
 		for (std::uint32_t slot : objectSlotForIndex_)
 		{

@@ -145,6 +145,9 @@ namespace lightGraphics
 		VkImageUsageFlags usage, VkMemoryPropertyFlags properties, VkImage& image, VkDeviceMemory& imageMemory,
 		VkSampleCountFlagBits samples)
 	{
+		image = VK_NULL_HANDLE;
+		imageMemory = VK_NULL_HANDLE;
+
 		VkImageCreateInfo imageInfo{};
 		imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
 		imageInfo.imageType = VK_IMAGE_TYPE_2D;
@@ -165,20 +168,37 @@ namespace lightGraphics
 			throw std::runtime_error("failed to create image");
 		}
 
-		VkMemoryRequirements memReq{};
-		vkGetImageMemoryRequirements(device_, image, &memReq);
-
-		VkMemoryAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocInfo.allocationSize = memReq.size;
-		allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, properties);
-
-		if (vkAllocateMemory(device_, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS)
+		try
 		{
-			throw std::runtime_error("failed to allocate image memory");
-		}
+			VkMemoryRequirements memReq{};
+			vkGetImageMemoryRequirements(device_, image, &memReq);
 
-		vkBindImageMemory(device_, image, imageMemory, 0);
+			VkMemoryAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			allocInfo.allocationSize = memReq.size;
+			allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, properties);
+
+			if (vkAllocateMemory(device_, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to allocate image memory");
+			}
+
+			if (vkBindImageMemory(device_, image, imageMemory, 0) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to bind image memory");
+			}
+		}
+		catch (...)
+		{
+			if (imageMemory != VK_NULL_HANDLE)
+			{
+				vkFreeMemory(device_, imageMemory, nullptr);
+				imageMemory = VK_NULL_HANDLE;
+			}
+			vkDestroyImage(device_, image, nullptr);
+			image = VK_NULL_HANDLE;
+			throw;
+		}
 	}
 
 	VkImageView VkApp::createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectMask)
@@ -238,12 +258,12 @@ namespace lightGraphics
 
 		VkDescriptorPoolSize poolSize{};
 		poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		poolSize.descriptorCount = 256;
+		poolSize.descriptorCount = maxTextureDescriptorCount_;
 
 		VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 		poolInfo.poolSizeCount = 1;
 		poolInfo.pPoolSizes = &poolSize;
-		poolInfo.maxSets = 256;
+		poolInfo.maxSets = maxTextureDescriptorCount_;
 		poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
 		VK_CHECK(vkCreateDescriptorPool(device_, &poolInfo, nullptr, &textureDescriptorPool_));
@@ -299,60 +319,80 @@ namespace lightGraphics
 		vkUnmapMemory(device_, staging.memory);
 
 		auto texture = std::make_shared<Texture>();
-		createImage(
-			width,
-			height,
-			VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_TILING_OPTIMAL,
-			VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			texture->image,
-			texture->memory
-		);
-
-		transitionImageLayout(
-			texture->image,
-			VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
-		);
-		copyBufferToImage(staging.buffer, texture->image, width, height);
-		transitionImageLayout(
-			texture->image,
-			VK_FORMAT_R8G8B8A8_SRGB,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-		);
-
-		destroyBuffer(device_, staging);
-
-		texture->view = createImageView(texture->image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
-
-		VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-		samplerInfo.magFilter = VK_FILTER_LINEAR;
-		samplerInfo.minFilter = VK_FILTER_LINEAR;
-		samplerInfo.addressModeU = addressMode;
-		samplerInfo.addressModeV = addressMode;
-		samplerInfo.addressModeW = addressMode;
-		samplerInfo.anisotropyEnable = VK_FALSE;
-		samplerInfo.maxAnisotropy = 1.0f;
-		samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
-		samplerInfo.unnormalizedCoordinates = VK_FALSE;
-		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-
-		VK_CHECK(vkCreateSampler(device_, &samplerInfo, nullptr, &texture->sampler));
-
-		if (textureDescriptorPool_ == VK_NULL_HANDLE || textureSetLayout_ == VK_NULL_HANDLE)
+		try
 		{
-			throw std::runtime_error("Texture descriptor resources not initialized");
+			createImage(
+				width,
+				height,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+				VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				texture->image,
+				texture->memory
+			);
+
+			transitionImageLayout(
+				texture->image,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+			);
+			copyBufferToImage(staging.buffer, texture->image, width, height);
+			transitionImageLayout(
+				texture->image,
+				VK_FORMAT_R8G8B8A8_SRGB,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+			);
+
+			texture->view = createImageView(texture->image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+
+			VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+			samplerInfo.magFilter = VK_FILTER_LINEAR;
+			samplerInfo.minFilter = VK_FILTER_LINEAR;
+			samplerInfo.addressModeU = addressMode;
+			samplerInfo.addressModeV = addressMode;
+			samplerInfo.addressModeW = addressMode;
+			samplerInfo.anisotropyEnable = VK_FALSE;
+			samplerInfo.maxAnisotropy = 1.0f;
+			samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_WHITE;
+			samplerInfo.unnormalizedCoordinates = VK_FALSE;
+			samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+
+			VK_CHECK(vkCreateSampler(device_, &samplerInfo, nullptr, &texture->sampler));
+
+			if (textureDescriptorPool_ == VK_NULL_HANDLE || textureSetLayout_ == VK_NULL_HANDLE)
+			{
+				throw std::runtime_error("Texture descriptor resources not initialized");
+			}
+
+			VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+			allocInfo.descriptorPool = textureDescriptorPool_;
+			allocInfo.descriptorSetCount = 1;
+			allocInfo.pSetLayouts = &textureSetLayout_;
+
+			const VkResult allocResult =
+			    vkAllocateDescriptorSets(device_, &allocInfo, &texture->descriptor);
+			if (allocResult == VK_ERROR_OUT_OF_POOL_MEMORY ||
+			    allocResult == VK_ERROR_FRAGMENTED_POOL)
+			{
+				throw std::runtime_error(
+				    "Texture descriptor pool exhausted: this VkApp was configured for at "
+				    "most " + std::to_string(maxTextureDescriptorCount_) +
+				    " distinct textures (see setMaxTextureCount(), which must be called "
+				    "before init()).");
+			}
+			VK_CHECK(allocResult);
+		}
+		catch (...)
+		{
+			destroyTexture(*texture);
+			destroyBuffer(device_, staging);
+			throw;
 		}
 
-		VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-		allocInfo.descriptorPool = textureDescriptorPool_;
-		allocInfo.descriptorSetCount = 1;
-		allocInfo.pSetLayouts = &textureSetLayout_;
-
-		VK_CHECK(vkAllocateDescriptorSets(device_, &allocInfo, &texture->descriptor));
+		destroyBuffer(device_, staging);
 
 		VkDescriptorImageInfo imageInfo{};
 		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;

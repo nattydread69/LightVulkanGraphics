@@ -379,15 +379,17 @@ void RiggedObject::calculateBoneTransforms()
         glm::quat rotation = bone.bindRotation;
         glm::vec3 scale = bone.bindScale;
 
-        // Find animation channel for this bone
+        // Find animation channel for this bone. channelIndexByBoneName is built
+        // once per animation at load time (see FBXLoader::processAnimations), so
+        // this is a single map lookup instead of a linear scan over every channel,
+        // every bone, every frame.
         const AnimationChannel* channel = nullptr;
-        for (const auto& ch : animation.channels)
+        if (auto channelIt = animation.channelIndexByBoneName.find(bone.name);
+            channelIt != animation.channelIndexByBoneName.end() &&
+            channelIt->second >= 0 &&
+            channelIt->second < static_cast<int>(animation.channels.size()))
         {
-            if (ch.boneName == bone.name)
-            {
-                channel = &ch;
-                break;
-            }
+            channel = &animation.channels[static_cast<size_t>(channelIt->second)];
         }
 
         if (channel)

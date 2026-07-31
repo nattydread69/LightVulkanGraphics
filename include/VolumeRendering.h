@@ -192,25 +192,6 @@ struct VolumeRenderDescription
 	bool normalizeOpacityByStepLength = true;
 };
 
-enum class GraphicsCapabilityStatus
-{
-	AvailablePublicApi,
-	AvailableInternalOnly,
-	PartiallyAvailable,
-	Missing,
-	Unknown
-};
-
-struct GraphicsCapabilityRecord
-{
-	std::string capability;
-	GraphicsCapabilityStatus status = GraphicsCapabilityStatus::Unknown;
-	std::string existingFiles;
-	bool publicApiAvailable = false;
-	bool requiredForVolumeRendering = false;
-	std::string notes;
-};
-
 void validateMeshData(const MeshData& meshData);
 void validateScreenTextDescription(
 	const ScreenTextDescription& description);

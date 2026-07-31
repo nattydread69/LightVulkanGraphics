@@ -412,55 +412,78 @@ Texture3DHandle VkApp::createTexture3D(
 		throw std::runtime_error(
 			"Selected Vulkan device cannot linearly sample the requested Texture3D format");
 	}
-	VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-	imageInfo.imageType = VK_IMAGE_TYPE_3D;
-	imageInfo.extent = {description.width, description.height, description.depth};
-	imageInfo.mipLevels = 1;
-	imageInfo.arrayLayers = 1;
-	imageInfo.format = format;
-	imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-	imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-	imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
-	imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-	imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-	checkVk(vkCreateImage(device_, &imageInfo, nullptr, &texture.image),
-		"Failed to create Texture3D image");
-	VkMemoryRequirements requirements{};
-	vkGetImageMemoryRequirements(device_, texture.image, &requirements);
-	VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-	allocation.allocationSize = requirements.size;
-	allocation.memoryTypeIndex = findMemoryType(
-		requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-	checkVk(vkAllocateMemory(device_, &allocation, nullptr, &texture.memory),
-		"Failed to allocate Texture3D image memory");
-	checkVk(vkBindImageMemory(device_, texture.image, texture.memory, 0),
-		"Failed to bind Texture3D image memory");
-	transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_UNDEFINED,
-		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-	copyBufferToImage3D(staging.buffer, texture.image,
-		description.width, description.height, description.depth);
-	transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	try
+	{
+		VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+		imageInfo.imageType = VK_IMAGE_TYPE_3D;
+		imageInfo.extent = {description.width, description.height, description.depth};
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.format = format;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		checkVk(vkCreateImage(device_, &imageInfo, nullptr, &texture.image),
+			"Failed to create Texture3D image");
+		VkMemoryRequirements requirements{};
+		vkGetImageMemoryRequirements(device_, texture.image, &requirements);
+		VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+		allocation.allocationSize = requirements.size;
+		allocation.memoryTypeIndex = findMemoryType(
+			requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		checkVk(vkAllocateMemory(device_, &allocation, nullptr, &texture.memory),
+			"Failed to allocate Texture3D image memory");
+		checkVk(vkBindImageMemory(device_, texture.image, texture.memory, 0),
+			"Failed to bind Texture3D image memory");
+		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		copyBufferToImage3D(staging.buffer, texture.image,
+			description.width, description.height, description.depth);
+		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+		viewInfo.image = texture.image;
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+		viewInfo.format = format;
+		viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.layerCount = 1;
+		checkVk(vkCreateImageView(device_, &viewInfo, nullptr, &texture.view),
+			"Failed to create Texture3D image view");
+		VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+		samplerInfo.magFilter = VK_FILTER_LINEAR;
+		samplerInfo.minFilter = VK_FILTER_LINEAR;
+		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		samplerInfo.maxLod = 0.0f;
+		checkVk(vkCreateSampler(device_, &samplerInfo, nullptr, &texture.sampler),
+			"Failed to create Texture3D sampler");
+	}
+	catch (...)
+	{
+		// Only reset the handle fields, not the whole resource: `generation`
+		// must survive a failed creation unchanged, otherwise a later reuse
+		// of this slot could collide with a still-outstanding stale handle
+		// from a previous (successfully created and destroyed) texture at
+		// the same index.
+		destroyBuffer(device_, staging);
+		vkDestroySampler(device_, texture.sampler, nullptr);
+		vkDestroyImageView(device_, texture.view, nullptr);
+		vkDestroyImage(device_, texture.image, nullptr);
+		vkFreeMemory(device_, texture.memory, nullptr);
+		texture.image = VK_NULL_HANDLE;
+		texture.memory = VK_NULL_HANDLE;
+		texture.view = VK_NULL_HANDLE;
+		texture.sampler = VK_NULL_HANDLE;
+		texture.alive = false;
+		freeTextures3D_.push_back(index);
+		throw;
+	}
 	destroyBuffer(device_, staging);
-	VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-	viewInfo.image = texture.image;
-	viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
-	viewInfo.format = format;
-	viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	viewInfo.subresourceRange.levelCount = 1;
-	viewInfo.subresourceRange.layerCount = 1;
-	checkVk(vkCreateImageView(device_, &viewInfo, nullptr, &texture.view),
-		"Failed to create Texture3D image view");
-	VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-	samplerInfo.magFilter = VK_FILTER_LINEAR;
-	samplerInfo.minFilter = VK_FILTER_LINEAR;
-	samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-	samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-	samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-	samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-	samplerInfo.maxLod = 0.0f;
-	checkVk(vkCreateSampler(device_, &samplerInfo, nullptr, &texture.sampler),
-		"Failed to create Texture3D sampler");
 	texture.alive = true;
 	return {index, texture.generation};
 }

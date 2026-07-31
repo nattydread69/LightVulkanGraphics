@@ -17,6 +17,7 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "FBXLoader.h"
+#include "LightVulkanGraphicsLogging.h"
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
@@ -40,6 +41,14 @@ namespace lightGraphics
 
     namespace
     {
+        // Thresholds for the diagnostic-only bind-pose disagreement check in
+        // loadModel(). A single bone can legitimately sit a hair off due to floating
+        // point noise, so a per-bone threshold plus a minimum affected-bone count
+        // together avoid flagging that as a whole-model issue.
+        constexpr float kBindDeltaCorrectedBoneThreshold = 0.02f;
+        constexpr int kBindDeltaMinimumCorrectedBoneCount = 4;
+        constexpr float kBindDeltaMaximumThreshold = 0.05f;
+
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4267)
@@ -200,6 +209,13 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         return nullptr;
     }
 
+    // Everything below can throw (checkedSizeToInt on overflow, glm::inverse on a
+    // singular matrix producing non-finite results propagated later, etc.), but this
+    // function's documented contract is "return nullptr + set lastError on failure" —
+    // matching the early-return above for a bad file. Keep that contract uniform so
+    // callers (e.g. RiggedObject's constructor) never need to handle an exception.
+    try
+    {
     // Create the model
     auto model = std::make_shared<RiggedModel>();
     glm::mat4 rootTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
@@ -278,9 +294,9 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     }
 
     std::vector<bool> hasSkinningBindTransform(model->bones.size(), false);
-    for (const auto& mesh : model->meshes)
+    for (auto& mesh : model->meshes)
     {
-        for (const auto& meshBone : mesh.bones)
+        for (auto& meshBone : mesh.bones)
         {
             auto globalBoneIt = model->boneMapping.find(meshBone.name);
             if (globalBoneIt == model->boneMapping.end())
@@ -295,12 +311,17 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
                 continue;
             }
 
+            // Cache the name->index resolution on the mesh-local bone entry itself
+            // so the per-frame skinning path doesn't repeat this lookup.
+            meshBone.cachedGlobalBoneIndex = globalBoneIndex;
+
             // Preserve the first imported skin bind per bone. Some FBX files use
             // a skin bind basis that differs from node local transforms.
             if (!hasSkinningBindTransform[globalBoneIndex])
             {
                 model->bones[globalBoneIndex].skinningGlobalBindTransform =
                     mesh.globalBindTransform * glm::inverse(meshBone.offsetMatrix);
+                model->bones[globalBoneIndex].hasSkinBindTransform = true;
                 hasSkinningBindTransform[globalBoneIndex] = true;
             }
         }
@@ -354,16 +375,42 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         }
 
         maxSkinningBindDelta = std::max(maxSkinningBindDelta, bindDelta);
-        if (bindDelta > 0.02f)
+        if (bindDelta > kBindDeltaCorrectedBoneThreshold)
         {
             ++correctedBoneCount;
         }
     }
 
+    // Diagnostic-only: skinning itself no longer branches on this (see
+    // Bone::hasSkinBindTransform and buildRiggedFinalBoneMatrix in RiggedSkinning.h),
+    // but a large, widespread disagreement between the two bind-pose sources is worth
+    // surfacing — it usually means the FBX's default/rest node pose isn't actually the
+    // pose the skin was bound against (common when an artist leaves the rig slightly
+    // off pure bind pose at export time; each joint's small rotational discrepancy
+    // compounds down its chain, which is why this tends to show up as a small, near-
+    // constant offset near the skeleton root and much larger displacement at distant
+    // extremities like hands and feet).
     model->usesSkinningBindCorrection =
-        correctedBoneCount >= 4 && maxSkinningBindDelta > 0.05f;
+        correctedBoneCount >= kBindDeltaMinimumCorrectedBoneCount &&
+        maxSkinningBindDelta > kBindDeltaMaximumThreshold;
+    if (model->usesSkinningBindCorrection)
+    {
+        consoleErrorStream()
+            << "[FBXLoader] " << correctedBoneCount
+            << " bone(s) have a node-hierarchy bind pose that disagrees with their"
+               " skin-cluster bind pose by up to " << maxSkinningBindDelta
+            << " model units. Using the skin-cluster bind pose for those bones, as"
+               " it is the FBX file's authoritative skinning data."
+            << std::endl;
+    }
 
     return model;
+    }
+    catch (const std::exception& e)
+    {
+        lastError = std::string("Failed to load FBX file: ") + e.what();
+        return nullptr;
+    }
 }
 
 bool FBXLoader::isValidFBXFile(const std::string& filePath)
@@ -592,6 +639,8 @@ void FBXLoader::processAnimations(const aiScene* scene, RiggedModel& model)
             animChannel.boneName = channel->mNodeName.C_Str();
             processAnimationChannel(channel, animChannel);
 
+            anim.channelIndexByBoneName[animChannel.boneName] =
+                checkedSizeToInt(anim.channels.size(), "Animation channel count");
             anim.channels.push_back(animChannel);
         }
 
@@ -667,6 +716,19 @@ void FBXLoader::buildBoneHierarchy(aiNode* node, int parentIndex, RiggedModel& m
         // Keep the first occurrence of a named node. FBX scenes can contain duplicate
         // names (for example an outer scene root and an inner armature root), and
         // rewriting parentage here can create self-cycles such as RootNode -> RootNode.
+        // The "RootNode" case is a known, tolerated instance of this (Assimp commonly
+        // wraps an FBX's real root in a synthetic node of the same name); anything else
+        // is a genuine name collision between two different subtrees, which this
+        // name-keyed bone/animation lookup architecture cannot fully disambiguate — the
+        // second subtree's children are silently reparented onto the first occurrence.
+        if (nodeName != "RootNode")
+        {
+            consoleErrorStream() << "[FBXLoader] Duplicate node name '" << nodeName
+                << "' encountered while building the bone hierarchy; the second "
+                   "occurrence's children are being merged onto the first. This can "
+                   "mis-skin the mesh if the two nodes are actually different bones."
+                << std::endl;
+        }
     }
 
     for (unsigned int i = 0; i < node->mNumChildren; i++)
@@ -692,8 +754,26 @@ void FBXLoader::calculateBoneTransform(const std::string& boneName, float animat
                                      const Animation& animation, const std::vector<Bone>& bones,
                                      const std::map<std::string, int>& boneMapping, glm::mat4& transform)
 {
-    (void) bones;
-    (void) boneMapping;
+    // Default to this bone's bind pose (not identity) so a bone with no animation
+    // channel still holds still at its authored bind pose rather than snapping to
+    // the mesh origin, matching RiggedObject::calculateBoneTransforms().
+    glm::vec3 position(0.0f);
+    glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+    glm::vec3 scale(1.0f);
+    int parentIndex = -1;
+    int boneIndex = -1;
+
+    auto boneIt = boneMapping.find(boneName);
+    if (boneIt != boneMapping.end() && boneIt->second >= 0 &&
+        boneIt->second < static_cast<int>(bones.size()))
+    {
+        boneIndex = boneIt->second;
+        const Bone& bone = bones[boneIndex];
+        position = bone.bindPosition;
+        rotation = bone.bindRotation;
+        scale = bone.bindScale;
+        parentIndex = bone.parentIndex;
+    }
 
     // Find the animation channel for this bone
     const AnimationChannel* channel = nullptr;
@@ -706,23 +786,42 @@ void FBXLoader::calculateBoneTransform(const std::string& boneName, float animat
         }
     }
 
-    if (!channel)
+    if (channel)
     {
-        transform = glm::mat4(1.0f);
-        return;
+        if (!channel->positionKeys.empty())
+        {
+            position = interpolatePosition(animationTime, channel->positionKeys);
+        }
+        if (!channel->rotationKeys.empty())
+        {
+            rotation = interpolateRotation(animationTime, channel->rotationKeys);
+        }
+        if (!channel->scaleKeys.empty())
+        {
+            scale = interpolateScale(animationTime, channel->scaleKeys);
+        }
     }
 
-    // Interpolate position, rotation, and scale
-    glm::vec3 position = interpolatePosition(animationTime, channel->positionKeys);
-    glm::quat rotation = interpolateRotation(animationTime, channel->rotationKeys);
-    glm::vec3 scale = interpolateScale(animationTime, channel->scaleKeys);
-
-    // Build transformation matrix
-    glm::mat4 translation = glm::translate(glm::mat4(1.0f), position);
+    // Build the local transformation matrix
+    glm::mat4 translationMatrix = glm::translate(glm::mat4(1.0f), position);
     glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
     glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), scale);
+    glm::mat4 localTransform = translationMatrix * rotationMatrix * scaleMatrix;
 
-    transform = translation * rotationMatrix * scaleMatrix;
+    // Compose with the parent's already-computed world transform. `bones` is stored
+    // parent-before-child (buildBoneHierarchy appends each node before recursing into
+    // its children), and calculateBoneTransforms() visits model.bones in that same
+    // ascending order, so the parent's `finalTransform` (this function's `transform`
+    // output on an earlier call) is guaranteed valid by the time a child is processed.
+    if (parentIndex >= 0 && parentIndex < boneIndex &&
+        parentIndex < static_cast<int>(bones.size()))
+    {
+        transform = bones[parentIndex].finalTransform * localTransform;
+    }
+    else
+    {
+        transform = localTransform;
+    }
 }
 
 glm::vec3 FBXLoader::interpolatePosition(float animationTime, const std::vector<AnimationKeyframe>& keys)

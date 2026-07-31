@@ -406,6 +406,12 @@ namespace lightGraphics
 
 	void VkApp::createOriginalSpherePipeline()
 	{
+		if (graphicsPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, graphicsPipeline_, nullptr);
+			graphicsPipeline_ = VK_NULL_HANDLE;
+		}
+
 		// --- Shaders
 		auto vsCode = readFile(findShaderPath("instanced_sphere.vert.spv"));
 		auto fsCode = readFile(findShaderPath("instanced_sphere.frag.spv"));
@@ -721,9 +727,14 @@ namespace lightGraphics
 
 	void VkApp::createWireframePipeline()
 	{
+		if (wireframePipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, wireframePipeline_, nullptr);
+			wireframePipeline_ = VK_NULL_HANDLE;
+		}
+
 		if (!supportsNonSolidFill_)
 		{
-			wireframePipeline_ = VK_NULL_HANDLE;
 			return;
 		}
 
@@ -818,6 +829,12 @@ namespace lightGraphics
 
 	void VkApp::createUnlitPipeline()
 	{
+		if (unlitPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, unlitPipeline_, nullptr);
+			unlitPipeline_ = VK_NULL_HANDLE;
+		}
+
 		// --- Shaders
 		auto vsCode = readFile(findShaderPath("unlit.vert.spv"));
 		auto fsCode = readFile(findShaderPath("unlit.frag.spv"));
@@ -909,6 +926,12 @@ namespace lightGraphics
 
 	void VkApp::createLinePipeline()
 	{
+		if (linePipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, linePipeline_, nullptr);
+			linePipeline_ = VK_NULL_HANDLE;
+		}
+
 		// --- Shaders
 		auto vsCode = readFile(findShaderPath("unlit.vert.spv"));  // Use unlit shader for lines
 		auto fsCode = readFile(findShaderPath("unlit.frag.spv"));

@@ -575,6 +575,7 @@ namespace lightGraphics
 
 	size_t VkApp::addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject)
 	{
+		assertOwnerThread("addRiggedObject");
 		if (!riggedObject)
 		{
 			throw std::runtime_error("addRiggedObject: rigged object pointer is null");
@@ -800,6 +801,7 @@ namespace lightGraphics
 
 	void VkApp::removeRiggedObject(size_t index)
 	{
+		assertOwnerThread("removeRiggedObject");
 		if (index >= riggedInstances_.size())
 		{
 			throw std::out_of_range(makeObjectIndexMessage("removeRiggedObject", index, riggedInstances_.size()));
@@ -930,6 +932,15 @@ namespace lightGraphics
 
 			const auto& boneTransforms = riggedObject->getBoneTransforms();
 			const auto skinningCorrectionMode = instance.skinningCorrectionMode;
+			// If this instance's pose hasn't changed since last frame (e.g. a held
+			// static pose), every mesh's skinnedVertices from last frame is still
+			// correct — skip the O(vertices) skin-blend loop below entirely and just
+			// re-upload the unchanged data (upload itself always runs: with multiple
+			// frames in flight, a currently-targeted GPU buffer may still need this
+			// frame's copy even though the CPU-side data itself didn't change).
+			const bool poseUnchanged =
+			    instance.hasLastBoneTransforms &&
+			    instance.lastBoneTransforms == boneTransforms;
 			for (auto& meshData : instance.meshes)
 			{
 				const RiggedMesh* mesh = meshData.mesh;
@@ -941,10 +952,15 @@ namespace lightGraphics
 				if (meshData.skinnedVertices.size() != mesh->vertices.size())
 				{
 					meshData.skinnedVertices.resize(mesh->vertices.size());
+					meshData.hasValidSkinnedVertices = false;
 				}
 
+				const bool canSkipSkinning = poseUnchanged && meshData.hasValidSkinnedVertices;
+				if (!canSkipSkinning)
+				{
 				bool hasSkinning = !mesh->bones.empty() && !boneTransforms.empty();
-				std::vector<glm::mat4> finalBoneMatrices;
+				std::vector<glm::mat4>& finalBoneMatrices = meshData.finalBoneMatrices;
+				finalBoneMatrices.clear();
 				if (hasSkinning)
 				{
 					finalBoneMatrices.resize(mesh->bones.size(), glm::mat4(1.0f));
@@ -1036,6 +1052,9 @@ namespace lightGraphics
 					logMessage(LogLevel::Debug, message.str());
 				}
 
+				meshData.hasValidSkinnedVertices = true;
+				} // !canSkipSkinning
+
 				detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[frameIndex];
 				detail::Buffer& frameVertexUploadBuffer = meshData.vertexUploadBuffers[frameIndex];
 				void* frameVertexMapped = meshData.vertexUploadMapped[frameIndex];
@@ -1058,6 +1077,9 @@ namespace lightGraphics
 					recordUploadCopy(frameVertexUploadBuffer, frameVertexBuffer, vbSize);
 				}
 			}
+
+			instance.lastBoneTransforms = boneTransforms;
+			instance.hasLastBoneTransforms = true;
 
 			Instance riggedInstance{};
 			if (instance.transformMatrixOverride)

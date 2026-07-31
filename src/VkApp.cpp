@@ -34,6 +34,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cassert>
 #include <cstring>
 #include <cstdlib>
 #include <cctype>
@@ -368,7 +369,8 @@ namespace lightGraphics
 #define VK_CHECK(expr) LVG_VK_CHECK(expr)
 
 	VkApp::VkApp()
-	    : sceneGraph_(std::make_unique<SceneGraph>(*this))
+	    : ownerThreadId_(std::this_thread::get_id())
+	    , sceneGraph_(std::make_unique<SceneGraph>(*this))
 	{
 		LightSource defaultLight;
 		defaultLight.type = LightType::Directional;
@@ -386,6 +388,19 @@ namespace lightGraphics
 	VkApp::~VkApp()
 	{
 		cleanup();
+	}
+
+	void VkApp::assertOwnerThread(const char* where) const
+	{
+		if (std::this_thread::get_id() != ownerThreadId_)
+		{
+			consoleErrorStream() << "[VkApp] " << where
+			    << " was called from a different thread than the one that constructed "
+			       "this VkApp. VkApp is not thread-safe: all scene mutation and "
+			       "rendering must happen on a single thread." << std::endl;
+			assert(false && "VkApp method called from a non-owning thread; see the "
+			                 "class doc comment in VkApp.h");
+		}
 	}
 
 	void VkApp::logMessage(LogLevel level, const std::string& message) const
@@ -918,6 +933,8 @@ namespace lightGraphics
 
 	void VkApp::drawFrame()
 	{
+		assertOwnerThread("drawFrame");
+
 		// Basic sanity checks to catch mismatches early
 		if (commandBuffers_.size() != swapChainImages_.size())
 		{
@@ -2245,6 +2262,7 @@ namespace lightGraphics
 
 	void VkApp::markObjectDirty(size_t index)
 	{
+		assertOwnerThread("markObjectDirty (via an object setter)");
 		if (index >= dirtyObjects_.size())
 		{
 			dirtyObjects_.resize(_objects_.size(), false);
@@ -2710,7 +2728,13 @@ namespace lightGraphics
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
 
 			detail::ShadowPushConstants push{};
-			push.lightViewProj = shadowMatrixForLight(lightIndex);
+			// Reuse the matrix buildLightingBufferObject() already computed this
+			// frame (it always runs earlier in the same frame — see drawFrame())
+			// instead of recomputing it here too. Falls back to a direct call if
+			// the cache is unexpectedly empty/undersized for this light.
+			push.lightViewProj = lightIndex < cachedShadowMatrices_.size()
+			    ? cachedShadowMatrices_[lightIndex]
+			    : shadowMatrixForLight(lightIndex);
 			vkCmdPushConstants(cmd,
 			                   shadowPipelineLayout_,
 			                   VK_SHADER_STAGE_VERTEX_BIT,

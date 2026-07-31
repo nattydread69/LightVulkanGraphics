@@ -10,6 +10,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -637,6 +638,140 @@ namespace
 				relativePath.string());
 		}
 	}
+
+	// FBXLoader::loadModel's documented contract is "return nullptr + set lastError
+	// on failure, never throw" (see FBXLoader.cpp:182 onward). These three cover the
+	// negative paths: a nonexistent file, a file that isn't FBX/any known format at
+	// all, and a real FBX file truncated mid-stream. All three currently fail via
+	// Assimp's own import-failure early return rather than the try/catch added around
+	// the rest of loadModel, but the observable contract under test — never throw,
+	// always leave a populated lastError — is the same either way.
+	void testFBXLoaderRejectsMissingFile()
+	{
+		lightGraphics::FBXLoader loader;
+		auto model = loader.loadModel("/nonexistent/path/does_not_exist.fbx");
+		require(model == nullptr, "loadModel should return nullptr for a missing file");
+		require(!loader.getLastError().empty(),
+		        "loadModel should set lastError for a missing file");
+	}
+
+	void testFBXLoaderRejectsMalformedFile()
+	{
+		const std::filesystem::path scratchPath =
+		    std::filesystem::temp_directory_path() / "lvg_malformed_test.fbx";
+		{
+			std::ofstream out(scratchPath, std::ios::binary);
+			out << "this is not an FBX file, just garbage bytes 0123456789";
+		}
+
+		lightGraphics::FBXLoader loader;
+		auto model = loader.loadModel(scratchPath.string());
+		require(model == nullptr, "loadModel should return nullptr for a malformed file");
+		require(!loader.getLastError().empty(),
+		        "loadModel should set lastError for a malformed file");
+
+		std::filesystem::remove(scratchPath);
+	}
+
+	void testFBXLoaderRejectsTruncatedFile()
+	{
+#ifdef LVG_SOURCE_DIR
+		const std::filesystem::path modelPath =
+		    std::filesystem::path(LVG_SOURCE_DIR) / "assets" / "Worker.fbx";
+#else
+		const std::filesystem::path modelPath =
+		    std::filesystem::path("assets") / "Worker.fbx";
+#endif
+		const std::filesystem::path scratchPath =
+		    std::filesystem::temp_directory_path() / "lvg_truncated_test.fbx";
+		{
+			std::ifstream in(modelPath, std::ios::binary);
+			std::vector<char> prefix(512);
+			in.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+			const std::streamsize bytesRead = in.gcount();
+
+			std::ofstream out(scratchPath, std::ios::binary);
+			out.write(prefix.data(), bytesRead);
+		}
+
+		lightGraphics::FBXLoader loader;
+		auto model = loader.loadModel(scratchPath.string());
+		require(model == nullptr, "loadModel should return nullptr for a truncated file");
+		require(!loader.getLastError().empty(),
+		        "loadModel should set lastError for a truncated file");
+
+		std::filesystem::remove(scratchPath);
+	}
+
+	// Pins today's observed load-time invariants for assets/Worker.fbx so a future
+	// change to the FBX loading/skinning pipeline (exporter update, dependency bump,
+	// or a regression in FBXLoader.cpp) is caught even if it stays within the looser
+	// plausibility bounds checked by tests/worker_skinning_sanity.cpp. Two things this
+	// doubles as regression coverage for, using the real asset rather than a synthetic
+	// fixture (none of Worker.fbx's meshes have >4 raw bone influences per vertex or
+	// zero bones, so those specific edge cases aren't exercised here — see the note
+	// at the end of this function):
+	//  - Duplicate node names (Worker.fbx's RootNode->RootNode case, see
+	//    FBXLoader::buildBoneHierarchy) must not introduce a self-parenting cycle.
+	//  - Per-vertex bone weight normalization (FBXLoader::processBones) must keep
+	//    every weighted vertex's four weights summing to ~1.0.
+	void testFBXLoaderWorkerAssetInvariants()
+	{
+#ifdef LVG_SOURCE_DIR
+		const std::filesystem::path modelPath =
+		    std::filesystem::path(LVG_SOURCE_DIR) / "assets" / "Worker.fbx";
+#else
+		const std::filesystem::path modelPath =
+		    std::filesystem::path("assets") / "Worker.fbx";
+#endif
+		lightGraphics::FBXLoader loader;
+		auto model = loader.loadModel(modelPath.string());
+		require(model != nullptr, "failed to load Worker.fbx: " + loader.getLastError());
+
+		require(model->bones.size() == 85,
+		        "Worker.fbx global bone count changed from the pinned value of 85");
+		require(model->meshes.size() == 12,
+		        "Worker.fbx mesh count changed from the pinned value of 12");
+		require(model->animations.size() == 24,
+		        "Worker.fbx animation count changed from the pinned value of 24");
+
+		int skinBindCount = 0;
+		for (const auto& bone : model->bones)
+		{
+			if (bone.hasSkinBindTransform)
+			{
+				++skinBindCount;
+			}
+		}
+		require(skinBindCount == 62,
+		        "count of bones with an authoritative skin-cluster bind pose changed "
+		        "from the pinned value of 62 — this drives which per-bone skinning "
+		        "formula RiggedSkinning.h::buildRiggedFinalBoneMatrix uses");
+
+		for (size_t i = 0; i < model->bones.size(); ++i)
+		{
+			require(model->bones[i].parentIndex != static_cast<int>(i),
+			        "bone " + model->bones[i].name +
+			            " is its own parent (duplicate-node-name handling regressed "
+			            "into a self-cycle)");
+		}
+
+		for (const auto& mesh : model->meshes)
+		{
+			require(!mesh.bones.empty(), "Worker.fbx mesh unexpectedly has zero bones");
+			for (const auto& vertex : mesh.vertices)
+			{
+				const float weightSum = vertex.boneWeights.x + vertex.boneWeights.y +
+				                         vertex.boneWeights.z + vertex.boneWeights.w;
+				if (weightSum > 1.0e-6f)
+				{
+					require(nearlyEqual(weightSum, 1.0f, 1.0e-3f),
+					        "skinned vertex bone weights should sum to ~1.0 after "
+					        "top-4 truncation and renormalization");
+				}
+			}
+		}
+	}
 }
 
 int main()
@@ -659,6 +794,10 @@ int main()
 		testMaterialClippingAndVolumeValidation();
 		testVolumeOpacityAndRenderOrdering();
 		testVolumeTwoReportsAndDocumentation();
+		testFBXLoaderRejectsMissingFile();
+		testFBXLoaderRejectsMalformedFile();
+		testFBXLoaderRejectsTruncatedFile();
+		testFBXLoaderWorkerAssetInvariants();
 	}
 	catch (const std::exception& error)
 	{

@@ -34,6 +34,7 @@
 #include <optional>
 #include <stdexcept>
 #include <array>
+#include <thread>
 #include <tuple>
 #include <string>
 #include <unordered_map>
@@ -143,9 +144,22 @@ namespace lightGraphics
 	using LightHandle = ResourceHandle<LightTag>;
 	using RiggedObjectHandle = ResourceHandle<RiggedObjectTag>;
 
+	// VkApp is not thread-safe. Scene mutation (addObject/removeObject, addLight/
+	// removeLight, setObjectPosition and friends, addRiggedObject, etc.) and the
+	// render loop (run()/drawFrame()) all read and write the same object/light/
+	// rigged-instance containers with no synchronization, and must all happen on
+	// the single thread that constructed this VkApp. A subset of the most
+	// structurally risky entry points (container resize via add/remove, and the
+	// render path itself) assert this in debug builds and log a warning in all
+	// builds; the per-field setters funnel through the same check via
+	// markObjectDirty(). This is a best-effort diagnostic net, not exhaustive
+	// coverage or real synchronization — if you need to mutate the scene from a
+	// worker thread, hand the data to the owning thread instead.
 	class VkApp
 	{
 	public:
+		// ==================== CORE LIFECYCLE & CONFIGURATION ====================
+
 		enum class LogLevel
 		{
 			Error,
@@ -167,8 +181,16 @@ namespace lightGraphics
 		void setLogCallback(LogCallback callback) { logCallback_ = callback; }
 		void setManageGlfwLifecycle(bool manage) { manageGlfwLifecycle_ = manage; }
 		bool getManageGlfwLifecycle() const { return manageGlfwLifecycle_; }
+		// Caps how many distinct textures/solid-color textures can exist at once
+		// (each consumes one descriptor set from a fixed-size pool sized at init()
+		// time). Must be called before init(); has no effect afterward. Raise this
+		// if a scene with many distinct textures throws "texture descriptor pool
+		// exhausted" from createTextureFromPixels/createSolidColorTexture.
+		void setMaxTextureCount(uint32_t count) { maxTextureDescriptorCount_ = count; }
+		uint32_t getMaxTextureCount() const { return maxTextureDescriptorCount_; }
 
-		// Object management
+		// ==================== OBJECTS ====================
+
 		// The raw pointer overload copies the object; the caller keeps ownership.
 		ObjectHandle addObject(lightGraphics::pObject *newObject);
 		ObjectHandle addObject(const lightGraphics::pObject& obj);
@@ -201,6 +223,9 @@ namespace lightGraphics
 		bool isRiggedObjectHandleValid(RiggedObjectHandle handle) const noexcept;
 		size_t resolveRiggedObjectHandle(RiggedObjectHandle handle) const;
 		RiggedObjectHandle riggedObjectHandleAt(size_t index) const;
+		// ==================== LIGHTS ====================
+
+		// Main-thread-only — see the VkApp class doc comment.
 		size_t addLight(const lightGraphics::LightSource& light);
 		LightHandle addLightHandle(const lightGraphics::LightSource& light);
 		size_t addDirectionalLight(const glm::vec3& direction,
@@ -254,7 +279,10 @@ namespace lightGraphics
 		SceneGraph& sceneGraph();
 		const SceneGraph& sceneGraph() const;
 
-		// Object property update methods for physics simulation
+		// ==================== OBJECT PROPERTY UPDATES ====================
+
+		// Object property update methods for physics simulation. Main-thread-only —
+		// see the VkApp class doc comment.
 		void setObjectPosition(size_t index, const glm::vec3& position);
 		void setObjectScale(size_t index, const glm::vec3& scale);
 		void setObjectRotation(size_t index, const glm::quat& rotation);
@@ -269,6 +297,8 @@ namespace lightGraphics
 
 		// Physics update callback
 		void setUpdateCallback(std::function<void(float)> callback);
+
+		// ==================== CAMERA ====================
 
 		// Camera control API
 		void setKeyboardCameraEnabled(bool enabled);
@@ -303,6 +333,8 @@ namespace lightGraphics
 		void panOrbitTarget(float deltaRight, float deltaUp);
 		void dollyOrbitRadius(float deltaRadius);
 		void setOrbitSensitivities(float rotate, float pan, float dolly);
+
+		// ==================== GEOMETRY HELPERS ====================
 
 		// Cylinder connection helpers
 		glm::quat rotationFromDirection(const glm::vec3& direction, const glm::vec3& up = glm::vec3(0, 1, 0));
@@ -344,6 +376,8 @@ namespace lightGraphics
 		void setRenderMode(RenderMode mode);
 		VkPipeline getCurrentPipeline();
 
+		// ==================== CUSTOM MESH / MATERIAL / TEXT RESOURCES ====================
+
 		// Client-defined mesh, material, texture, and volume resources.
 		MeshHandle createStaticMesh(const MeshData& meshData);
 		MeshHandle createDynamicMesh(
@@ -376,6 +410,8 @@ namespace lightGraphics
 		void setScreenTextVisible(ScreenTextHandle handle, bool visible);
 		void destroyScreenText(ScreenTextHandle handle);
 
+		// ==================== VOLUME RENDERING ====================
+
 		Texture3DHandle createTexture3D(
 			const Texture3DDescription& description,
 			const void* data,
@@ -404,8 +440,14 @@ namespace lightGraphics
 		GLFWwindow* getWindowPointer() const { return window_; }
 
 	private:
+		// See the class doc comment above: the thread that constructs this VkApp is
+		// its only valid caller for scene mutation and rendering.
+		std::thread::id ownerThreadId_;
+		void assertOwnerThread(const char* where) const;
+
 		bool debugOutput = false;
 		LogCallback logCallback_;
+		uint32_t maxTextureDescriptorCount_ = 256;
 		// Window
 		GLFWwindow* window_ = nullptr;
 		bool manageGlfwLifecycle_ = true;
@@ -559,7 +601,13 @@ namespace lightGraphics
 		std::vector<std::uint32_t> freeLightSlots_;
 		std::vector<std::uint32_t> lightSlotForIndex_;
 		glm::vec3 ambientLight_{0.1f, 0.1f, 0.15f};
-		bool lightingDataDirty_ = true;
+		// Populated by buildLightingBufferObject() (called once per frame, before
+		// recordShadowPass() in the same frame — see drawFrame()) so recordShadowPass
+		// can reuse each shadow-casting light's view-projection matrix instead of
+		// recomputing it a second time. Indexed by light index, valid only for
+		// entries a shadow-casting light actually wrote this frame; recordShadowPass
+		// falls back to a direct call if an index isn't cached (e.g. out of range).
+		mutable std::vector<glm::mat4> cachedShadowMatrices_;
 		// Double-buffered (per-frame) instance buffers to avoid stalls
 		detail::Buffer instanceBufs_[MAX_FRAMES_IN_FLIGHT]{};
 		void* instanceBufferMappedPerFrame_[MAX_FRAMES_IN_FLIGHT]{}; // Persistently mapped per frame
@@ -573,6 +621,14 @@ namespace lightGraphics
 			void* vertexUploadMapped[MAX_FRAMES_IN_FLIGHT]{};
 			detail::Buffer indexBuffer;
 			std::vector<detail::Vertex> skinnedVertices;
+			// Persistent scratch buffer for updateRiggedInstances() so it isn't
+			// reallocated every mesh, every instance, every frame.
+			std::vector<glm::mat4> finalBoneMatrices;
+			// True once skinnedVertices holds a real skinned pose (as opposed to
+			// being freshly resized/default-constructed) — lets updateRiggedInstances()
+			// know it's safe to reuse skinnedVertices as-is when the instance's pose
+			// hasn't changed since last frame, skipping the per-vertex skin blend.
+			bool hasValidSkinnedVertices = false;
 			uint32_t indexCount = 0;
 			std::shared_ptr<detail::Texture> texture;
 		};
@@ -588,6 +644,11 @@ namespace lightGraphics
 			int activeAnimationIndex = -1;
 			bool animationLoop = true;
 			std::vector<RiggedMeshRenderData> meshes;
+			// Last frame's bone transforms, so updateRiggedInstances() can skip
+			// re-skinning entirely when a character's pose hasn't changed (e.g. a
+			// held static pose) instead of re-blending every vertex every frame.
+			std::vector<glm::mat4> lastBoneTransforms;
+			bool hasLastBoneTransforms = false;
 		};
 		std::vector<RiggedInstanceRenderData> riggedInstances_;
 		std::vector<detail::HandleSlot> riggedObjectSlots_;

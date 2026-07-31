@@ -51,19 +51,40 @@ namespace lightGraphics::detail
 	                                            RiggedSkinningBindCorrectionMode correctionMode =
 	                                                RiggedSkinningBindCorrectionMode::OffsetOnly)
 	{
-		auto it = model.boneMapping.find(meshBone.name);
-		if (it == model.boneMapping.end() ||
-		    it->second < 0 ||
-		    it->second >= static_cast<int>(boneTransforms.size()) ||
-		    it->second >= static_cast<int>(model.bones.size()))
+		// meshBone.cachedGlobalBoneIndex is resolved once at load time (see
+		// FBXLoader::loadModel) so this per-frame skinning hot path doesn't repeat
+		// a string-keyed boneMapping lookup for every bone, every mesh, every
+		// instance, every frame. Fall back to the map lookup if it's unset (e.g. a
+		// RiggedMesh assembled by something other than FBXLoader::loadModel).
+		int globalBoneIndex = meshBone.cachedGlobalBoneIndex;
+		if (globalBoneIndex < 0)
+		{
+			auto it = model.boneMapping.find(meshBone.name);
+			if (it != model.boneMapping.end())
+			{
+				globalBoneIndex = it->second;
+			}
+		}
+		if (globalBoneIndex < 0 ||
+		    globalBoneIndex >= static_cast<int>(boneTransforms.size()) ||
+		    globalBoneIndex >= static_cast<int>(model.bones.size()))
 		{
 			return glm::mat4(1.0f);
 		}
 
-		const glm::mat4 globalBone = boneTransforms[it->second];
-		const Bone& globalBoneBind = model.bones[it->second];
+		const glm::mat4 globalBone = boneTransforms[globalBoneIndex];
+		const Bone& globalBoneBind = model.bones[globalBoneIndex];
 
-		if (model.usesSkinningBindCorrection &&
+		// Prefer the skin cluster's own bind pose (meshBone.offsetMatrix) whenever
+		// this bone actually has skin-cluster data: it is the FBX file's
+		// authoritative "mesh space to bone space" bind transform, straight from
+		// the exporter, and doesn't depend on reconstructing a bind pose by walking
+		// node-local transforms — which can disagree with the true bind pose (see
+		// the diagnostic in FBXLoader::loadModel). Bones with no skin-cluster data
+		// (e.g. IK/helper joints nothing is weighted to) fall through to the
+		// node-hierarchy-derived transform below, which is the only bind-pose
+		// source available for them.
+		if (globalBoneBind.hasSkinBindTransform &&
 		    boneTransforms.size() == model.bones.size())
 		{
 			glm::mat4 finalMatrix =

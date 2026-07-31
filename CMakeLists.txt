@@ -177,7 +177,6 @@ endif()
 if (WIN32 AND NOT ASSIMP_ROOT)
 	# Common Windows build-from-source locations (build dir alongside source dir)
 	set(_assimp_win_candidates
-		"C:/mycode/assimp/build"
 		"C:/dev/assimp/build"
 		"C:/assimp/build"
 		"C:/libs/assimp/build"
@@ -338,182 +337,42 @@ if (NOT GLSLC)
 	message(FATAL_ERROR "glslc not found. Ensure Vulkan SDK is installed and glslc is on PATH.")
 endif()
 
-# Original sphere shaders
-set(VS_SRC ${SHADER_DIR}/instanced_sphere.vert)
-set(FS_SRC ${SHADER_DIR}/instanced_sphere.frag)
-set(VS_SPV ${SPV_DIR}/instanced_sphere.vert.spv)
-set(FS_SPV ${SPV_DIR}/instanced_sphere.frag.spv)
+# lvg_compile_shader(<stage> <shader-basename-without-extension-or-stage-suffix> <out-var>)
+# Compiles ${SHADER_DIR}/<name>.<stage> to ${SPV_DIR}/<name>.<stage>.spv and appends the
+# output path to ALL_SHADER_SPVS (used to build the Shaders target's DEPENDS list).
+function(lvg_compile_shader stage name)
+	set(_src ${SHADER_DIR}/${name}.${stage})
+	set(_spv ${SPV_DIR}/${name}.${stage}.spv)
+	add_custom_command(
+		OUTPUT ${_spv}
+		COMMAND ${GLSLC} -fshader-stage=${stage} -o ${_spv} ${_src}
+		DEPENDS ${_src}
+		COMMENT "Compiling ${_src}"
+	)
+	set(ALL_SHADER_SPVS ${ALL_SHADER_SPVS} ${_spv} PARENT_SCOPE)
+endfunction()
 
-# Flexible shape shaders
-set(FLEX_VS_SRC ${SHADER_DIR}/flexible_shape.vert)
-set(FLEX_FS_SRC ${SHADER_DIR}/flexible_shape.frag)
-set(FLEX_VS_SPV ${SPV_DIR}/flexible_shape.vert.spv)
-set(FLEX_FS_SPV ${SPV_DIR}/flexible_shape.frag.spv)
-
-# Rigged mesh shaders
-set(RIGGED_VS_SRC ${SHADER_DIR}/rigged_mesh.vert)
-set(RIGGED_FS_SRC ${SHADER_DIR}/rigged_mesh.frag)
-set(RIGGED_VS_SPV ${SPV_DIR}/rigged_mesh.vert.spv)
-set(RIGGED_FS_SPV ${SPV_DIR}/rigged_mesh.frag.spv)
-
-# Wireframe shaders
-set(WIRE_VS_SRC ${SHADER_DIR}/wireframe.vert)
-set(WIRE_FS_SRC ${SHADER_DIR}/wireframe.frag)
-set(WIRE_VS_SPV ${SPV_DIR}/wireframe.vert.spv)
-set(WIRE_FS_SPV ${SPV_DIR}/wireframe.frag.spv)
-
-# Unlit shaders
-set(UNLIT_VS_SRC ${SHADER_DIR}/unlit.vert)
-set(UNLIT_FS_SRC ${SHADER_DIR}/unlit.frag)
-set(UNLIT_VS_SPV ${SPV_DIR}/unlit.vert.spv)
-set(UNLIT_FS_SPV ${SPV_DIR}/unlit.frag.spv)
-
-# Shadow depth shader
-set(SHADOW_VS_SRC ${SHADER_DIR}/shadow_depth.vert)
-set(SHADOW_VS_SPV ${SPV_DIR}/shadow_depth.vert.spv)
-
-# Custom mesh and volume shaders
-set(CUSTOM_MESH_VS_SPV ${SPV_DIR}/custom_mesh.vert.spv)
-set(CUSTOM_MESH_FS_SPV ${SPV_DIR}/custom_mesh.frag.spv)
-set(CUSTOM_MESH_UNLIT_FS_SPV ${SPV_DIR}/custom_mesh_unlit.frag.spv)
-set(SCREEN_TEXT_VS_SPV ${SPV_DIR}/screen_text.vert.spv)
-set(SCREEN_TEXT_FS_SPV ${SPV_DIR}/screen_text.frag.spv)
-set(VOLUME_VS_SPV ${SPV_DIR}/volume_raymarch.vert.spv)
-set(VOLUME_FS_SPV ${SPV_DIR}/volume_raymarch.frag.spv)
-
-# Compile original sphere shaders
-add_custom_command(
-	OUTPUT ${VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${VS_SPV} ${VS_SRC}
-	DEPENDS ${VS_SRC}
-	COMMENT "Compiling ${VS_SRC}"
-)
-add_custom_command(
-	OUTPUT ${FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${FS_SPV} ${FS_SRC}
-	DEPENDS ${FS_SRC}
-	COMMENT "Compiling ${FS_SRC}"
-)
-
-# Compile flexible shape shaders
-add_custom_command(
-	OUTPUT ${FLEX_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${FLEX_VS_SPV} ${FLEX_VS_SRC}
-	DEPENDS ${FLEX_VS_SRC}
-	COMMENT "Compiling ${FLEX_VS_SRC}"
-)
-add_custom_command(
-	OUTPUT ${FLEX_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${FLEX_FS_SPV} ${FLEX_FS_SRC}
-	DEPENDS ${FLEX_FS_SRC}
-	COMMENT "Compiling ${FLEX_FS_SRC}"
-)
-
-# Compile rigged mesh shaders
-add_custom_command(
-	OUTPUT ${RIGGED_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${RIGGED_VS_SPV} ${RIGGED_VS_SRC}
-	DEPENDS ${RIGGED_VS_SRC}
-	COMMENT "Compiling ${RIGGED_VS_SRC}"
-)
-add_custom_command(
-	OUTPUT ${RIGGED_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${RIGGED_FS_SPV} ${RIGGED_FS_SRC}
-	DEPENDS ${RIGGED_FS_SRC}
-	COMMENT "Compiling ${RIGGED_FS_SRC}"
-)
-
-# Compile wireframe shaders
-add_custom_command(
-	OUTPUT ${WIRE_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${WIRE_VS_SPV} ${WIRE_VS_SRC}
-	DEPENDS ${WIRE_VS_SRC}
-	COMMENT "Compiling ${WIRE_VS_SRC}"
-)
-add_custom_command(
-	OUTPUT ${WIRE_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${WIRE_FS_SPV} ${WIRE_FS_SRC}
-	DEPENDS ${WIRE_FS_SRC}
-	COMMENT "Compiling ${WIRE_FS_SRC}"
-)
-
-# Compile unlit shaders
-add_custom_command(
-	OUTPUT ${UNLIT_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${UNLIT_VS_SPV} ${UNLIT_VS_SRC}
-	DEPENDS ${UNLIT_VS_SRC}
-	COMMENT "Compiling ${UNLIT_VS_SRC}"
-)
-add_custom_command(
-	OUTPUT ${UNLIT_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${UNLIT_FS_SPV} ${UNLIT_FS_SRC}
-	DEPENDS ${UNLIT_FS_SRC}
-	COMMENT "Compiling ${UNLIT_FS_SRC}"
-)
-
-# Compile shadow depth shader
-add_custom_command(
-	OUTPUT ${SHADOW_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${SHADOW_VS_SPV} ${SHADOW_VS_SRC}
-	DEPENDS ${SHADOW_VS_SRC}
-	COMMENT "Compiling ${SHADOW_VS_SRC}"
-)
-
-add_custom_command(
-	OUTPUT ${CUSTOM_MESH_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${CUSTOM_MESH_VS_SPV} ${SHADER_DIR}/custom_mesh.vert
-	DEPENDS ${SHADER_DIR}/custom_mesh.vert
-	COMMENT "Compiling custom mesh vertex shader"
-)
-add_custom_command(
-	OUTPUT ${CUSTOM_MESH_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${CUSTOM_MESH_FS_SPV} ${SHADER_DIR}/custom_mesh.frag
-	DEPENDS ${SHADER_DIR}/custom_mesh.frag
-	COMMENT "Compiling custom mesh fragment shader"
-)
-add_custom_command(
-	OUTPUT ${CUSTOM_MESH_UNLIT_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${CUSTOM_MESH_UNLIT_FS_SPV} ${SHADER_DIR}/custom_mesh_unlit.frag
-	DEPENDS ${SHADER_DIR}/custom_mesh_unlit.frag
-	COMMENT "Compiling unlit custom mesh fragment shader"
-)
-add_custom_command(
-	OUTPUT ${SCREEN_TEXT_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${SCREEN_TEXT_VS_SPV} ${SHADER_DIR}/screen_text.vert
-	DEPENDS ${SHADER_DIR}/screen_text.vert
-	COMMENT "Compiling screen text vertex shader"
-)
-add_custom_command(
-	OUTPUT ${SCREEN_TEXT_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${SCREEN_TEXT_FS_SPV} ${SHADER_DIR}/screen_text.frag
-	DEPENDS ${SHADER_DIR}/screen_text.frag
-	COMMENT "Compiling screen text fragment shader"
-)
-add_custom_command(
-	OUTPUT ${VOLUME_VS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=vert -o ${VOLUME_VS_SPV} ${SHADER_DIR}/volume_raymarch.vert
-	DEPENDS ${SHADER_DIR}/volume_raymarch.vert
-	COMMENT "Compiling volume raymarch vertex shader"
-)
-add_custom_command(
-	OUTPUT ${VOLUME_FS_SPV}
-	COMMAND ${GLSLC} -fshader-stage=frag -o ${VOLUME_FS_SPV} ${SHADER_DIR}/volume_raymarch.frag
-	DEPENDS ${SHADER_DIR}/volume_raymarch.frag
-	COMMENT "Compiling volume raymarch fragment shader"
-)
+lvg_compile_shader(vert instanced_sphere)
+lvg_compile_shader(frag instanced_sphere)
+lvg_compile_shader(vert flexible_shape)
+lvg_compile_shader(frag flexible_shape)
+lvg_compile_shader(vert rigged_mesh)
+lvg_compile_shader(frag rigged_mesh)
+lvg_compile_shader(vert wireframe)
+lvg_compile_shader(frag wireframe)
+lvg_compile_shader(vert unlit)
+lvg_compile_shader(frag unlit)
+lvg_compile_shader(vert shadow_depth)
+lvg_compile_shader(vert custom_mesh)
+lvg_compile_shader(frag custom_mesh)
+lvg_compile_shader(frag custom_mesh_unlit)
+lvg_compile_shader(vert screen_text)
+lvg_compile_shader(frag screen_text)
+lvg_compile_shader(vert volume_raymarch)
+lvg_compile_shader(frag volume_raymarch)
 
 # Create shader target that depends on all compiled shaders
-add_custom_target(Shaders ALL DEPENDS
-	${VS_SPV} ${FS_SPV}
-	${FLEX_VS_SPV} ${FLEX_FS_SPV}
-	${RIGGED_VS_SPV} ${RIGGED_FS_SPV}
-	${WIRE_VS_SPV} ${WIRE_FS_SPV}
-	${UNLIT_VS_SPV} ${UNLIT_FS_SPV}
-	${SHADOW_VS_SPV}
-	${CUSTOM_MESH_VS_SPV} ${CUSTOM_MESH_FS_SPV} ${CUSTOM_MESH_UNLIT_FS_SPV}
-	${SCREEN_TEXT_VS_SPV} ${SCREEN_TEXT_FS_SPV}
-	${VOLUME_VS_SPV} ${VOLUME_FS_SPV}
-)
+add_custom_target(Shaders ALL DEPENDS ${ALL_SHADER_SPVS})
 
 # Ensure shaders build whenever the lib builds (so install will have them)
 add_dependencies(${PROJECT_NAME} Shaders)

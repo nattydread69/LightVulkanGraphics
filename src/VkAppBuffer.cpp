@@ -155,6 +155,9 @@ namespace lightGraphics
 	void VkApp::createBufferRaw(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
 								VkBuffer& buffer, VkDeviceMemory& memory)
 	{
+		buffer = VK_NULL_HANDLE;
+		memory = VK_NULL_HANDLE;
+
 		VkBufferCreateInfo bufferInfo{};
 		bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		bufferInfo.size = size;
@@ -166,20 +169,37 @@ namespace lightGraphics
 			throw std::runtime_error("failed to create buffer");
 		}
 
-		VkMemoryRequirements memReq{};
-		vkGetBufferMemoryRequirements(device_, buffer, &memReq);
-
-		VkMemoryAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		allocInfo.allocationSize = memReq.size;
-		allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, properties);
-
-		if (vkAllocateMemory(device_, &allocInfo, nullptr, &memory) != VK_SUCCESS)
+		try
 		{
-			throw std::runtime_error("failed to allocate buffer memory");
-		}
+			VkMemoryRequirements memReq{};
+			vkGetBufferMemoryRequirements(device_, buffer, &memReq);
 
-		vkBindBufferMemory(device_, buffer, memory, 0);
+			VkMemoryAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+			allocInfo.allocationSize = memReq.size;
+			allocInfo.memoryTypeIndex = findMemoryType(memReq.memoryTypeBits, properties);
+
+			if (vkAllocateMemory(device_, &allocInfo, nullptr, &memory) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to allocate buffer memory");
+			}
+
+			if (vkBindBufferMemory(device_, buffer, memory, 0) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to bind buffer memory");
+			}
+		}
+		catch (...)
+		{
+			if (memory != VK_NULL_HANDLE)
+			{
+				vkFreeMemory(device_, memory, nullptr);
+				memory = VK_NULL_HANDLE;
+			}
+			vkDestroyBuffer(device_, buffer, nullptr);
+			buffer = VK_NULL_HANDLE;
+			throw;
+		}
 	}
 
 
