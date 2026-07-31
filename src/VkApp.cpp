@@ -76,6 +76,7 @@ namespace lightGraphics
 	static_assert(offsetof(Vertex, uv) == sizeof(glm::vec3) * 2, "Vertex UV layout changed");
 	static_assert(sizeof(Vertex) == sizeof(float) * 8, "Vertex size must stay tightly packed");
 
+
 	static_assert(std::is_standard_layout_v<Instance>, "Instance must use a stable standard layout");
 	static_assert(offsetof(Instance, model) == 0, "Instance model matrix must start at offset 0");
 	static_assert(offsetof(Instance, color) == sizeof(glm::mat4), "Instance color offset changed");
@@ -2703,7 +2704,7 @@ namespace lightGraphics
 					continue;
 				}
 				const std::string name = _objects_[i].getName();
-				if (name.rfind("CollisionCapsule", 0) == 0)
+				if (isDebugOverlayObjectName(name))
 				{
 					continue;
 				}
@@ -2971,10 +2972,10 @@ namespace lightGraphics
 				int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType >= 0 && shapeType < 8)
 				{
-					// Objects with this name prefix are treated as debug overlays and
-					// rendered in a second pass with depth testing disabled.
+					// Objects matching isDebugOverlayObjectName are treated as debug
+					// overlays and rendered in a second pass with depth testing disabled.
 					std::string name = _objects_[i].getName();
-					bool isOverlay = (name.rfind("CollisionCapsule", 0) == 0);
+					bool isOverlay = isDebugOverlayObjectName(name);
 					if (isOverlay)
 					{
 						overlayShapeGroups[shapeType].push_back(i);

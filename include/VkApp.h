@@ -38,6 +38,7 @@
 #include <tuple>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <glm/glm.hpp>
 
@@ -215,6 +216,17 @@ namespace lightGraphics
 		bool isObjectHandleValid(ObjectHandle handle) const noexcept;
 		size_t resolveObjectHandle(ObjectHandle handle) const;
 		ObjectHandle objectHandleAt(size_t index) const;
+		// Registers a substring that marks an object as a debug overlay: such
+		// objects are excluded from shadow casting and drawn in a second pass
+		// with the depth buffer cleared first, so they stay visible on top of
+		// whatever they're marking regardless of true depth (e.g. a small
+		// marker embedded inside a mesh) instead of being hidden by normal
+		// depth testing. Matching is substring-based against pObject::name
+		// (see addObject); callers own their own naming convention and
+		// register whatever substrings they use -- this class has no
+		// built-in list. Registering the same substring twice is harmless.
+		void addDebugOverlayNameSubstring(const std::string& substring);
+
 		size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject);
 		RiggedObjectHandle addRiggedObjectHandle(const std::shared_ptr<RiggedObject>& riggedObject);
 		void removeRiggedObject(size_t index);
@@ -996,6 +1008,10 @@ namespace lightGraphics
 		std::vector<std::uint32_t> freeObjectSlots_;
 		std::vector<std::uint32_t> objectSlotForIndex_;
 		std::unique_ptr<SceneGraph> sceneGraph_;
+
+		// See addDebugOverlayNameSubstring().
+		std::unordered_set<std::string> debugOverlayNameSubstrings_;
+		bool isDebugOverlayObjectName(const std::string& name) const;
 
 		// Physics update callback
 		std::function<void(float)> updateCallback_;

@@ -86,6 +86,23 @@ namespace lightGraphics
 		return slots[index].currentIndex;
 	}
 
+	void VkApp::addDebugOverlayNameSubstring(const std::string& substring)
+	{
+		debugOverlayNameSubstrings_.insert(substring);
+	}
+
+	bool VkApp::isDebugOverlayObjectName(const std::string& name) const
+	{
+		for (const std::string& substring : debugOverlayNameSubstrings_)
+		{
+			if (name.find(substring) != std::string::npos)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 	ObjectHandle VkApp::addObject(lightGraphics::pObject *newObject)
 	{
 		assertOwnerThread("addObject");
