@@ -476,15 +476,22 @@ namespace lightGraphics
 			return;
 		}
 
-		// Ensure buffer for current frame is large enough
+		// Every frame-in-flight buffer must be resized here, not just
+		// currentFrame_'s: recordCommandBuffer is driven by the swapchain's
+		// imageIndex/currentFrame_ on whichever frame comes next, which may
+		// not be this one, and this function's dirty flag is cleared below
+		// so a later call may not revisit an under-sized sibling buffer
+		// before it's used -- leaving it undersized causes an out-of-bounds
+		// write (and a segfault) the next time that frame is drawn.
 		VkDeviceSize instBytes = sizeof(Instance) * _objects_.size();
-		ensureInstanceBufferSizeForFrame(static_cast<uint32_t>(currentFrame_), instBytes);
-
-		// Copy updated data to the persistently mapped buffer for this frame
-		void* mapped = instanceBufferMappedPerFrame_[currentFrame_];
-		if (mapped)
+		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 		{
-			std::memcpy(mapped, instanceDataCache_.data(), (size_t)instBytes);
+			ensureInstanceBufferSizeForFrame(frameIndex, instBytes);
+			void* mapped = instanceBufferMappedPerFrame_[frameIndex];
+			if (mapped)
+			{
+				std::memcpy(mapped, instanceDataCache_.data(), (size_t)instBytes);
+			}
 		}
 
 		instanceDataDirty_ = false;
@@ -541,12 +548,18 @@ namespace lightGraphics
 						instanceBuf);
 		}
 
-		// Copy data to buffer for current frame
-		ensureInstanceBufferSizeForFrame(static_cast<uint32_t>(currentFrame_), instBytes);
-		void* ptr = instanceBufferMappedPerFrame_[currentFrame_];
-		if (ptr)
+		// Resize and populate every frame-in-flight buffer, not just
+		// currentFrame_'s -- see the identical comment in
+		// updateInstanceDataOptimized() for why leaving a sibling frame's
+		// buffer undersized here leads to an out-of-bounds write later.
+		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 		{
-			std::memcpy(ptr, instances.data(), (size_t)instBytes);
+			ensureInstanceBufferSizeForFrame(frameIndex, instBytes);
+			void* ptr = instanceBufferMappedPerFrame_[frameIndex];
+			if (ptr)
+			{
+				std::memcpy(ptr, instances.data(), (size_t)instBytes);
+			}
 		}
 	}
 }
