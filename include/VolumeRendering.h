@@ -64,6 +64,14 @@ struct ScreenTextDescription
 	std::size_t maximumCharacters = 256;
 	bool visible = true;
 	float sortKey = 1000.0f;
+	// A dark copy of the glyphs is drawn offset behind the real text so it
+	// stays legible over bright/busy backgrounds, without needing a
+	// texture-atlas font. Capacity is always reserved for this second pass
+	// (see EASY_FONT_TEXT_PASSES in ScreenText.cpp) so toggling it on later
+	// never requires recreating the mesh.
+	bool shadowEnabled = true;
+	glm::vec4 shadowColor{0.0f, 0.0f, 0.0f, 0.75f};
+	glm::vec2 shadowOffsetPixels{1.5f, 1.5f};
 };
 
 enum class CullMode

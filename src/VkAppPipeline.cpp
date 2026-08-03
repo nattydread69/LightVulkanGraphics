@@ -602,12 +602,16 @@ namespace lightGraphics
 		gp.renderPass=renderPass_; gp.subpass=0;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapePipeline_));
 
-		// Overlay debug drawing gets a fresh depth buffer later in the frame:
-		// it renders through scene meshes but still self-occludes correctly.
+		// Overlay debug drawing (e.g. collision capsules, mass shapes) must
+		// always be visible on top of the scene mesh -- depth testing is off
+		// entirely here rather than relying on a mid-frame depth clear, the
+		// same choice ScreenText's material makes for the same reason. This
+		// gives up self-occlusion between overlapping overlay shapes (later
+		// submission order always wins), an acceptable trade for a debug
+		// overlay that must never be hidden by the mesh it's inspecting.
 		VkPipelineDepthStencilStateCreateInfo dsOverlay = ds;
-		dsOverlay.depthTestEnable = VK_TRUE;
-		dsOverlay.depthWriteEnable = VK_TRUE;
-		dsOverlay.depthCompareOp = VK_COMPARE_OP_LESS;
+		dsOverlay.depthTestEnable = VK_FALSE;
+		dsOverlay.depthWriteEnable = VK_FALSE;
 		gp.pDepthStencilState = &dsOverlay;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapeOverlayPipeline_));
 

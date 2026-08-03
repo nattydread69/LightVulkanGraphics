@@ -471,7 +471,13 @@ namespace
 		require(mesh.vertices.size() % 4 == 0 &&
 			mesh.indices.size() % 6 == 0,
 			"screen text should contain indexed quads");
-		require(nearlyEqual(mesh.vertices.front().color, description.color),
+		// The shadow pass (enabled by default) is emitted first so the real
+		// glyphs composite on top of it -- see buildScreenTextMesh -- so the
+		// first vertex belongs to the shadow copy and the last belongs to
+		// the real-colored pass.
+		require(nearlyEqual(mesh.vertices.front().color, description.shadowColor),
+			"screen text shadow pass should use its shadow color");
+		require(nearlyEqual(mesh.vertices.back().color, description.color),
 			"screen text should preserve its requested color");
 		for (const lightGraphics::MeshVertex& vertex : mesh.vertices)
 		{

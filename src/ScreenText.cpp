@@ -31,6 +31,10 @@ namespace
 constexpr std::size_t EASY_FONT_BYTES_PER_CHARACTER = 270;
 constexpr std::size_t EASY_FONT_VERTICES_PER_CHARACTER = 20;
 constexpr std::size_t EASY_FONT_INDICES_PER_CHARACTER = 30;
+// Mesh capacity is always sized for a shadow copy of the glyphs plus the
+// real ones (see ScreenTextDescription::shadowEnabled), so toggling the
+// shadow on later never requires recreating the mesh.
+constexpr std::size_t EASY_FONT_TEXT_PASSES = 2;
 
 struct EasyFontVertex
 {
@@ -128,6 +132,15 @@ validateScreenTextDescription(const ScreenTextDescription& description)
 	{
 		throw std::invalid_argument("Screen text sortKey must be finite");
 	}
+	if (!finite(description.shadowColor))
+	{
+		throw std::invalid_argument("Screen text shadow color must be finite");
+	}
+	if (!finite(description.shadowOffsetPixels))
+	{
+		throw std::invalid_argument(
+			"Screen text shadow offset must be finite");
+	}
 	if (description.maximumCharacters == 0)
 	{
 		throw std::invalid_argument(
@@ -140,10 +153,10 @@ validateScreenTextDescription(const ScreenTextDescription& description)
 	}
 	(void)checkedCapacity(
 		description.maximumCharacters,
-		EASY_FONT_VERTICES_PER_CHARACTER);
+		EASY_FONT_VERTICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES);
 	(void)checkedCapacity(
 		description.maximumCharacters,
-		EASY_FONT_INDICES_PER_CHARACTER);
+		EASY_FONT_INDICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES);
 	std::size_t const scratchCapacity = checkedCapacity(
 		description.maximumCharacters,
 		EASY_FONT_BYTES_PER_CHARACTER);
@@ -193,15 +206,13 @@ buildScreenTextMesh(
 		return hiddenTextMesh();
 	}
 
-	MeshData mesh;
-	mesh.vertices.reserve(static_cast<std::size_t>(quadCount) * 4);
-	mesh.indices.reserve(static_cast<std::size_t>(quadCount) * 6);
-	float const width = static_cast<float>(framebufferWidth);
-	float const height = static_cast<float>(framebufferHeight);
+	// Decode stb_easy_font's quads once into local (unscaled, unpositioned)
+	// corners, then stamp them out once per pass below -- one pass for the
+	// shadow copy (if enabled) and one for the real glyphs, so the geometry
+	// doesn't need to be re-decoded per pass.
+	std::vector<glm::vec2> localCorners(static_cast<std::size_t>(quadCount) * 4);
 	for (int quad = 0; quad < quadCount; ++quad)
 	{
-		std::uint32_t const base =
-			static_cast<std::uint32_t>(mesh.vertices.size());
 		for (int corner = 0; corner < 4; ++corner)
 		{
 			EasyFontVertex source;
@@ -209,22 +220,56 @@ buildScreenTextMesh(
 				static_cast<std::size_t>(quad * 4 + corner) *
 				sizeof(EasyFontVertex);
 			std::memcpy(&source, scratch.data() + offset, sizeof(source));
-			float const pixelX = description.positionPixels.x +
-				source.x * description.scale;
-			float const pixelY = description.positionPixels.y +
-				source.y * description.scale;
-			MeshVertex vertex;
-			vertex.position = glm::vec3(
-				2.0f * pixelX / width - 1.0f,
-				2.0f * pixelY / height - 1.0f,
-				0.0f);
-			vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
-			vertex.color = description.color;
-			mesh.vertices.push_back(vertex);
+			localCorners[static_cast<std::size_t>(quad * 4 + corner)] =
+				glm::vec2(source.x, source.y);
 		}
-		mesh.indices.insert(
-			mesh.indices.end(),
-			{base, base + 1, base + 2, base, base + 2, base + 3});
+	}
+
+	bool const withShadow = description.shadowEnabled;
+	std::size_t const passCount = withShadow ? 2 : 1;
+
+	MeshData mesh;
+	mesh.vertices.reserve(static_cast<std::size_t>(quadCount) * 4 * passCount);
+	mesh.indices.reserve(static_cast<std::size_t>(quadCount) * 6 * passCount);
+	float const width = static_cast<float>(framebufferWidth);
+	float const height = static_cast<float>(framebufferHeight);
+
+	// The shadow pass is emitted first so the real glyphs composite on top
+	// of it -- both are alpha blended with depth testing off, so draw order
+	// within this one mesh is the paint order.
+	for (std::size_t pass = 0; pass < passCount; ++pass)
+	{
+		bool const isShadowPass = withShadow && pass == 0;
+		glm::vec2 const passOffset =
+			isShadowPass ? description.shadowOffsetPixels : glm::vec2(0.0f);
+		glm::vec4 const passColor =
+			isShadowPass ? description.shadowColor : description.color;
+
+		for (int quad = 0; quad < quadCount; ++quad)
+		{
+			std::uint32_t const base =
+				static_cast<std::uint32_t>(mesh.vertices.size());
+			for (int corner = 0; corner < 4; ++corner)
+			{
+				glm::vec2 const local =
+					localCorners[static_cast<std::size_t>(quad * 4 + corner)];
+				float const pixelX = description.positionPixels.x +
+					passOffset.x + local.x * description.scale;
+				float const pixelY = description.positionPixels.y +
+					passOffset.y + local.y * description.scale;
+				MeshVertex vertex;
+				vertex.position = glm::vec3(
+					2.0f * pixelX / width - 1.0f,
+					2.0f * pixelY / height - 1.0f,
+					0.0f);
+				vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+				vertex.color = passColor;
+				mesh.vertices.push_back(vertex);
+			}
+			mesh.indices.insert(
+				mesh.indices.end(),
+				{base, base + 1, base + 2, base, base + 2, base + 3});
+		}
 	}
 	return mesh;
 }
@@ -276,12 +321,12 @@ VkApp::createScreenText(const ScreenTextDescription& description)
 	std::size_t const maximumVertices = std::max<std::size_t>(
 		checkedCapacity(
 			description.maximumCharacters,
-			EASY_FONT_VERTICES_PER_CHARACTER),
+			EASY_FONT_VERTICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 		3);
 	std::size_t const maximumIndices = std::max<std::size_t>(
 		checkedCapacity(
 			description.maximumCharacters,
-			EASY_FONT_INDICES_PER_CHARACTER),
+			EASY_FONT_INDICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 		3);
 	MeshHandle mesh = createDynamicMesh(maximumVertices, maximumIndices);
 
@@ -335,12 +380,12 @@ VkApp::updateScreenText(
 		std::size_t const maximumVertices = std::max<std::size_t>(
 			checkedCapacity(
 				description.maximumCharacters,
-				EASY_FONT_VERTICES_PER_CHARACTER),
+				EASY_FONT_VERTICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 			3);
 		std::size_t const maximumIndices = std::max<std::size_t>(
 			checkedCapacity(
 				description.maximumCharacters,
-				EASY_FONT_INDICES_PER_CHARACTER),
+				EASY_FONT_INDICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 			3);
 		MeshHandle const replacement =
 			createDynamicMesh(maximumVertices, maximumIndices);

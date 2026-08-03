@@ -3127,21 +3127,11 @@ namespace lightGraphics
 			// No rigged pipeline available; skip rendering rigged meshes
 		}
 
-		// Draw overlay debug shapes (e.g. collision capsules) through scene meshes.
-		// Clear only depth so overlays are not hidden by the skinned mesh, then
-		// depth-test the overlays against each other during this pass.
+		// Draw overlay debug shapes (e.g. collision capsules) through scene
+		// meshes -- flexibleShapeOverlayPipeline_ has depth testing off, so
+		// no depth manipulation is needed here to guarantee they're visible.
 		if (indexed && useInstancing && hasOverlayObjects && flexibleShapeOverlayPipeline_ != VK_NULL_HANDLE)
 		{
-			VkClearAttachment depthClear{};
-			depthClear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
-			depthClear.clearValue.depthStencil = {1.0f, 0};
-			VkClearRect clearRect{};
-			clearRect.rect.offset = {0, 0};
-			clearRect.rect.extent = swapChainExtent_;
-			clearRect.baseArrayLayer = 0;
-			clearRect.layerCount = 1;
-			vkCmdClearAttachments(cmd, 1, &depthClear, 1, &clearRect);
-
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeOverlayPipeline_);
 
 			if (!descriptorSets_.empty())
