@@ -156,66 +156,13 @@ vec3 calculateLighting(vec3 normal, vec3 viewDir, vec3 baseColor, float roughnes
     return result;
 }
 
-vec3 getShapeSpecificColor(vec3 baseColor, vec2 texCoord, float shapeType)
-{
-    vec3 color = baseColor;
-    
-    // Add shape-specific visual effects
-    if (shapeType < 0.5) // Sphere
-    {
-        // Add subtle checkerboard pattern
-        vec2 grid = floor(texCoord * 8.0);
-        float checker = mod(grid.x + grid.y, 2.0);
-        color = mix(color, color * 0.8, checker * 0.3);
-    }
-    else if (shapeType < 1.5) // Cube/Hexahedral
-    {
-        // Add edge highlighting
-        vec2 edge = abs(fract(texCoord * 4.0) - 0.5);
-        float edgeFactor = smoothstep(0.0, 0.1, min(edge.x, edge.y));
-        color = mix(color * 1.2, color, edgeFactor);
-    }
-    else if (shapeType < 2.5) // Cone
-    {
-        // Add radial gradient
-        float radial = length(texCoord - 0.5);
-        color = mix(color * 1.1, color, radial);
-    }
-    else if (shapeType < 3.5) // Cylinder
-    {
-        // Add vertical stripes
-        float stripe = sin(texCoord.x * 3.14159 * 4.0) * 0.1 + 0.9;
-        color *= stripe;
-    }
-    else if (shapeType < 4.5) // Capsule
-    {
-        // Add subtle gradient
-        float gradient = texCoord.y;
-        color = mix(color * 0.8, color, gradient);
-    }
-    else if (shapeType < 5.5) // Arrow
-    {
-        // Add directional gradient
-        float gradient = texCoord.y;
-        color = mix(color * 0.9, color * 1.1, gradient);
-    }
-    else // Line
-    {
-        // Keep lines simple
-        color = baseColor;
-    }
-    
-    return color;
-}
-
-void main() 
+void main()
 {
     vec3 cameraPosWS = vec3(inverse(U.uView)[3]);
     vec3 viewDir = normalize(cameraPosWS - vPosWS);
-    
-    // Get shape-specific color
-    vec3 baseColor = getShapeSpecificColor(vColor, vTexCoord, vShapeType);
-    
+
+    vec3 baseColor = vColor;
+
     // Get shape-specific roughness
     float roughness;
     if (vShapeType < 0.5) roughness = sphereRoughness;
