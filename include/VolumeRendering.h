@@ -72,6 +72,14 @@ struct ScreenTextDescription
 	bool shadowEnabled = true;
 	glm::vec4 shadowColor{0.0f, 0.0f, 0.0f, 0.75f};
 	glm::vec2 shadowOffsetPixels{1.5f, 1.5f};
+	// An optional solid rectangle drawn behind the glyphs (e.g. so a status
+	// panel stays readable over busy 3D content). Sized to the text's own
+	// pixel bounding box plus backgroundPaddingPixels on every side.
+	// Capacity for it is always reserved (see ScreenText.cpp) so toggling it
+	// on later never requires recreating the mesh.
+	bool backgroundEnabled = false;
+	glm::vec4 backgroundColor{0.0f, 0.0f, 0.0f, 0.6f};
+	float backgroundPaddingPixels = 6.0f;
 };
 
 enum class CullMode

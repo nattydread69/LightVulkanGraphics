@@ -35,6 +35,11 @@ constexpr std::size_t EASY_FONT_INDICES_PER_CHARACTER = 30;
 // real ones (see ScreenTextDescription::shadowEnabled), so toggling the
 // shadow on later never requires recreating the mesh.
 constexpr std::size_t EASY_FONT_TEXT_PASSES = 2;
+// Capacity for the optional background rectangle (see
+// ScreenTextDescription::backgroundEnabled) is likewise always reserved, one
+// quad's worth, so toggling it on later never requires recreating the mesh.
+constexpr std::size_t BACKGROUND_QUAD_VERTICES = 4;
+constexpr std::size_t BACKGROUND_QUAD_INDICES = 6;
 
 struct EasyFontVertex
 {
@@ -141,6 +146,17 @@ validateScreenTextDescription(const ScreenTextDescription& description)
 		throw std::invalid_argument(
 			"Screen text shadow offset must be finite");
 	}
+	if (!finite(description.backgroundColor))
+	{
+		throw std::invalid_argument(
+			"Screen text background color must be finite");
+	}
+	if (!std::isfinite(description.backgroundPaddingPixels) ||
+		description.backgroundPaddingPixels < 0.0f)
+	{
+		throw std::invalid_argument(
+			"Screen text background padding must be finite and non-negative");
+	}
 	if (description.maximumCharacters == 0)
 	{
 		throw std::invalid_argument(
@@ -229,12 +245,64 @@ buildScreenTextMesh(
 	std::size_t const passCount = withShadow ? 2 : 1;
 
 	MeshData mesh;
-	mesh.vertices.reserve(static_cast<std::size_t>(quadCount) * 4 * passCount);
-	mesh.indices.reserve(static_cast<std::size_t>(quadCount) * 6 * passCount);
+	mesh.vertices.reserve(
+		BACKGROUND_QUAD_VERTICES + static_cast<std::size_t>(quadCount) * 4 * passCount);
+	mesh.indices.reserve(
+		BACKGROUND_QUAD_INDICES + static_cast<std::size_t>(quadCount) * 6 * passCount);
 	float const width = static_cast<float>(framebufferWidth);
 	float const height = static_cast<float>(framebufferHeight);
 
-	// The shadow pass is emitted first so the real glyphs composite on top
+	// The background rectangle is emitted first (if enabled) so the shadow
+	// and real glyphs composite on top of it -- everything here is alpha
+	// blended with depth testing off, so draw order within this one mesh is
+	// the paint order. It's sized to the text's own pixel bounding box
+	// (across every pass, so it covers the shadow offset too) plus padding.
+	if (description.backgroundEnabled)
+	{
+		glm::vec2 pixelMin(std::numeric_limits<float>::max());
+		glm::vec2 pixelMax(std::numeric_limits<float>::lowest());
+		for (std::size_t pass = 0; pass < passCount; ++pass)
+		{
+			bool const isShadowPassForBounds = withShadow && pass == 0;
+			glm::vec2 const boundsOffset = isShadowPassForBounds
+				? description.shadowOffsetPixels
+				: glm::vec2(0.0f);
+			for (const glm::vec2& local : localCorners)
+			{
+				glm::vec2 const pixel =
+					description.positionPixels + boundsOffset + local * description.scale;
+				pixelMin = glm::min(pixelMin, pixel);
+				pixelMax = glm::max(pixelMax, pixel);
+			}
+		}
+		glm::vec2 const padding(description.backgroundPaddingPixels);
+		pixelMin -= padding;
+		pixelMax += padding;
+
+		std::uint32_t const base = static_cast<std::uint32_t>(mesh.vertices.size());
+		glm::vec2 const corners[4] = {
+			{pixelMin.x, pixelMin.y},
+			{pixelMax.x, pixelMin.y},
+			{pixelMax.x, pixelMax.y},
+			{pixelMin.x, pixelMax.y},
+		};
+		for (const glm::vec2& corner : corners)
+		{
+			MeshVertex vertex;
+			vertex.position = glm::vec3(
+				2.0f * corner.x / width - 1.0f,
+				2.0f * corner.y / height - 1.0f,
+				0.0f);
+			vertex.normal = glm::vec3(0.0f, 0.0f, 1.0f);
+			vertex.color = description.backgroundColor;
+			mesh.vertices.push_back(vertex);
+		}
+		mesh.indices.insert(
+			mesh.indices.end(),
+			{base, base + 1, base + 2, base, base + 2, base + 3});
+	}
+
+	// The shadow pass is emitted next so the real glyphs composite on top
 	// of it -- both are alpha blended with depth testing off, so draw order
 	// within this one mesh is the paint order.
 	for (std::size_t pass = 0; pass < passCount; ++pass)
@@ -319,12 +387,12 @@ VkApp::createScreenText(const ScreenTextDescription& description)
 	validateScreenTextDescription(description);
 	MaterialHandle const material = getOrCreateScreenTextMaterial();
 	std::size_t const maximumVertices = std::max<std::size_t>(
-		checkedCapacity(
+		BACKGROUND_QUAD_VERTICES + checkedCapacity(
 			description.maximumCharacters,
 			EASY_FONT_VERTICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 		3);
 	std::size_t const maximumIndices = std::max<std::size_t>(
-		checkedCapacity(
+		BACKGROUND_QUAD_INDICES + checkedCapacity(
 			description.maximumCharacters,
 			EASY_FONT_INDICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 		3);
@@ -378,12 +446,12 @@ VkApp::updateScreenText(
 	if (capacityChanged)
 	{
 		std::size_t const maximumVertices = std::max<std::size_t>(
-			checkedCapacity(
+			BACKGROUND_QUAD_VERTICES + checkedCapacity(
 				description.maximumCharacters,
 				EASY_FONT_VERTICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 			3);
 		std::size_t const maximumIndices = std::max<std::size_t>(
-			checkedCapacity(
+			BACKGROUND_QUAD_INDICES + checkedCapacity(
 				description.maximumCharacters,
 				EASY_FONT_INDICES_PER_CHARACTER * EASY_FONT_TEXT_PASSES),
 			3);
