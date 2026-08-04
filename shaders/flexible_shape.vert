@@ -67,11 +67,18 @@ void main()
     }
     else if (iShapeType < 1.5) // Cube/Hexahedral
     {
-        // Planar mapping for cube faces
-        vec3 absPos = abs(inPos);
-        if (absPos.x > absPos.y && absPos.x > absPos.z)
+        // Planar mapping for cube faces. Selected by face NORMAL, not local
+        // position: a flat-shaded box's vertices are all corners, so every
+        // vertex has |x|==|y|==|z|==0.5 simultaneously -- a position-based
+        // "dominant axis" comparison never resolves (no axis is ever
+        // strictly greater) and always falls through to the last branch,
+        // silently mapping every face with inPos.xy regardless of which face
+        // it actually is. The normal is constant per-face and axis-aligned,
+        // so it picks the correct face unambiguously.
+        vec3 absNrm = abs(inNrm);
+        if (absNrm.x > absNrm.y && absNrm.x > absNrm.z)
             vTexCoord = inPos.yz * 0.5 + 0.5;
-        else if (absPos.y > absPos.z)
+        else if (absNrm.y > absNrm.z)
             vTexCoord = inPos.xz * 0.5 + 0.5;
         else
             vTexCoord = inPos.xy * 0.5 + 0.5;
@@ -109,12 +116,12 @@ void main()
         vTexCoord = vec2(inPos.x * 0.5 + 0.5, inPos.y * 0.5 + 0.5);
     }
     else // Hexahedral (general box, e.g. the floor) and anything beyond:
-         // same planar face mapping as Cube above.
+         // same normal-selected planar face mapping as Cube above.
     {
-        vec3 absPos = abs(inPos);
-        if (absPos.x > absPos.y && absPos.x > absPos.z)
+        vec3 absNrm = abs(inNrm);
+        if (absNrm.x > absNrm.y && absNrm.x > absNrm.z)
             vTexCoord = inPos.yz * 0.5 + 0.5;
-        else if (absPos.y > absPos.z)
+        else if (absNrm.y > absNrm.z)
             vTexCoord = inPos.xz * 0.5 + 0.5;
         else
             vTexCoord = inPos.xy * 0.5 + 0.5;
