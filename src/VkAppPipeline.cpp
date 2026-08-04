@@ -513,6 +513,32 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, flexibleShapeOverlayPipeline_, nullptr);
 			flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
 		}
+		if (flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipelineLayout(device_, flexibleShapePipelineLayout_, nullptr);
+			flexibleShapePipelineLayout_ = VK_NULL_HANDLE;
+		}
+
+		if (descriptorSetLayout_ == VK_NULL_HANDLE || textureSetLayout_ == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		// Its own layout (set 0 = UBO/lighting/shadow, set 1 = the per-batch
+		// shape texture) rather than sharing pipelineLayout_ with
+		// wireframe/unlit/line/sphere -- those never sample a texture, so
+		// there's no reason to force a set 1 bind on every draw they do.
+		VkDescriptorSetLayout flexibleShapeSetLayouts[2] = { descriptorSetLayout_, textureSetLayout_ };
+		VkPushConstantRange texturePushRange{};
+		texturePushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		texturePushRange.offset = 0;
+		texturePushRange.size = sizeof(detail::FlexibleShapeTexturePushConstants);
+		VkPipelineLayoutCreateInfo flexibleShapeLayoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		flexibleShapeLayoutInfo.setLayoutCount = 2;
+		flexibleShapeLayoutInfo.pSetLayouts = flexibleShapeSetLayouts;
+		flexibleShapeLayoutInfo.pushConstantRangeCount = 1;
+		flexibleShapeLayoutInfo.pPushConstantRanges = &texturePushRange;
+		VK_CHECK(vkCreatePipelineLayout(device_, &flexibleShapeLayoutInfo, nullptr, &flexibleShapePipelineLayout_));
 
 		// --- Shaders
 		auto vsCode = readFile(findShaderPath("flexible_shape.vert.spv"));
@@ -598,7 +624,7 @@ namespace lightGraphics
 		gp.pMultisampleState=&ms;
 		gp.pColorBlendState=&cb;
 		gp.pDepthStencilState = &ds;
-		gp.layout=pipelineLayout_;
+		gp.layout=flexibleShapePipelineLayout_;
 		gp.renderPass=renderPass_; gp.subpass=0;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapePipeline_));
 

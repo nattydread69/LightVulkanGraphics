@@ -41,6 +41,12 @@ layout(set = 0, binding = 1) uniform Lighting
 
 layout(set = 0, binding = 2) uniform sampler2DArrayShadow shadowMaps;
 
+// One shape texture bound per (shape type, texture) draw batch; see
+// ObjectDescription::texturePath. Objects that don't set a texture path draw
+// with a 1x1 opaque white texture bound here, so this multiply is always
+// safe and just leaves vColor unchanged in that case.
+layout(set = 1, binding = 0) uniform sampler2D shapeTexture;
+
 // Shape-specific parameters
 const float sphereRoughness = 0.3;
 const float cubeRoughness = 0.8;
@@ -161,7 +167,7 @@ void main()
     vec3 cameraPosWS = vec3(inverse(U.uView)[3]);
     vec3 viewDir = normalize(cameraPosWS - vPosWS);
 
-    vec3 baseColor = vColor;
+    vec3 baseColor = vColor * texture(shapeTexture, vTexCoord).rgb;
 
     // Get shape-specific roughness. HEX (general boxes, e.g. the floor) and
     // anything beyond it fall back to the CUBE roughness -- they're the same

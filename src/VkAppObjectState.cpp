@@ -193,6 +193,7 @@ namespace lightGraphics
 		{
 			obj.setTexturePath(description.texturePath);
 		}
+		obj.setTextureTiling(description.textureTiling);
 		return addObject(obj);
 	}
 
@@ -214,6 +215,7 @@ namespace lightGraphics
 		description.mass = obj.getMass();
 		description.immovable = obj.isImmovable();
 		description.texturePath = obj.getTexturePath();
+		description.textureTiling = obj.getTextureTiling();
 		return description;
 	}
 
@@ -343,6 +345,36 @@ namespace lightGraphics
 		}
 
 		_objects_[index].setColour(color);
+		sceneGraph_->onObjectChanged(index);
+		if (sceneFinalized_)
+		{
+			markObjectDirty(index);
+		}
+	}
+
+	void VkApp::setObjectTexturePath(size_t index, const std::string& path)
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setObjectTexturePath", index, _objects_.size()));
+		}
+
+		_objects_[index].setTexturePath(path);
+		sceneGraph_->onObjectChanged(index);
+		if (sceneFinalized_)
+		{
+			markObjectDirty(index);
+		}
+	}
+
+	void VkApp::setObjectTextureTiling(size_t index, const glm::vec2& tiling)
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setObjectTextureTiling", index, _objects_.size()));
+		}
+
+		_objects_[index].setTextureTiling(tiling);
 		sceneGraph_->onObjectChanged(index);
 		if (sceneFinalized_)
 		{
@@ -494,6 +526,7 @@ namespace lightGraphics
 		{
 			obj.setTexturePath(description.texturePath);
 		}
+		obj.setTextureTiling(description.textureTiling);
 		updateObject(index, obj);
 	}
 

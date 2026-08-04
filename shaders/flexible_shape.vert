@@ -14,12 +14,19 @@ layout(location=7) in vec3 iColor;
 layout(location=8) in float iShapeType;  // 0=sphere, 1=cube, 2=cone, 3=cylinder, 4=capsule, 5=arrow, 6=line
 
 // Uniform buffer
-layout(binding = 0) uniform UBO 
-{    
+layout(binding = 0) uniform UBO
+{
     mat4 model;
     mat4 uView;
     mat4 uProj;
 } U;
+
+// Bound once per (shape type, texture) draw batch; see
+// ObjectDescription::textureTiling. xy = repeat count.
+layout(push_constant) uniform TexturePushConstants
+{
+    vec4 tiling;
+} texturePush;
 
 // Output to fragment shader
 layout(location=0) out vec3 vNrmWS;
@@ -96,12 +103,25 @@ void main()
         float height = inPos.y * 0.5 + 0.5;
         vTexCoord = vec2(theta, height);
     }
-    else // Line
+    else if (iShapeType < 6.5) // Line
     {
         // Simple linear mapping for lines
         vTexCoord = vec2(inPos.x * 0.5 + 0.5, inPos.y * 0.5 + 0.5);
     }
-    
+    else // Hexahedral (general box, e.g. the floor) and anything beyond:
+         // same planar face mapping as Cube above.
+    {
+        vec3 absPos = abs(inPos);
+        if (absPos.x > absPos.y && absPos.x > absPos.z)
+            vTexCoord = inPos.yz * 0.5 + 0.5;
+        else if (absPos.y > absPos.z)
+            vTexCoord = inPos.xz * 0.5 + 0.5;
+        else
+            vTexCoord = inPos.xy * 0.5 + 0.5;
+    }
+
+    vTexCoord *= texturePush.tiling.xy;
+
     // Final position
     gl_Position = U.uProj * U.uView * posWS;
 }

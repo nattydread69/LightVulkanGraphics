@@ -64,7 +64,16 @@ namespace lightGraphics
 		std::string name;
 		float mass = 1.0f;
 		bool immovable = false;
+		// Path to an image file to texture the object with (flexible shapes
+		// only -- SPHERE/CUBE/CONE/CYLINDER/CAPSULE/ARROW/HEX). Empty means no
+		// texture; the shape renders as a flat lit color as before. The image
+		// is loaded and cached by path the first time any object references
+		// it, so multiple objects can share one texture for free.
 		std::string texturePath;
+		// How many times the texture repeats across the shape's own UV range
+		// (e.g. {4, 4} tiles a texture 4x4 times over a HEX floor instead of
+		// stretching one copy across the whole thing). {1, 1} = no repeat.
+		glm::vec2 textureTiling{1.0f, 1.0f};
 	};
 
 	/** Object class to hold data for objects common to both graphics and physics geometries
@@ -89,6 +98,7 @@ namespace lightGraphics
 		pReal getMass() const { return _mass; }
 		std::string getName() const { return _name; }
 		std::string getTexturePath() const { return _texturePath; }
+		glm::vec2 getTextureTiling() const { return _textureTiling; }
 		glm::quat getRotation() const { return _rotation; }
 		glm::mat4 getRotationMatrix() const;
 		bool isImmovable() const { return _immovable; }
@@ -99,6 +109,7 @@ namespace lightGraphics
 		void setMass(pReal const mass) { _mass = mass; }
 		void setImmovable() { _immovable = true; }
 		void setTexturePath(std::string const &s) { _texturePath = s; }
+		void setTextureTiling(glm::vec2 const &tiling) { _textureTiling = tiling; }
 		void setRotation(glm::quat const &rotation) { _rotation = rotation; }
 		void initializeRotationMatrix();
 		void printRotationMatrix() const;
@@ -117,6 +128,7 @@ namespace lightGraphics
 		pReal _mass;
 		bool _immovable;
 		std::string _texturePath;
+		glm::vec2 _textureTiling{1.0f, 1.0f};
 	};
 }
 

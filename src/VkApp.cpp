@@ -734,6 +734,11 @@ namespace lightGraphics
 			vkDestroyPipelineLayout(device_, riggedPipelineLayout_, nullptr);
 			riggedPipelineLayout_ = VK_NULL_HANDLE;
 		}
+		if (flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipelineLayout(device_, flexibleShapePipelineLayout_, nullptr);
+			flexibleShapePipelineLayout_ = VK_NULL_HANDLE;
+		}
 		for (VkFramebuffer framebuffer : shadowFramebuffers_)
 		{
 			vkDestroyFramebuffer(device_, framebuffer, nullptr);
@@ -1694,8 +1699,8 @@ namespace lightGraphics
 		};
 		int const faces[6][4] =
 		{
-			{ 0, 1, 2, 3 }, { 4, 5, 6, 7 }, { 0, 1, 5, 4 },
-			{ 2, 3, 7, 6 }, { 0, 3, 7, 4 }, { 1, 2, 6, 5 }
+			{ 0, 3, 2, 1 }, { 4, 5, 6, 7 }, { 0, 1, 5, 4 },
+			{ 2, 3, 7, 6 }, { 0, 4, 7, 3 }, { 1, 2, 6, 5 }
 		};
 
 		for (int f = 0; f < 6; ++f)
@@ -2988,6 +2993,26 @@ namespace lightGraphics
 				}
 			}
 
+			// This pass has its own pipeline layout (adds the per-batch shape
+			// texture set and tiling push constant that pipelineLayout_
+			// doesn't have) -- rebind set 0 against it explicitly rather than
+			// relying on the bind at the top of this function, which used
+			// pipelineLayout_. Mirrors how the rigged-mesh pass below rebinds
+			// set 0 against its own layout for the same reason.
+			if (!descriptorSets_.empty() && flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
+			{
+				vkCmdBindDescriptorSets(
+					cmd,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					flexibleShapePipelineLayout_,
+					0,
+					1,
+					&descriptorSets_[imageIndex],
+					0,
+					nullptr
+				);
+			}
+
 			// Draw each shape group separately using correct firstInstance ranges
 			// Our instance buffer is in original object order. Build remap to contiguous
 			// instance ranges per shape so that firstInstance selects right models.
@@ -3011,13 +3036,71 @@ namespace lightGraphics
 				VkDeviceSize bytes = sizeof(Instance) * countForShape;
 				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
 
-				// Issue indexed instanced draw for this contiguous range
-				vkCmdDrawIndexed(cmd,
-					shapeGeo.indexCount,
-					countForShape,
-					shapeGeo.indexOffset,
-					0,
-					runningFirst);
+				// Sub-group this shape type's objects by (texture path, tiling)
+				// so each distinct texture gets its own draw call with the
+				// right descriptor and tiling push-constant bound. Only
+				// consecutive runs are merged (not a full re-sort), so most
+				// scenes -- where a texture is set on a coherent batch of
+				// objects, like one floor -- still get one draw call per
+				// texture; interleaved textures within a shape type cost
+				// extra draw calls rather than extra complexity here.
+				struct TextureBatch
+				{
+					std::string texturePath;
+					glm::vec2 tiling{1.0f, 1.0f};
+					uint32_t first = 0;
+					uint32_t count = 0;
+				};
+				std::vector<TextureBatch> batches;
+				for (uint32_t k = 0; k < countForShape; ++k)
+				{
+					size_t objIndex = shapeGroups[shapeType][k];
+					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
+					if (!batches.empty() &&
+						batches.back().texturePath == texturePath &&
+						batches.back().tiling == tiling)
+					{
+						batches.back().count++;
+						continue;
+					}
+					batches.push_back({texturePath, tiling, runningFirst + k, 1});
+				}
+
+				for (const TextureBatch& batch : batches)
+				{
+					std::shared_ptr<detail::Texture> const texture =
+						batch.texturePath.empty() ? nullptr : getOrCreateTexture(batch.texturePath);
+					VkDescriptorSet textureSet = (texture && texture->descriptor != VK_NULL_HANDLE)
+						? texture->descriptor
+						: (defaultTexture_ ? defaultTexture_->descriptor : VK_NULL_HANDLE);
+					if (textureSet != VK_NULL_HANDLE)
+					{
+						vkCmdBindDescriptorSets(
+							cmd,
+							VK_PIPELINE_BIND_POINT_GRAPHICS,
+							flexibleShapePipelineLayout_,
+							1,
+							1,
+							&textureSet,
+							0,
+							nullptr
+						);
+					}
+
+					detail::FlexibleShapeTexturePushConstants push{};
+					push.tiling = glm::vec4(batch.tiling, 0.0f, 0.0f);
+					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+						0, sizeof(push), &push);
+
+					// Issue indexed instanced draw for this contiguous sub-range
+					vkCmdDrawIndexed(cmd,
+						shapeGeo.indexCount,
+						batch.count,
+						shapeGeo.indexOffset,
+						0,
+						batch.first);
+				}
 
 				runningFirst += countForShape;
 			}
@@ -3134,7 +3217,11 @@ namespace lightGraphics
 		{
 			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeOverlayPipeline_);
 
-			if (!descriptorSets_.empty())
+			// flexibleShapeOverlayPipeline_ shares flexibleShapePipelineLayout_
+			// (set 1 = shape texture, plus the tiling push constant) -- bind
+			// against that, not pipelineLayout_, for the same reason as the
+			// main flexible-shape pass above.
+			if (!descriptorSets_.empty() && flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
 			{
 				if (imageIndex >= descriptorSets_.size())
 				{
@@ -3143,7 +3230,7 @@ namespace lightGraphics
 				vkCmdBindDescriptorSets(
 					cmd,
 					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					pipelineLayout_,
+					flexibleShapePipelineLayout_,
 					0,
 					1,
 					&descriptorSets_[imageIndex],
@@ -3177,12 +3264,66 @@ namespace lightGraphics
 				VkDeviceSize bytes = sizeof(Instance) * countForShape;
 				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
 
-				vkCmdDrawIndexed(cmd,
-					shapeGeo.indexCount,
-					countForShape,
-					shapeGeo.indexOffset,
-					0,
-					runningFirst);
+				// Overlay shapes essentially never carry a texture, but the
+				// pipeline layout still declares set 1 and the tiling push
+				// constant, so both must be bound before drawing -- see the
+				// main flexible-shape pass above for the full explanation.
+				struct TextureBatch
+				{
+					std::string texturePath;
+					glm::vec2 tiling{1.0f, 1.0f};
+					uint32_t first = 0;
+					uint32_t count = 0;
+				};
+				std::vector<TextureBatch> batches;
+				for (uint32_t k = 0; k < countForShape; ++k)
+				{
+					size_t objIndex = overlayShapeGroups[shapeType][k];
+					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
+					if (!batches.empty() &&
+						batches.back().texturePath == texturePath &&
+						batches.back().tiling == tiling)
+					{
+						batches.back().count++;
+						continue;
+					}
+					batches.push_back({texturePath, tiling, runningFirst + k, 1});
+				}
+
+				for (const TextureBatch& batch : batches)
+				{
+					std::shared_ptr<detail::Texture> const texture =
+						batch.texturePath.empty() ? nullptr : getOrCreateTexture(batch.texturePath);
+					VkDescriptorSet textureSet = (texture && texture->descriptor != VK_NULL_HANDLE)
+						? texture->descriptor
+						: (defaultTexture_ ? defaultTexture_->descriptor : VK_NULL_HANDLE);
+					if (textureSet != VK_NULL_HANDLE)
+					{
+						vkCmdBindDescriptorSets(
+							cmd,
+							VK_PIPELINE_BIND_POINT_GRAPHICS,
+							flexibleShapePipelineLayout_,
+							1,
+							1,
+							&textureSet,
+							0,
+							nullptr
+						);
+					}
+
+					detail::FlexibleShapeTexturePushConstants push{};
+					push.tiling = glm::vec4(batch.tiling, 0.0f, 0.0f);
+					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+						0, sizeof(push), &push);
+
+					vkCmdDrawIndexed(cmd,
+						shapeGeo.indexCount,
+						batch.count,
+						shapeGeo.indexOffset,
+						0,
+						batch.first);
+				}
 
 				runningFirst += countForShape;
 			}

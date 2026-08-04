@@ -106,6 +106,14 @@ namespace lightGraphics::detail
 		glm::mat4 lightViewProj;
 	};
 
+	// Bound before each (shape type, texture) draw batch in the flexible-shape
+	// pass; see ObjectDescription::textureTiling. xy = repeat count, zw unused
+	// (kept for std140-friendly 16-byte alignment across drivers).
+	struct FlexibleShapeTexturePushConstants
+	{
+		glm::vec4 tiling{1.0f, 1.0f, 0.0f, 0.0f};
+	};
+
 	struct Texture
 	{
 		VkImage image = VK_NULL_HANDLE;
@@ -299,6 +307,14 @@ namespace lightGraphics
 		void setObjectScale(size_t index, const glm::vec3& scale);
 		void setObjectRotation(size_t index, const glm::quat& rotation);
 		void setObjectColor(size_t index, const glm::vec4& color);
+		// Path to an image file (PNG/JPG/etc.) to texture this object with.
+		// Empty clears it back to a flat lit color. Flexible shapes only
+		// (SPHERE/CUBE/CONE/CYLINDER/CAPSULE/ARROW/HEX) -- rigged meshes and
+		// screen text are unaffected. The file is loaded and cached the first
+		// time any object references it.
+		void setObjectTexturePath(size_t index, const std::string& path);
+		// How many times the texture repeats across the shape's UV range.
+		void setObjectTextureTiling(size_t index, const glm::vec2& tiling);
 		void updateObjectProperties(size_t index, const glm::vec3& position,
 		                            const glm::vec3& scale, const glm::quat& rotation);
 
@@ -531,6 +547,7 @@ namespace lightGraphics
 		// Multiple pipelines for different rendering modes
 		VkPipeline flexibleShapePipeline_ = VK_NULL_HANDLE;
 		VkPipeline flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
+		VkPipelineLayout flexibleShapePipelineLayout_ = VK_NULL_HANDLE;
 		VkPipeline wireframePipeline_ = VK_NULL_HANDLE;
 		VkPipeline unlitPipeline_ = VK_NULL_HANDLE;
 		VkPipeline linePipeline_ = VK_NULL_HANDLE;
