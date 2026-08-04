@@ -163,7 +163,9 @@ void main()
 
     vec3 baseColor = vColor;
 
-    // Get shape-specific roughness
+    // Get shape-specific roughness. HEX (general boxes, e.g. the floor) and
+    // anything beyond it fall back to the CUBE roughness -- they're the same
+    // kind of flat-faced surface, just not one of the named primitives.
     float roughness;
     if (vShapeType < 0.5) roughness = sphereRoughness;
     else if (vShapeType < 1.5) roughness = cubeRoughness;
@@ -171,16 +173,19 @@ void main()
     else if (vShapeType < 3.5) roughness = cylinderRoughness;
     else if (vShapeType < 4.5) roughness = capsuleRoughness;
     else if (vShapeType < 5.5) roughness = arrowRoughness;
-    else roughness = lineRoughness;
-    
+    else if (vShapeType < 6.5) roughness = lineRoughness;
+    else roughness = cubeRoughness;
+
     // Calculate lighting
     vec3 finalColor = calculateLighting(vNrmWS, viewDir, baseColor, roughness);
-    
-    // Special handling for lines (make them brighter)
-    if (vShapeType > 5.5)
+
+    // Special handling for lines only (make them brighter so thin debug/grid
+    // lines stay visible regardless of lighting direction) -- everything
+    // else, including HEX, renders with normal lit shading above.
+    if (vShapeType > 5.5 && vShapeType < 6.5)
     {
         finalColor = baseColor * 2.0; // Make lines very bright
     }
-    
+
     outColor = vec4(finalColor, 1.0);
 }
