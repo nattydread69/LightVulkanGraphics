@@ -1,10 +1,12 @@
 #include "FBXLoader.h"
 #include "RiggedObject.h"
+#include "RotationGlyph.h"
 #include "SceneGraph.h"
 #include "VolumeRendering.h"
 #include "VkApp.h"
 #include "pObject.h"
 
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -709,6 +711,357 @@ namespace
 		std::filesystem::remove(scratchPath);
 	}
 
+	float polarAngle(const glm::vec3& position)
+	{
+		return std::atan2(position.y, position.x);
+	}
+
+	float radialDistance(const glm::vec3& position)
+	{
+		return std::sqrt(position.x * position.x + position.y * position.y);
+	}
+
+	// Wraps `to - from` into (-pi, pi].
+	float signedAngleDelta(float from, float to)
+	{
+		float delta = std::fmod(to - from, glm::two_pi<float>());
+		if (delta > glm::pi<float>())
+		{
+			delta -= glm::two_pi<float>();
+		}
+		if (delta <= -glm::pi<float>())
+		{
+			delta += glm::two_pi<float>();
+		}
+		return delta;
+	}
+
+	void testRotationGlyphDefaultMesh()
+	{
+		lightGraphics::RotationRingDescription description;
+		lightGraphics::validateRotationRingDescription(description);
+
+		const lightGraphics::MeshData mesh = lightGraphics::buildRotationRingMesh(description);
+		require(!mesh.vertices.empty(), "rotation ring mesh should be non-empty");
+		lightGraphics::validateMeshData(mesh);
+		require(mesh.indices.size() % 3 == 0,
+		        "rotation ring indices should form complete triangles");
+
+		bool sawPositiveZ = false;
+		bool sawNegativeZ = false;
+		for (const lightGraphics::MeshVertex& vertex : mesh.vertices)
+		{
+			require(std::isfinite(vertex.position.x) && std::isfinite(vertex.position.y) &&
+			            std::isfinite(vertex.position.z),
+			        "rotation ring vertex position should be finite");
+			require(std::isfinite(vertex.normal.x) && std::isfinite(vertex.normal.y) &&
+			            std::isfinite(vertex.normal.z),
+			        "rotation ring vertex normal should be finite");
+			require(std::isfinite(vertex.color.r) && std::isfinite(vertex.color.g) &&
+			            std::isfinite(vertex.color.b) && std::isfinite(vertex.color.a),
+			        "rotation ring vertex color should be finite");
+			require(std::isfinite(vertex.uv.x) && std::isfinite(vertex.uv.y),
+			        "rotation ring vertex uv should be finite");
+
+			require(nearlyEqual(glm::length(vertex.normal), 1.0f, 1.0e-3f),
+			        "rotation ring vertex normal should have unit length");
+			require(std::fabs(vertex.position.z) <= description.thickness * 0.5f + 1.0e-4f,
+			        "rotation ring vertices should stay within +/- thickness/2");
+
+			if (nearlyEqual(vertex.position.z, description.thickness * 0.5f, 1.0e-3f))
+			{
+				sawPositiveZ = true;
+			}
+			if (nearlyEqual(vertex.position.z, -description.thickness * 0.5f, 1.0e-3f))
+			{
+				sawNegativeZ = true;
+			}
+		}
+		require(sawPositiveZ && sawNegativeZ,
+		        "rotation ring mesh should have both a front (+Z) and back (-Z) surface");
+
+		for (std::size_t i = 0; i + 2 < mesh.indices.size(); i += 3)
+		{
+			const glm::vec3& a = mesh.vertices[mesh.indices[i]].position;
+			const glm::vec3& b = mesh.vertices[mesh.indices[i + 1]].position;
+			const glm::vec3& c = mesh.vertices[mesh.indices[i + 2]].position;
+			const float area = glm::length(glm::cross(b - a, c - a)) * 0.5f;
+			require(area > 1.0e-8f, "rotation ring mesh should not contain zero-area triangles");
+		}
+	}
+
+	void testRotationGlyphRadialDimensions()
+	{
+		lightGraphics::RotationRingDescription description;
+		description.radius = 2.0f;
+		description.bandWidth = 0.3f;
+		description.arrowHeadWidthScale = 2.5f;
+		lightGraphics::validateRotationRingDescription(description);
+
+		const lightGraphics::MeshData mesh = lightGraphics::buildRotationRingMesh(description);
+
+		const float innerRadius = description.radius - 0.5f * description.bandWidth;
+		const float outerRadius = description.radius + 0.5f * description.bandWidth;
+		const float headWidth = description.bandWidth * description.arrowHeadWidthScale;
+		const float headInnerRadius = description.radius - 0.5f * headWidth;
+		const float headOuterRadius = description.radius + 0.5f * headWidth;
+
+		float minRadius = std::numeric_limits<float>::infinity();
+		float maxRadius = 0.0f;
+		bool sawBodyInner = false;
+		bool sawBodyOuter = false;
+		for (const lightGraphics::MeshVertex& vertex : mesh.vertices)
+		{
+			const float radius = radialDistance(vertex.position);
+			minRadius = std::min(minRadius, radius);
+			maxRadius = std::max(maxRadius, radius);
+			if (nearlyEqual(radius, innerRadius, 1.0e-3f))
+			{
+				sawBodyInner = true;
+			}
+			if (nearlyEqual(radius, outerRadius, 1.0e-3f))
+			{
+				sawBodyOuter = true;
+			}
+		}
+
+		require(sawBodyInner, "rotation ring body should reach its inner radius");
+		require(sawBodyOuter, "rotation ring body should reach its outer radius");
+		require(nearlyEqual(minRadius, headInnerRadius, 1.0e-2f),
+		        "rotation ring global minimum radius should be the arrowhead's inner radius");
+		require(nearlyEqual(maxRadius, headOuterRadius, 1.0e-2f),
+		        "rotation ring global maximum radius should be the arrowhead's outer radius");
+
+		const float bodyWidth = outerRadius - innerRadius;
+		const float measuredHeadWidth = maxRadius - minRadius;
+		require(measuredHeadWidth > bodyWidth,
+		        "arrowhead width should exceed body width when arrowHeadWidthScale > 1");
+	}
+
+	void testRotationGlyphDirection()
+	{
+		lightGraphics::RotationRingDescription description;
+		description.gapCentreAngleRadians = 0.0f;
+
+		description.sense = lightGraphics::RotationSense::CounterClockwise;
+		const lightGraphics::MeshData ccwMesh = lightGraphics::buildRotationRingMesh(description);
+		description.sense = lightGraphics::RotationSense::Clockwise;
+		const lightGraphics::MeshData cwMesh = lightGraphics::buildRotationRingMesh(description);
+
+		// The tip is the unique point (front+back pair) where inner and outer
+		// radius have converged back to description.radius exactly -- every
+		// other vertex sits at a strictly different radius (innerRadius,
+		// outerRadius, or somewhere on the flare/taper ramp).
+		auto findTipAngle = [&](const lightGraphics::MeshData& mesh) -> float
+		{
+			float bestDelta = std::numeric_limits<float>::infinity();
+			float bestAngle = 0.0f;
+			for (const lightGraphics::MeshVertex& vertex : mesh.vertices)
+			{
+				const float delta = std::fabs(radialDistance(vertex.position) - description.radius);
+				if (delta < bestDelta)
+				{
+					bestDelta = delta;
+					bestAngle = polarAngle(vertex.position);
+				}
+			}
+			require(bestDelta < 1.0e-3f,
+			        "rotation ring mesh should contain a vertex at the tip radius");
+			return bestAngle;
+		};
+
+		const float ccwTipAngle = findTipAngle(ccwMesh);
+		const float cwTipAngle = findTipAngle(cwMesh);
+
+		const float ccwOffset = signedAngleDelta(description.gapCentreAngleRadians, ccwTipAngle);
+		const float cwOffset = signedAngleDelta(description.gapCentreAngleRadians, cwTipAngle);
+
+		require(ccwOffset < 0.0f,
+		        "counterclockwise arrow tip should land on the negative-angle side of the gap");
+		require(cwOffset > 0.0f,
+		        "clockwise arrow tip should land on the positive-angle side of the gap");
+		require(nearlyEqual(std::fabs(ccwOffset), description.gapAngleRadians * 0.5f, 0.05f),
+		        "counterclockwise tip should sit just outside the gap's edge");
+		require(nearlyEqual(std::fabs(cwOffset), description.gapAngleRadians * 0.5f, 0.05f),
+		        "clockwise tip should sit just outside the gap's edge");
+	}
+
+	void testRotationGlyphTransform()
+	{
+		using lightGraphics::makeRotationRingTransform;
+
+		{
+			const glm::vec3 centre(1.0f, 2.0f, 3.0f);
+			const glm::vec3 normal(0.0f, 0.0f, 1.0f);
+			const glm::vec3 reference(1.0f, 0.0f, 0.0f);
+			const lightGraphics::Transform transform =
+			    makeRotationRingTransform(centre, normal, reference);
+			require(nearlyEqual(transform.position, centre),
+			        "transform should store the requested centre");
+
+			const glm::mat4 matrix = transform.matrix();
+			const glm::vec3 worldZ = glm::vec3(matrix * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f));
+			const glm::vec3 worldX = glm::vec3(matrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+			require(nearlyEqual(glm::normalize(worldZ), normal, 1.0e-3f),
+			        "local +Z should align with planeNormal");
+			require(nearlyEqual(glm::normalize(worldX), reference, 1.0e-3f),
+			        "local +X should align with the projected in-plane reference");
+		}
+
+		{
+			// Oblique plane, non-axis-aligned reference.
+			const glm::vec3 normal = glm::normalize(glm::vec3(1.0f, 1.0f, 1.0f));
+			const glm::vec3 reference(0.0f, 1.0f, 0.0f);
+			const lightGraphics::Transform transform =
+			    makeRotationRingTransform(glm::vec3(0.0f), normal, reference);
+			const glm::mat4 matrix = transform.matrix();
+			const glm::vec3 worldZ =
+			    glm::normalize(glm::vec3(matrix * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
+			const glm::vec3 worldX =
+			    glm::normalize(glm::vec3(matrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+			require(nearlyEqual(worldZ, normal, 1.0e-3f),
+			        "oblique plane: local +Z should align with planeNormal");
+			require(nearlyEqual(glm::dot(worldX, normal), 0.0f, 1.0e-3f),
+			        "oblique plane: local +X should stay in the plane");
+			const glm::vec3 expectedX =
+			    glm::normalize(reference - glm::dot(reference, normal) * normal);
+			require(nearlyEqual(worldX, expectedX, 1.0e-3f),
+			        "oblique plane: local +X should align with the projected reference");
+		}
+
+		{
+			// Reference (near-)parallel to the normal: deterministic fallback axis.
+			const glm::vec3 normal(0.0f, 1.0f, 0.0f);
+			const lightGraphics::Transform transform = makeRotationRingTransform(
+			    glm::vec3(0.0f), normal, glm::vec3(0.0f, 5.0f, 0.0f));
+			const glm::mat4 matrix = transform.matrix();
+			const glm::vec3 worldZ =
+			    glm::normalize(glm::vec3(matrix * glm::vec4(0.0f, 0.0f, 1.0f, 0.0f)));
+			const glm::vec3 worldX =
+			    glm::normalize(glm::vec3(matrix * glm::vec4(1.0f, 0.0f, 0.0f, 0.0f)));
+			require(nearlyEqual(worldZ, normal, 1.0e-3f),
+			        "parallel reference: local +Z should still align with planeNormal");
+			require(nearlyEqual(glm::dot(worldX, normal), 0.0f, 1.0e-3f),
+			        "parallel reference: fallback local +X should stay in the plane");
+			require(nearlyEqual(glm::length(worldX), 1.0f, 1.0e-3f),
+			        "parallel reference: fallback local +X should be a valid unit direction");
+
+			const lightGraphics::Transform transformAgain = makeRotationRingTransform(
+			    glm::vec3(0.0f), normal, glm::vec3(0.0f, 5.0f, 0.0f));
+			require(nearlyEqual(transform.rotation.x, transformAgain.rotation.x) &&
+			            nearlyEqual(transform.rotation.y, transformAgain.rotation.y) &&
+			            nearlyEqual(transform.rotation.z, transformAgain.rotation.z) &&
+			            nearlyEqual(transform.rotation.w, transformAgain.rotation.w),
+			        "the fallback axis choice should be deterministic");
+		}
+
+		{
+			// Zero in-plane reference: also falls back, and must not throw.
+			const lightGraphics::Transform transform = makeRotationRingTransform(
+			    glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f));
+			require(nearlyEqual(glm::length(transform.rotation), 1.0f, 1.0e-3f),
+			        "zero in-plane reference should still produce a valid rotation");
+		}
+
+		requireThrows<std::invalid_argument>(
+		    []() {
+			    (void)makeRotationRingTransform(
+			        glm::vec3(0.0f), glm::vec3(0.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		    },
+		    "makeRotationRingTransform should reject a zero-length planeNormal");
+		requireThrows<std::invalid_argument>(
+		    []() {
+			    (void)makeRotationRingTransform(
+			        glm::vec3(0.0f),
+			        glm::vec3(std::numeric_limits<float>::quiet_NaN(), 0.0f, 0.0f),
+			        glm::vec3(1.0f, 0.0f, 0.0f));
+		    },
+		    "makeRotationRingTransform should reject a non-finite planeNormal");
+	}
+
+	void testRotationGlyphInvalidDescriptions()
+	{
+		auto base = []() { return lightGraphics::RotationRingDescription{}; };
+
+		{
+			auto d = base();
+			d.radius = 0.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject zero radius");
+		}
+		{
+			auto d = base();
+			d.bandWidth = d.radius * 3.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject bandWidth that drives the inner radius non-positive");
+		}
+		{
+			auto d = base();
+			d.thickness = 0.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject zero thickness");
+		}
+		{
+			auto d = base();
+			d.arcSegments = 3;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject too few arc segments");
+		}
+		{
+			auto d = base();
+			d.gapAngleRadians = 0.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject a zero gap angle");
+		}
+		{
+			auto d = base();
+			d.gapAngleRadians = glm::two_pi<float>();
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject a gap angle that consumes the circle");
+		}
+		{
+			auto d = base();
+			d.arrowHeadAngleRadians = 0.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject a non-positive arrowhead angle");
+		}
+		{
+			auto d = base();
+			d.arrowHeadAngleRadians = glm::two_pi<float>() - d.gapAngleRadians;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject an arrowhead angle that doesn't fit the visible arc");
+		}
+		{
+			auto d = base();
+			d.arrowHeadWidthScale = 1.0f;
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject arrowHeadWidthScale <= 1");
+		}
+		{
+			auto d = base();
+			d.radius = std::numeric_limits<float>::quiet_NaN();
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject a non-finite radius");
+		}
+		{
+			auto d = base();
+			d.color.r = std::numeric_limits<float>::infinity();
+			requireThrows<std::invalid_argument>(
+			    [&d]() { lightGraphics::validateRotationRingDescription(d); },
+			    "rotation ring should reject a non-finite color");
+		}
+	}
+
 	// Pins today's observed load-time invariants for assets/Worker.fbx so a future
 	// change to the FBX loading/skinning pipeline (exporter update, dependency bump,
 	// or a regression in FBXLoader.cpp) is caught even if it stays within the looser
@@ -800,6 +1153,11 @@ int main()
 		testMaterialClippingAndVolumeValidation();
 		testVolumeOpacityAndRenderOrdering();
 		testVolumeTwoReportsAndDocumentation();
+		testRotationGlyphDefaultMesh();
+		testRotationGlyphRadialDimensions();
+		testRotationGlyphDirection();
+		testRotationGlyphTransform();
+		testRotationGlyphInvalidDescriptions();
 		testFBXLoaderRejectsMissingFile();
 		testFBXLoaderRejectsMalformedFile();
 		testFBXLoaderRejectsTruncatedFile();

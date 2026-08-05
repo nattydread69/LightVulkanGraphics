@@ -20,6 +20,7 @@
 
 #include "LightVulkanGraphicsLogging.h"
 #include "LightVulkanGraphicsVersion.h"
+#include "RotationGlyph.h"
 #include "SceneGraph.h"
 #include "VkApp.h"
 #include <string>

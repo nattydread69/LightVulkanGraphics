@@ -14,6 +14,7 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Root-level TODO roadmap for the next library-maturity work.
 - Focused non-GPU unit test target for core transform, handle, object, and object-index behavior.
 - `VkApp::computeArrowTransform()` helper to place the built-in ARROW mesh so it visually spans a given tail/tip pair.
+- `include/RotationGlyph.h` / `src/RotationGlyph.cpp`: procedural rotation-ring glyph (`RotationRingDescription`, `buildRotationRingMesh`, `makeRotationRingTransform`) visualising angular velocity/momentum/torque as an oriented annular arrow in its plane of rotation, built on the existing custom-mesh API. New `rotation_glyph_example` target and `docs/rotation_glyphs.md`.
 
 ### Changed
 - CI expanded beyond a single Ubuntu/GCC job to cover a Linux compiler matrix, sanitizer validation, and a Windows build path.

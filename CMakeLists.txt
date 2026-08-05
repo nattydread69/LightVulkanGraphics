@@ -510,6 +510,9 @@ if (LVG_BUILD_EXAMPLES)
 	lvg_configure_build_tree_example(demoVulkanGraphics)
 	target_link_libraries(demoVulkanGraphics PRIVATE ${GLFW_LIB_TARGET})
 
+	add_executable(rotation_glyph_example examples/rotation_glyph_example.cpp)
+	lvg_configure_build_tree_example(rotation_glyph_example)
+
 	# Copy the assimp DLL next to each example on Windows so they run in-place.
 	if (WIN32 AND ASSIMP_DLL)
 		foreach(_lvg_ex IN ITEMS simple_fbx_loader_example fbx_rigged_example demoVulkanGraphics)
@@ -527,6 +530,7 @@ if (LVG_BUILD_EXAMPLES)
 			simple_fbx_loader_example
 			fbx_rigged_example
 			demoVulkanGraphics
+			rotation_glyph_example
 	)
 endif()
 

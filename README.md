@@ -223,10 +223,18 @@ suppress console output entirely, either set
 `createInfo.enableConsoleOutput = false` before construction or call
 `lightGraphics::setConsoleOutputEnabled(false)`.
 
+## Rotation-Ring Glyphs
+Visualise angular velocity, angular momentum, or torque as an oriented
+annular arrow lying in its actual plane of rotation, rather than only as a
+conventional axial arrow perpendicular to that plane. Built on the custom
+mesh API, so it needs no Vulkan device to build or test. See
+`docs/rotation_glyphs.md` and the `rotation_glyph_example` target below.
+
 ## Included Demo Targets
 - `demoVulkanGraphics`: bundled shape demo that ships in this repository and builds with the library
 - `simple_fbx_loader_example`: basic FBX inspection example
 - `fbx_rigged_example`: rigged-model rendering example
+- `rotation_glyph_example`: angular velocity/momentum/torque rotation-ring glyphs alongside the conventional axial arrow (see `docs/rotation_glyphs.md`)
 
 Build the bundled demo after configuring the project:
 
