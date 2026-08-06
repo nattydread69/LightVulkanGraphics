@@ -11,6 +11,7 @@ option(LVG_BUILD_VULKAN_INTEGRATION_TESTS "Build Vulkan tests that require a GPU
 option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project targets" ON)
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
+option(LVG_BUILD_UI "Build the LVGUI GUI layer" ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -419,6 +420,30 @@ if (WIN32)
 	set_target_properties(${PROJECT_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
+if(LVG_BUILD_UI)
+	set(LVGUI_SOURCES
+		src/ui/Placeholder.cpp
+	)
+
+	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
+	add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphicsUI)
+
+	target_compile_features(LightVulkanGraphicsUI PUBLIC cxx_std_17)
+
+	target_include_directories(LightVulkanGraphicsUI PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>
+	)
+
+	target_link_libraries(LightVulkanGraphicsUI
+		PUBLIC  LightVulkanGraphics
+		PRIVATE Vulkan::Vulkan ${GLFW_LIB_TARGET}
+	)
+
+	# The core library advertises GUI availability to its consumers.
+	target_compile_definitions(${PROJECT_NAME} PUBLIC LVG_WITH_UI)
+endif()
+
 # ---------------- Install rules (enables `sudo make install`) ----------------
 # 1) Library + export usage requirements
 install(TARGETS ${PROJECT_NAME}
@@ -428,6 +453,16 @@ install(TARGETS ${PROJECT_NAME}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
+# 1b) UI Library (optional)
+if(LVG_BUILD_UI)
+	install(TARGETS LightVulkanGraphicsUI
+		EXPORT LightVulkanGraphicsTargets
+		RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+		LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+		ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	)
+endif()
+
 # 2) Public headers (everything under include/)
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
@@ -436,6 +471,13 @@ install(FILES
 	${LVG_GENERATED_INCLUDE_DIR}/LightVulkanGraphicsVersion.h
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
 )
+
+# 2b) UI public headers (if built)
+if(LVG_BUILD_UI)
+	install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/lightVulkanGraphics/
+		DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lightVulkanGraphics
+	)
+endif()
 
 # 3) SPIR-V payloads (install whatever .spv were generated)
 #    Because the library depends on Shaders, running `make install` will build them first.
@@ -583,6 +625,10 @@ if (BUILD_TESTING)
 			NAME volume_vulkan_integration_test
 			COMMAND volume_vulkan_integration_test
 		)
+	endif()
+
+	if (LVG_BUILD_UI)
+		add_subdirectory(tests/ui)
 	endif()
 
 	if (LVG_BUILD_EXAMPLES)
