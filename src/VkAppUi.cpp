@@ -147,6 +147,12 @@ namespace lightGraphics
 		}
 		uiDebugDrawList_.reset();
 		uiFont_.reset();
+		// uiPlatform_ is deliberately left alone here: it is installed in createWindow()
+		// independent of Vulkan readiness, and its destructor (which restores GLFW's
+		// previously-installed callbacks) needs the window to still be alive. cleanup()
+		// calls destroyUi() well before it destroys the window, so tearing it down here
+		// would just mean re-installing input capture is impossible if initUi() ever
+		// ran a second time. It is reset alongside window_ in cleanup() instead.
 	}
 
 	void VkApp::buildUiDebugDrawList()

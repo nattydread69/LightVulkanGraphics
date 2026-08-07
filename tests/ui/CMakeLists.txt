@@ -45,6 +45,17 @@ target_compile_features(lvgui_uirenderer_tests PRIVATE cxx_std_17)
 
 add_test(NAME lvgui_uirenderer_tests COMMAND lvgui_uirenderer_tests)
 
+# Exercises UiPlatformGlfw's inject*/beginFrame/endFrame bookkeeping headlessly -- no
+# GLFWwindow is ever created; only the pure input-state plumbing is under test.
+add_executable(lvgui_input_tests
+	test_input.cpp
+)
+target_include_directories(lvgui_input_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_link_libraries(lvgui_input_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_input_tests PRIVATE cxx_std_17)
+
+add_test(NAME lvgui_input_tests COMMAND lvgui_input_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)

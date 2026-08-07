@@ -450,6 +450,7 @@ if(LVG_BUILD_UI)
 		src/ui/FontImpl.cpp
 		src/ui/Utf8.cpp
 		src/ui/UiRenderer.cpp
+		src/ui/UiPlatformGlfw.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
@@ -474,12 +475,14 @@ if(LVG_BUILD_UI)
 	# LightVulkanGraphics here instead would be a cycle -- core has to call into the UI
 	# to record it into the frame (and, from phase 10, to expose gfx.gui()) -- and CMake
 	# rejects cycles unless every target in them is STATIC, which core is not.
-	# It also keeps the headless UI tests free of Vulkan, assimp and glfw.
+	# It also keeps the headless UI tests free of Vulkan, assimp and glfw *headers* --
+	# UiRenderer.* and (from phase 4) UiPlatformGlfw.* still need Vulkan/GLFW PRIVATE to
+	# link, but nothing in include/lightVulkanGraphics/ui/ exposes either.
 	target_link_libraries(LightVulkanGraphicsUI
 		PUBLIC
 			$<BUILD_INTERFACE:${LVG_GLM_BUILD_TARGET}>
 			$<INSTALL_INTERFACE:glm::glm>
-		PRIVATE Vulkan::Vulkan
+		PRIVATE Vulkan::Vulkan ${GLFW_LIB_TARGET}
 	)
 	lvg_apply_project_options(LightVulkanGraphicsUI)
 	if (LVG_SANITIZER_LINK_FLAG)

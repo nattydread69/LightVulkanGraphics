@@ -145,6 +145,7 @@ namespace lightGraphics::ui
 	class DrawList;
 	class Font;
 	class UiRenderer;
+	class UiPlatformGlfw;
 }
 #endif
 
@@ -600,11 +601,24 @@ namespace lightGraphics
 		std::unique_ptr<ui::DrawList> uiDebugDrawList_;
 		bool uiDebugDrawEnabled_ = false;
 
+		// Phase 4: input plumbing (docs/gui/04). Installed in createWindow() so input
+		// capture starts as soon as the window exists, independent of Vulkan readiness.
+		std::unique_ptr<ui::UiPlatformGlfw> uiPlatform_;
+
 		void initUi();
 		void destroyUi();
 		void buildUiDebugDrawList();
 		void recordUi(VkCommandBuffer cmd);
 		std::string findFontPath(const std::string& fontName);
+
+		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). GuiContext
+		// does not exist until phase 5, so these are a stub that always yields the
+		// camera the input it already had; phase 5 replaces the bodies with
+		// uiContext_->wantsMouse()/wantsKeyboard(). The guard call sites in
+		// onMouseButton/onScroll and mainLoop() are real now so that swap is the only
+		// change phase 5 needs to make here.
+		bool uiWantsMouse() const { return false; }
+		bool uiWantsKeyboard() const { return false; }
 
 	public:
 		// Draws a hard-coded draw list (a red rect, a clipped rect and the string

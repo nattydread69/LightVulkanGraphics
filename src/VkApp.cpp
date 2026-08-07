@@ -27,6 +27,7 @@
 // ~VkApp lives in this translation unit, and destroying the GUI unique_ptr members
 // requires their complete types.
 #include "ui/UiRenderer.h"
+#include "ui/UiPlatformGlfw.h"
 #include <lightVulkanGraphics/ui/DrawList.h>
 #include <lightVulkanGraphics/ui/Font.h>
 #endif
@@ -847,6 +848,11 @@ namespace lightGraphics
 		}
 
 		// Window
+#ifdef LVG_WITH_UI
+		// Must run while window_ is still valid: ~UiPlatformGlfw() restores whatever
+		// GLFW callbacks were installed before it.
+		uiPlatform_.reset();
+#endif
 		if (window_ != nullptr)
 		{
 			glfwDestroyWindow(window_);
@@ -906,6 +912,16 @@ namespace lightGraphics
 		glfwSetMouseButtonCallback(window_, mouseButtonCallback);
 		glfwSetCursorPosCallback(window_, cursorPosCallback);
 		glfwSetScrollCallback(window_, scrollCallback);
+
+#ifdef LVG_WITH_UI
+		// UiPlatformGlfw installs on top of the callbacks just registered above and
+		// chains to them unconditionally (docs/gui/04, "GLFW plumbing"), so the camera
+		// still sees every event even when the GUI also consumes it. It does not touch
+		// glfwSetWindowUserPointer, which this class already owns for its own
+		// trampolines.
+		uiPlatform_ = std::make_unique<ui::UiPlatformGlfw>();
+		uiPlatform_->installCallbacks(window_);
+#endif
 	}
 
 	// -----------------------------
@@ -936,7 +952,30 @@ namespace lightGraphics
 			float dt = static_cast<float>(now - prevTime_);
 			prevTime_ = now;
 
-			if (keyboardCameraEnabled_)
+#ifdef LVG_WITH_UI
+			if (uiPlatform_)
+			{
+				int winW = 0, winH = 0;
+				glfwGetWindowSize(window_, &winW, &winH);
+				// GUI stays in logical pixels throughout (docs/gui/04); only the x scale
+				// is used, since GLFW reports x == y on every platform this project
+				// targets.
+				float xscale = 1.0f, yscale = 1.0f;
+				glfwGetWindowContentScale(window_, &xscale, &yscale);
+				(void) yscale;
+				uiPlatform_->beginFrame({ static_cast<float>(winW), static_cast<float>(winH) },
+				                        xscale, dt);
+			}
+#endif
+
+			// docs/gui/04, "The camera hand-off": keyboard camera control is skipped
+			// entirely whenever the GUI wants the keyboard (a focused TextBox, etc).
+#ifdef LVG_WITH_UI
+			const bool uiHasKeyboard = uiWantsKeyboard();
+#else
+			const bool uiHasKeyboard = false;
+#endif
+			if (keyboardCameraEnabled_ && !uiHasKeyboard)
 			{
 				updateCameraFromKeyboard(dt);
 			}
@@ -952,6 +991,13 @@ namespace lightGraphics
 			sceneGraph_->updateWorldTransforms();
 			sceneGraph_->syncToRenderer();
 			drawFrame();
+
+#ifdef LVG_WITH_UI
+			if (uiPlatform_)
+			{
+				uiPlatform_->endFrame();
+			}
+#endif
 		}
 	}
 
@@ -1248,6 +1294,16 @@ namespace lightGraphics
 		{
 			if (action == GLFW_PRESS)
 			{
+				// docs/gui/04, "The camera hand-off": do not begin a camera drag if the
+				// GUI wants this press. A release is handled unconditionally below --
+				// once a drag is in progress it must not get stuck in look mode just
+				// because the cursor swept over a panel before releasing.
+#ifdef LVG_WITH_UI
+				if (uiWantsMouse())
+				{
+					return;
+				}
+#endif
 				mouseLook_ = true;
 				firstMouse_ = true;
 				glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1305,6 +1361,15 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
+		// docs/gui/04, "The camera hand-off": if the cursor is over a scrollable panel
+		// the wheel scrolls the panel, not the camera. wantsMouse() already covers this
+		// since it is true whenever the cursor is over a panel.
+#ifdef LVG_WITH_UI
+		if (uiWantsMouse())
+		{
+			return;
+		}
+#endif
 		if (orbitEnabled_)
 		{
 			// Dolly in/out

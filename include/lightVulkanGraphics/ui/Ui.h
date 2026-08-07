@@ -13,3 +13,5 @@
 #include "Types.h"
 #include "Font.h"
 #include "DrawList.h"
+#include "InputState.h"
+#include "KeyCodes.h"

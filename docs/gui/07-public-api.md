@@ -15,13 +15,20 @@ include/lightVulkanGraphics/ui/
     DrawList.h       UiVertex, DrawCmd, DrawList
     Widget.h         Widget base
     Panel.h          Panel
-    GuiContext.h     GuiContext, GuiCreateInfo, PlatformHooks
+    GuiContext.h     GuiContext, GuiCreateInfo, PlatformHooks*
     Ui.h             umbrella header — includes everything, defines `namespace lvgui`
     widgets/
         Label.h  Separator.h  Spacer.h  Button.h  Checkbox.h  RadioButton.h
         Slider.h  DragValue.h  Vec3Field.h  TextBox.h  DropDown.h
         ProgressBar.h  PlotLine.h  CollapsingSection.h  Row.h
 ```
+
+`*` **Current deviation (as of phase 4):** `PlatformHooks` is declared in
+`src/ui/UiPlatformGlfw.h`, not `GuiContext.h` — it needed to exist before `GuiContext`
+did, so phase 4's `UiPlatformGlfw::makeHooks()` could build and test it without a
+window. The shape matches this doc exactly. Phase 5 should move the declaration into
+`GuiContext.h` (or have `GuiContext.h` re-export the `UiPlatformGlfw.h` one) so the
+project ends up with the single definition this table describes.
 
 Consumers include one thing:
 
@@ -171,6 +178,9 @@ struct GuiCreateInfo {
     bool        enableTooltips = true;
 };
 
+// As of phase 4 this struct is actually declared in src/ui/UiPlatformGlfw.h, not here
+// -- see the header-layout table above. Move it into this file (or re-export it from
+// here) when GuiContext lands.
 struct PlatformHooks {
     std::function<std::string()>          getClipboardText;
     std::function<void(std::string_view)> setClipboardText;
