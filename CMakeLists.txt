@@ -304,11 +304,29 @@ if (NOT TARGET assimp::assimp)
 endif()
 
 # ---------------- Sources ----------------
+# src/ui/ is excluded: it belongs exclusively to the LightVulkanGraphicsUI target below.
+# Globbing it in here too would compile FontImpl.cpp's STB_TRUETYPE_IMPLEMENTATION (and
+# every other src/ui/*.cpp symbol) into both libraries -- exactly the duplicate-symbol
+# hazard docs/gui/03-text-and-fonts.md calls out.
+#
+# Excluded by exact-path removal (list(REMOVE_ITEM ...)) rather than a path-string
+# regex: both globs below come from the same file(GLOB_RECURSE) call, so they use
+# whatever separator convention CMake normalizes to on the current platform, and
+# REMOVE_ITEM matches whole list entries rather than a substring. That keeps this
+# correct on Windows without depending on CMake's forward-slash normalization, and
+# unlike a regex such as "/src/ui/", it cannot accidentally swallow an unrelated future
+# directory (e.g. src/ui_platform/) just because its name shares a prefix.
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
 	"${PROJECT_SOURCE_DIR}/src/*.cpp"
 	"${PROJECT_SOURCE_DIR}/src/*.cxx"
 	"${PROJECT_SOURCE_DIR}/src/*.cc"
 )
+file(GLOB_RECURSE LVGUI_EXCLUDED_SOURCES CONFIGURE_DEPENDS
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cpp"
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cxx"
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cc"
+)
+list(REMOVE_ITEM SOURCES ${LVGUI_EXCLUDED_SOURCES})
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -371,6 +389,10 @@ lvg_compile_shader(vert screen_text)
 lvg_compile_shader(frag screen_text)
 lvg_compile_shader(vert volume_raymarch)
 lvg_compile_shader(frag volume_raymarch)
+if(LVG_BUILD_UI)
+	lvg_compile_shader(vert ui)
+	lvg_compile_shader(frag ui)
+endif()
 
 # Create shader target that depends on all compiled shaders
 add_custom_target(Shaders ALL DEPENDS ${ALL_SHADER_SPVS})
@@ -422,7 +444,12 @@ endif()
 
 if(LVG_BUILD_UI)
 	set(LVGUI_SOURCES
-		src/ui/Placeholder.cpp
+		src/ui/Types.cpp
+		src/ui/DrawList.cpp
+		src/ui/Font.cpp
+		src/ui/FontImpl.cpp
+		src/ui/Utf8.cpp
+		src/ui/UiRenderer.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
@@ -430,18 +457,51 @@ if(LVG_BUILD_UI)
 
 	target_compile_features(LightVulkanGraphicsUI PUBLIC cxx_std_17)
 
+	# Linked into the core SHARED library below, so its objects must be PIC.
+	set_target_properties(LightVulkanGraphicsUI PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 	target_include_directories(LightVulkanGraphicsUI PUBLIC
 		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 		$<INSTALL_INTERFACE:include>
 	)
-
-	target_link_libraries(LightVulkanGraphicsUI
-		PUBLIC  LightVulkanGraphics
-		PRIVATE Vulkan::Vulkan ${GLFW_LIB_TARGET}
+	target_include_directories(LightVulkanGraphicsUI PRIVATE
+		${PROJECT_SOURCE_DIR}/external
 	)
+
+	# The dependency runs core -> UI, never the reverse. LVGUI is a self-contained
+	# toolkit: layers 1-2 (Types/DrawList/Font/Utf8) are pure glm+std, and UiRenderer
+	# takes explicit Vulkan handles rather than reaching into VkApp. Linking
+	# LightVulkanGraphics here instead would be a cycle -- core has to call into the UI
+	# to record it into the frame (and, from phase 10, to expose gfx.gui()) -- and CMake
+	# rejects cycles unless every target in them is STATIC, which core is not.
+	# It also keeps the headless UI tests free of Vulkan, assimp and glfw.
+	target_link_libraries(LightVulkanGraphicsUI
+		PUBLIC
+			$<BUILD_INTERFACE:${LVG_GLM_BUILD_TARGET}>
+			$<INSTALL_INTERFACE:glm::glm>
+		PRIVATE Vulkan::Vulkan
+	)
+	lvg_apply_project_options(LightVulkanGraphicsUI)
+	if (LVG_SANITIZER_LINK_FLAG)
+		# Consumers that link ONLY LightVulkanGraphics::UI (the headless tests do) still
+		# need the sanitizer runtimes on their link line. lvg_apply_project_options adds
+		# them PRIVATE, which a static library does not propagate, and since the UI
+		# target deliberately no longer links the core library they cannot arrive via
+		# core's INTERFACE options either.
+		target_link_options(LightVulkanGraphicsUI INTERFACE ${LVG_SANITIZER_LINK_FLAG})
+	endif()
+
+	# Core owns and drives the UI renderer, so it links the UI target (see above).
+	target_link_libraries(${PROJECT_NAME} PRIVATE LightVulkanGraphicsUI)
 
 	# The core library advertises GUI availability to its consumers.
 	target_compile_definitions(${PROJECT_NAME} PUBLIC LVG_WITH_UI)
+
+	# Phase 3 needs the bundled font to build the atlas before phase 10 formalises font
+	# payload installation; mirrors the LVG_BUILD_SHADER_DIR convention above.
+	target_compile_definitions(${PROJECT_NAME} PRIVATE
+		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
+	)
 endif()
 
 # ---------------- Install rules (enables `sudo make install`) ----------------
@@ -660,4 +720,18 @@ if (BUILD_TESTING)
 			-DLVG_RELOCATE_INSTALL=ON
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPackageConsumerSmokeTest.cmake
 	)
+
+	# Point every test at the sanitizer suppression file when sanitizers are on, so
+	# `ctest` needs no manual ASAN_OPTIONS. See sanitizers.supp for what is suppressed
+	# and why (an AMD driver over-read, not ours). detect_leaks is disabled because the
+	# Vulkan loader and driver retain process-lifetime allocations.
+	if (LVG_ENABLE_SANITIZERS)
+		get_property(_lvg_all_tests DIRECTORY PROPERTY TESTS)
+		if (_lvg_all_tests)
+			set_tests_properties(${_lvg_all_tests} PROPERTIES
+				ENVIRONMENT
+					"ASAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/sanitizers.supp:detect_leaks=0"
+			)
+		endif()
+	endif()
 endif()

@@ -85,6 +85,78 @@ enum class Align { Start, Center, End };
 `Rect` is deliberately `{x, y, w, h}` rather than min/max. Layout code reads better with
 width and height; the `right()`/`bottom()` accessors cover the rest.
 
+## Font.h
+
+```cpp
+namespace lightGraphics::ui {
+
+struct GlyphRange { std::uint32_t first, last; };   // inclusive
+
+extern const GlyphRange kDefaultGlyphRanges[];
+extern const std::size_t kDefaultGlyphRangeCount;
+
+struct Glyph {
+    Vec2  uv0, uv1;
+    Vec2  offset;
+    Vec2  size;            // display size = xoff2-xoff (NOT the atlas rect)
+    float xAdvance = 0.0f;
+};
+
+class Font {
+public:
+    Font();
+    ~Font();
+    Font(const Font&)            = delete;
+    Font& operator=(const Font&) = delete;
+    Font(Font&&) noexcept;
+    Font& operator=(Font&&) noexcept;
+
+    void bake(const std::vector<std::uint8_t>& ttfData, float pixelHeight,
+              const GlyphRange* ranges, std::size_t rangeCount,
+              int atlasWidth = 512, int atlasHeight = 512, float contentScale = 1.0f);
+    void bake(const std::vector<std::uint8_t>& ttfData, float pixelHeight,
+              int atlasWidth = 512, int atlasHeight = 512, float contentScale = 1.0f);
+    bool isBaked() const;
+
+    Vec2  measureText(std::string_view utf8, float pixelSize) const;
+    float lineHeight(float pixelSize) const;
+    float ascent(float pixelSize) const;
+    std::size_t indexAtOffset(std::string_view utf8, float pixelSize, float x) const;
+    float offsetAtIndex(std::string_view utf8, float pixelSize, std::size_t byteIndex) const;
+
+    const Glyph& glyphFor(std::uint32_t codepoint) const;   // never zero-size
+    bool hasGlyph(std::uint32_t codepoint) const;
+
+    Vec2 whitePixelUV() const;
+    int  atlasWidth() const;
+    int  atlasHeight() const;
+    const std::vector<std::uint8_t>& atlasPixels() const;
+
+    float bakedPixelSize() const;
+    float contentScaleAtBake() const;
+};
+
+} // namespace lightGraphics::ui
+```
+
+Two deliberate departures from the sketch in
+[03-text-and-fonts.md](03-text-and-fonts.md):
+
+- **`ranges` is a pointer+count pair, not `std::span`.** `std::span` is C++20 and this
+  project builds its public headers as C++17.
+- **`bake` returns `void` and throws.** Per the error-handling policy below,
+  construction failures throw; once the one-shot 1024×1024 retry has also failed there
+  is no recoverable `false` case left to report. It throws `std::runtime_error` if the
+  data will not parse as TrueType, or if packing fails at 1024×1024.
+
+**Caller contract on `pixelHeight`:** it must already have `contentScale` folded in —
+pass `fontSize_logical * contentScale`. For 14px logical at 2× scale the correct call is
+`bake(ttf, 28.0f, ..., /*contentScale=*/2.0f)`. Passing `(14.0f, contentScale=2.0f)` is
+a caller error: measurements come back at *half* the intended logical size rather than
+merely looking blurry. `Font` cannot verify this — it never sees the logical size — so
+it is documented rather than asserted. `contentScale` is stored only so the caller can
+compare it against the live content scale and decide when to rebake.
+
 ## GuiContext.h
 
 ```cpp

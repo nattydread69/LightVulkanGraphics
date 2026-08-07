@@ -98,6 +98,23 @@ Useful CMake options:
 - `-DLVG_ENABLE_SANITIZERS=ON` to enable AddressSanitizer and UndefinedBehaviorSanitizer on supported GCC/Clang builds
 - `-DASSIMP_USE_FETCHCONTENT=ON` to fetch Assimp instead of using a system/local install
 
+### Sanitizers
+
+With `-DLVG_ENABLE_SANITIZERS=ON`, CMake points every CTest test at
+[`sanitizers.supp`](sanitizers.supp) automatically, so `ctest` needs no extra setup. To
+run a sanitized example or your own application by hand, pass the file yourself:
+
+```bash
+ASAN_OPTIONS=suppressions=$PWD/sanitizers.supp:detect_leaks=0 ./build/demoVulkanGraphics
+```
+
+`sanitizers.supp` currently suppresses exactly one entry: an over-read of
+`pQueueFamilyIndices` inside the AMD open-source Vulkan driver during
+`vkCreateSwapchainKHR`. That is driver-side, reproduces on a pristine
+`-DLVG_BUILD_UI=OFF` build, and is a read rather than a write. The file's header comment
+records the full rationale and the limits of ASan suppressions. Any sanitizer error that
+is *not* that entry should be treated as a real defect in this project.
+
 ## Install and Use from another project
 
 After `sudo cmake --install build`, you can consume the library with CMake’s `find_package`:

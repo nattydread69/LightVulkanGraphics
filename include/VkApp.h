@@ -139,6 +139,15 @@ namespace lightGraphics::detail
 	};
 }
 
+#ifdef LVG_WITH_UI
+namespace lightGraphics::ui
+{
+	class DrawList;
+	class Font;
+	class UiRenderer;
+}
+#endif
+
 namespace lightGraphics
 {
 	class RiggedObject;
@@ -577,6 +586,34 @@ namespace lightGraphics
 		std::vector<VkFramebuffer> shadowFramebuffers_;
 		uint32_t shadowMapSize_ = 1024;
 		uint32_t shadowLayerCount_ = static_cast<uint32_t>(lightGraphics::MaxForwardLights);
+
+#ifdef LVG_WITH_UI
+		// ---- LVGUI (see docs/gui/) ----
+		// The core library owns and drives the GUI's Vulkan backend; the dependency
+		// runs core -> LightVulkanGraphicsUI and never the reverse. These are
+		// unique_ptrs to incomplete types, so ~VkApp must stay out-of-line.
+		std::unique_ptr<ui::Font> uiFont_;
+		std::unique_ptr<ui::UiRenderer> uiRenderer_;
+		// Phase 3 verification harness: a hard-coded draw list enabled by setting
+		// LVG_UI_DEBUG_DRAW=1 or calling setUiDebugDrawEnabled(true). Phase 5 replaces
+		// this with a real GuiContext.
+		std::unique_ptr<ui::DrawList> uiDebugDrawList_;
+		bool uiDebugDrawEnabled_ = false;
+
+		void initUi();
+		void destroyUi();
+		void buildUiDebugDrawList();
+		void recordUi(VkCommandBuffer cmd);
+		std::string findFontPath(const std::string& fontName);
+
+	public:
+		// Draws a hard-coded draw list (a red rect, a clipped rect and the string
+		// "Hello") over the scene, for verifying the phase 3 Vulkan backend by eye.
+		void setUiDebugDrawEnabled(bool enabled) { uiDebugDrawEnabled_ = enabled; }
+		bool getUiDebugDrawEnabled() const { return uiDebugDrawEnabled_; }
+
+	private:
+#endif
 
 		// Sync
 		static constexpr int MAX_FRAMES_IN_FLIGHT = 2;

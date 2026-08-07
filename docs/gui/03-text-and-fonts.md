@@ -36,12 +36,88 @@ Use `stbtt_PackBegin` / `stbtt_PackSetOversampling` / `stbtt_PackFontRanges` /
 `stbtt_PackEnd`, not the older `stbtt_BakeFontBitmap`. The packing API handles multiple
 ranges, gives better atlas utilisation, and supports oversampling.
 
+### Call `stbtt_PackFontRanges` once per range — never batched
+
+This document originally said to pass all ranges to a single `stbtt_PackFontRanges`
+call. **Do not.** Batching them corrupts glyph metrics.
+
+`stbtt_PackFontRangesRenderIntoRects` keeps a `missing_glyph` variable holding the
+per-character index `j` of the first glyph the font does not have. It is **not reset
+between ranges**. When a later range contains a codepoint the font lacks, stb copies
+`chardata_for_range[missing_glyph]` into it — but `missing_glyph` may be an index from
+an earlier, much longer range, so the read runs off the end of the shorter range's
+array.
+
+This is reachable with the default ranges, not theoretical. **U+03A2 is an unassigned
+hole in the Greek block**, so no font has it; it sets `missing_glyph = 17` while packing
+the 57-entry Greek range. Any missing glyph in the 4-entry arrow range or the 1-entry
+middle-dot range that follows then reads index 17 of a 4- or 1-element array. AddressSanitizer
+reports it as a heap-use-after-free inside `stbtt_PackFontRangesRenderIntoRects`; without
+a sanitizer it shows up as glyphs with nonsense UVs — measured atlas occupancy of
+11 950% and 497 138% at 15px and 20px, which is what reading a `stbtt_packedchar` out of
+bounds produces.
+
+Packing one range per call keeps the index inside the array it came from:
+
+```cpp
+int ok = 1;
+for (std::size_t i = 0; i < rangeCount; ++i) {
+    if (!stbtt_PackFontRanges(&packContext, ttfData.data(), 0, &packRanges[i], 1)) {
+        ok = 0;   // a failure in ANY range must trigger the retry
+    }
+}
+```
+
+`ok` is only ever assigned `0`, so a failure in an early range cannot be masked by a
+later success. All calls share one `PackBegin`/`PackEnd` pair and one skyline context,
+so this is not N independent atlases.
+
+**Do not "optimise" this back into a single batched call.** The measured cost is nil:
+packing one range at a time changes atlas occupancy by less than 0.1 percentage point,
+and the 512×512-vs-1024×1024 decision point is unchanged (see the utilisation table
+below).
+
+### Atlas size in practice
+
+Measured with the bundled Inter build and the four default ranges (286 codepoints),
+requesting 512×512 and letting the retry escalate:
+
+| Bake px | Resulting atlas | Retried? | Occupancy |
+|---------|-----------------|----------|-----------|
+| 12 | 512×512 | no | 17.6% |
+| 14 | 512×512 | no | 22.7% |
+| 16 | 512×512 | no | 28.9% |
+| 20 | 512×512 | no | 44.1% |
+| 24 | 512×512 | no | 60.1% |
+| 26 | 1024×1024 | **yes** | 17.6% |
+| 28 | 1024×1024 | **yes** | 20.0% |
+| 32 | 1024×1024 | **yes** | 25.8% |
+
+So a 14px bake — the default `theme.fontSize` at 1× content scale — sits at 22.7% of a
+512×512 atlas with the escalation threshold not arriving until about 25px. The same
+`theme.fontSize` at 2× content scale bakes at 28px and legitimately needs 1024×1024,
+which is why the renderer must read `font.atlasWidth()`/`atlasHeight()` rather than
+assuming 512 (see [02-rendering.md](02-rendering.md)).
+
 ```cpp
 bool Font::bake(const std::vector<uint8_t>& ttfData,
                 float pixelHeight,
                 std::span<const GlyphRange> ranges,
                 int atlasWidth = 512, int atlasHeight = 512);
 ```
+
+**Implementation note:** the shipped signature is
+`void Font::bake(const std::vector<uint8_t>& ttfData, float pixelHeight,
+const GlyphRange* ranges, std::size_t rangeCount, int atlasWidth = 512,
+int atlasHeight = 512, float contentScale = 1.0f)`, plus a convenience overload that
+defaults `ranges`/`rangeCount` to `kDefaultGlyphRanges`. Two deviations from the
+signature above: `std::span` is C++20 and this project is pinned to C++17, so it is a
+pointer+count pair instead; and the `bool` return became a thrown `std::runtime_error`,
+matching the "construction failures throw" policy in
+[07-public-api.md](07-public-api.md) -- there is no meaningful `false` case left once
+the one-shot 1024x1024 retry also fails. `contentScale` is recorded on `Font` purely for
+the caller's rebake-threshold bookkeeping (see the DPI section below); it does not
+change how `bake()` itself behaves.
 
 Settings:
 
@@ -80,10 +156,20 @@ backgrounds subtly translucent.
 struct Glyph {
     Vec2  uv0, uv1;        // atlas coords
     Vec2  offset;          // pen-relative top-left, in pixels at bake size
-    Vec2  size;            // quad size in pixels at bake size
+    Vec2  size;            // DISPLAY quad size in pixels at bake size -- see below
     float xAdvance;        // pen advance in pixels at bake size
 };
 ```
+
+**`size` must come from `xoff2 - xoff`, not from the atlas rect `x1 - x0`.** With 2×2
+oversampling those two differ by roughly a factor of two: `x1 - x0` is measured in atlas
+texels (which is what `uv0`/`uv1` need), whereas the on-screen quad is
+`stbtt_packedchar::xoff2 - xoff` by `yoff2 - yoff`, which is where stb has divided the
+oversampling back out. This is exactly what `stbtt_GetPackedQuad` uses. Taking the size
+from the atlas rect draws every glyph at double width, and the result is not subtly
+wrong — characters visibly overlap each other. `tests/ui/test_font.cpp` pins this with
+`testGlyphInkFitsItsAdvance`, which asserts a glyph's ink is never much wider than its
+own advance.
 
 Storage: a `std::vector<Glyph>` plus a lookup. For codepoints below 0x0100, index a flat
 256-entry array directly — that covers the overwhelming majority of lookups with no

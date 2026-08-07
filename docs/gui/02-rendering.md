@@ -53,6 +53,14 @@ void addTextClipped (const Font&, float pixelSize, const Rect&, Color,
                      std::string_view utf8, Align h, Align v);
 ```
 
+**Implementation note:** every non-text primitive above samples `DrawList::whitePixelUV()`
+rather than a hardcoded `{0,0}`, and `DrawList::setWhitePixelUV(Vec2)` lets the owner
+(`GuiContext`, from phase 5 onward) point it at the real atlas's white block once a
+`Font` has baked. Before that call it defaults to `{0,0}`, which is only correct for
+tests that never bind a real atlas texture. This wiring wasn't spelled out above but is
+required for solid-colour geometry to render correctly once phase 3 binds the actual
+font atlas as the single texture every draw call samples.
+
 `addRectFilled` with `rounding == 0` is the hot path and must be exactly four vertices
 and six indices with no branching. Rounded rects build a convex fan; precompute a
 unit-circle table of 16 points per quadrant at static-init time and scale it.
@@ -258,10 +266,46 @@ right the first time.
 - Sampler: `LINEAR` min/mag, `CLAMP_TO_EDGE` on both axes, no mipmaps, no anisotropy
 - Rebuilt only when content scale changes (monitor switch on a mixed-DPI setup)
 
+**Read the dimensions from `font.atlasWidth()` / `font.atlasHeight()`; never hardcode
+512.** `Font::bake` retries once at 1024×1024 when the requested atlas cannot fit every
+glyph, so the actual size depends on the bake pixel height — a 14px bake fits 512×512,
+but a 28px bake (14pt at 2× content scale) comes back 1024×1024. Both the `VkImage`
+extent and the staging buffer size (`width * height`, one byte per texel at `R8_UNORM`)
+must follow the Font. Hardcoding 512 silently truncates the upload on any HiDPI display.
+
 `CLAMP_TO_EDGE` matters. With `REPEAT`, a glyph at the atlas edge bleeds a sliver of the
 opposite edge into itself, producing a faint speckle that is maddening to diagnose.
 
+## Render pass lifetime (implementation note)
+
+The pipeline is **not** create-once. `VkApp::recreateSwapChain()` calls
+`createRenderPass()` on every resize, and `cleanupSwapChain()` destroys `renderPass_`
+along with every pipeline built against it. `UiRenderer::onRenderPassRecreated()` exists
+for this: the owner calls it with the new handle after each swapchain recreation, and it
+rebuilds the pipeline. Missing this leaves the UI drawing against a destroyed render
+pass the first time the window is resized.
+
+## Target layering (implementation note)
+
+The dependency runs **core -> LightVulkanGraphicsUI**, never the reverse. LVGUI is
+self-contained: layers 1-2 are pure glm+std, and `UiRenderer` receives its Vulkan
+handles through `UiRendererCreateInfo` rather than reaching into `VkApp`. Having the UI
+target link the core library instead would be a cycle, because core has to call into the
+UI to record it into the frame (and, from phase 10, to expose `gfx.gui()`) -- and CMake
+rejects cycles unless every target involved is `STATIC`, which the core library is not.
+A useful side effect: the headless UI tests link neither Vulkan, assimp nor glfw.
+
+`UiRenderer::clampToFramebuffer` is a public static function purely so it can be unit
+tested without a device. It is the most likely source of validation errors in this
+backend, so it earns direct coverage rather than being inferred from a clean run.
+
 ## Integration point in the frame
+
+Note that `VkApp::recordCommandBuffer` has **two** `vkCmdEndRenderPass` call sites: the
+normal one at the end, and an early-out taken when the scene has nothing to draw (no
+objects, rigged instances, mesh draw requests or visible volumes). The UI must be
+recorded before both, or it disappears exactly when the 3D scene is empty -- which is
+precisely the case a GUI-only application hits.
 
 The UI draws **after** the scene, **inside the same render pass**, **before**
 `vkCmdEndRenderPass`. If you use dynamic rendering, it goes inside the same

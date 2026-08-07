@@ -1,0 +1,212 @@
+#include <lightVulkanGraphics/ui/Font.h>
+#include "Utf8.h"
+
+#include <cassert>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <vector>
+
+namespace lvgui = lightGraphics::ui;
+
+namespace {
+	std::vector<std::uint8_t> loadFontFile() {
+		std::ifstream file(LVG_UI_TEST_FONT_PATH, std::ios::binary | std::ios::ate);
+		if (!file) {
+			std::cerr << "Could not open test font at " << LVG_UI_TEST_FONT_PATH << "\n";
+			std::exit(1);
+		}
+		std::streamsize size = file.tellg();
+		file.seekg(0, std::ios::beg);
+		std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+		file.read(reinterpret_cast<char*>(data.data()), size);
+		return data;
+	}
+
+	void testBakeSucceeds(const lvgui::Font& font) {
+		assert(font.isBaked());
+		assert(font.atlasWidth() == 512);
+		assert(font.atlasHeight() == 512);
+		std::cout << "✓ testBakeSucceeds\n";
+	}
+
+	void testWhitePixelAndNoGlyphOverlap(const lvgui::Font& font) {
+		lvgui::Vec2 uv = font.whitePixelUV();
+		int x = static_cast<int>(uv.x * static_cast<float>(font.atlasWidth()));
+		int y = static_cast<int>(uv.y * static_cast<float>(font.atlasHeight()));
+		std::size_t idx = static_cast<std::size_t>(y) * static_cast<std::size_t>(font.atlasWidth()) + static_cast<std::size_t>(x);
+		assert(font.atlasPixels()[idx] == 255);
+
+		float reservedTop = static_cast<float>(font.atlasHeight() - 4);
+		for (std::size_t r = 0; r < lvgui::kDefaultGlyphRangeCount; ++r) {
+			const lvgui::GlyphRange& range = lvgui::kDefaultGlyphRanges[r];
+			for (std::uint32_t cp = range.first; cp <= range.last; ++cp) {
+				const lvgui::Glyph& g = font.glyphFor(cp);
+				float bottomPixel = g.uv1.y * static_cast<float>(font.atlasHeight());
+				assert(bottomPixel <= reservedTop + 0.01f);
+			}
+		}
+		std::cout << "✓ testWhitePixelAndNoGlyphOverlap\n";
+	}
+
+	void testEmptyMeasure(const lvgui::Font& font) {
+		lvgui::Vec2 size = font.measureText("", 14.0f);
+		assert(size.x == 0.0f);
+		assert(std::fabs(size.y - font.lineHeight(14.0f)) < 0.001f);
+		std::cout << "✓ testEmptyMeasure\n";
+	}
+
+	void testDoubledWidth(const lvgui::Font& font) {
+		float mWidth = font.measureText("M", 14.0f).x;
+		float mmWidth = font.measureText("MM", 14.0f).x;
+		assert(std::fabs(mmWidth - 2.0f * mWidth) < 0.5f);
+		std::cout << "✓ testDoubledWidth\n";
+	}
+
+	void testOffsetAtIndexEndpoints(const lvgui::Font& font) {
+		std::string s = "Slider value";
+		assert(font.offsetAtIndex(s, 14.0f, 0) == 0.0f);
+		float full = font.measureText(s, 14.0f).x;
+		float atEnd = font.offsetAtIndex(s, 14.0f, s.size());
+		assert(std::fabs(full - atEnd) < 0.001f);
+		std::cout << "✓ testOffsetAtIndexEndpoints\n";
+	}
+
+	void testIndexOffsetMutualInverse(const lvgui::Font& font) {
+		std::string s = "Omega \xCE\xA9 test 123";
+
+		std::vector<std::size_t> boundaries;
+		boundaries.push_back(0);
+		for (std::size_t p = 0; p < s.size();) {
+			p = lvgui::utf8NextBoundary(s, p);
+			boundaries.push_back(p);
+		}
+
+		for (std::size_t b : boundaries) {
+			float x = font.offsetAtIndex(s, 14.0f, b);
+			std::size_t idx = font.indexAtOffset(s, 14.0f, x);
+			assert(idx == b);
+		}
+		std::cout << "✓ testIndexOffsetMutualInverse\n";
+	}
+
+	void testContentScaleIndependence() {
+		std::vector<std::uint8_t> ttf = loadFontFile();
+
+		// theme.fontSize == 14 logical px, rendered at 1x and 2x content scale --
+		// i.e. baked at 14 physical px and 28 physical px respectively, per the
+		// documented "bake at theme.fontSize * contentScale" convention.
+		lvgui::Font fontLoDpi;
+		fontLoDpi.bake(ttf, 14.0f, 512, 512, 1.0f);
+
+		lvgui::Font fontHiDpi;
+		fontHiDpi.bake(ttf, 28.0f, 512, 512, 2.0f);
+
+		// Sanity check that the two bakes actually differ physically -- otherwise the
+		// width comparison below would pass vacuously.
+		assert(fontHiDpi.glyphFor('H').size.y > fontLoDpi.glyphFor('H').size.y * 1.5f);
+
+		float widthLoDpi = fontLoDpi.measureText("Hello", 14.0f).x;
+		float widthHiDpi = fontHiDpi.measureText("Hello", 14.0f).x;
+		assert(std::fabs(widthLoDpi - widthHiDpi) < 0.5f);
+
+		float lineHeightLoDpi = fontLoDpi.lineHeight(14.0f);
+		float lineHeightHiDpi = fontHiDpi.lineHeight(14.0f);
+		assert(std::fabs(lineHeightLoDpi - lineHeightHiDpi) < 0.5f);
+
+		std::cout << "✓ testContentScaleIndependence\n";
+	}
+
+	// Also pins the atlas-too-small retry path. A 28px bake does not fit the requested
+	// 512x512, so bake() must retry at 1024x1024 -- and because ranges are packed one
+	// call at a time, this additionally proves the retry restarts EVERY range rather
+	// than resuming from whichever call returned zero: range 0 packed fine on the first
+	// attempt, so if the retry resumed mid-way its glyphs would be missing here.
+	void testAllDefaultGlyphsPresentAtHiDpiBake() {
+		std::vector<std::uint8_t> ttf = loadFontFile();
+
+		lvgui::Font font;
+		font.bake(ttf, 28.0f, 512, 512, 2.0f);
+
+		// The retry fired: the atlas is larger than the size that was asked for.
+		assert(font.atlasWidth() == 1024);
+		assert(font.atlasHeight() == 1024);
+		assert(font.atlasPixels().size() ==
+		       static_cast<std::size_t>(font.atlasWidth()) * static_cast<std::size_t>(font.atlasHeight()));
+
+		// Range 0 is the one that succeeded pre-retry; check it explicitly.
+		assert(font.hasGlyph('A'));
+		assert(font.glyphFor('A').size.x > 0.0f);
+
+		std::size_t checked = 0;
+		for (std::size_t r = 0; r < lvgui::kDefaultGlyphRangeCount; ++r) {
+			const lvgui::GlyphRange& range = lvgui::kDefaultGlyphRanges[r];
+			for (std::uint32_t cp = range.first; cp <= range.last; ++cp) {
+				if (!font.hasGlyph(cp)) {
+					std::cerr << "Missing glyph for codepoint 0x" << std::hex << cp
+					          << std::dec << " (range " << r << ")\n";
+				}
+				assert(font.hasGlyph(cp));
+				++checked;
+			}
+		}
+
+		std::cout << "✓ testAllDefaultGlyphsPresentAtHiDpiBake (" << checked
+		          << " codepoints checked, atlas ended up " << font.atlasWidth()
+		          << "x" << font.atlasHeight() << ")\n";
+	}
+
+	// Regression test for the oversampling bug: taking the quad size from the atlas
+	// rect (x1-x0) rather than xoff2-xoff makes every glyph ~2x too wide at 2x2
+	// oversampling, so rendered text visibly overlaps. Ink is never much wider than the
+	// advance for Latin letters, which is what pins the size to the right units.
+	void testGlyphInkFitsItsAdvance(const lvgui::Font& font) {
+		const char* samples = "HMWimnox0189";
+		for (const char* c = samples; *c != '\0'; ++c) {
+			const lvgui::Glyph& g = font.glyphFor(static_cast<std::uint32_t>(*c));
+			assert(g.size.x > 0.0f);
+			assert(g.xAdvance > 0.0f);
+			// A little slack for glyphs that legitimately overhang their advance.
+			assert(g.size.x <= g.xAdvance * 1.35f);
+		}
+
+		// Same invariant stated end-to-end: consecutive glyphs in a word must not
+		// overlap, i.e. each glyph's ink must end before the next pen position.
+		const lvgui::Glyph& e = font.glyphFor('e');
+		assert(e.offset.x + e.size.x <= e.xAdvance * 1.35f);
+
+		std::cout << "✓ testGlyphInkFitsItsAdvance\n";
+	}
+
+	void testFallbackGlyphIsNeverZeroSize(const lvgui::Font& font) {
+		std::uint32_t outOfRange = 0x4E2D; // CJK "middle", well outside every default range
+		assert(!font.hasGlyph(outOfRange));
+		const lvgui::Glyph& g = font.glyphFor(outOfRange);
+		assert(g.size.x > 0.0f);
+		assert(g.size.y > 0.0f);
+		std::cout << "✓ testFallbackGlyphIsNeverZeroSize\n";
+	}
+}
+
+int main() {
+	std::vector<std::uint8_t> ttf = loadFontFile();
+
+	lvgui::Font font;
+	font.bake(ttf, 14.0f, 512, 512, 1.0f);
+
+	testBakeSucceeds(font);
+	testWhitePixelAndNoGlyphOverlap(font);
+	testEmptyMeasure(font);
+	testDoubledWidth(font);
+	testOffsetAtIndexEndpoints(font);
+	testIndexOffsetMutualInverse(font);
+	testContentScaleIndependence();
+	testAllDefaultGlyphsPresentAtHiDpiBake();
+	testGlyphInkFitsItsAdvance(font);
+	testFallbackGlyphIsNeverZeroSize(font);
+
+	std::cout << "\n✅ All Font tests passed!\n";
+	return 0;
+}

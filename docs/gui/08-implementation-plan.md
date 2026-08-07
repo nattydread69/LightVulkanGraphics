@@ -45,13 +45,29 @@ option(LVG_BUILD_UI "Build the LVGUI immediate-rendering GUI layer" ON)
 if(LVG_BUILD_UI)
     add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
     add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphicsUI)
+    set_target_properties(LightVulkanGraphicsUI PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_link_libraries(LightVulkanGraphicsUI
-        PUBLIC  LightVulkanGraphics glm::glm
-        PRIVATE Vulkan::Vulkan glfw)
+        PUBLIC  glm::glm
+        PRIVATE Vulkan::Vulkan)
+    # Core links UI, never the reverse -- see below.
+    target_link_libraries(LightVulkanGraphics PRIVATE LightVulkanGraphicsUI)
     target_compile_definitions(LightVulkanGraphics PUBLIC LVG_WITH_UI)
     target_compile_features(LightVulkanGraphicsUI PUBLIC cxx_std_17)
 endif()
 ```
+
+**The dependency runs core → UI, not UI → core.** The shape originally sketched here
+had `LightVulkanGraphicsUI` link `LightVulkanGraphics` PUBLIC, which cannot work: core
+has to call into the UI to record it into the frame (phase 3) and to expose `gfx.gui()`
+(phase 10), and CMake rejects a target cycle unless every target in it is `STATIC` —
+core is `SHARED`. It is also unnecessary, because layers 1–2 (`Types`, `DrawList`,
+`Font`, `Utf8`) are pure glm+std and `UiRenderer` receives its Vulkan handles through
+`UiRendererCreateInfo` rather than reaching into `VkApp`. Because the static UI library
+is linked into a shared library, it needs `POSITION_INDEPENDENT_CODE`. A useful side
+effect of the inversion: the headless UI tests link neither Vulkan, assimp nor glfw.
+
+Consumers therefore link `LightVulkanGraphics::LightVulkanGraphics` to get both, or
+`LightVulkanGraphics::UI` alone for just the device-independent toolkit.
 
 **Acceptance**: `cmake -S . -B build && cmake --build build` succeeds with
 `LVG_BUILD_UI` both ON and OFF. With OFF, the resulting library is byte-comparable in

@@ -23,6 +23,14 @@
 #include "RiggedSkinning.h"
 #include "SceneGraph.h"
 
+#ifdef LVG_WITH_UI
+// ~VkApp lives in this translation unit, and destroying the GUI unique_ptr members
+// requires their complete types.
+#include "ui/UiRenderer.h"
+#include <lightVulkanGraphics/ui/DrawList.h>
+#include <lightVulkanGraphics/ui/Font.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -569,6 +577,10 @@ namespace lightGraphics
 		defaultTexture_ = createSolidColorTexture(255, 255, 255, 255);
 		createSceneResources();
 
+#ifdef LVG_WITH_UI
+		initUi();
+#endif
+
 		// Initialize timing for keyboard movement
 		prevTime_ = glfwGetTime();
 	}
@@ -601,6 +613,12 @@ namespace lightGraphics
 		{
 			vkDeviceWaitIdle(device_);
 		}
+
+#ifdef LVG_WITH_UI
+		// Before cleanupSwapChain(), which destroys the render pass the UI pipeline
+		// was created against.
+		destroyUi();
+#endif
 
 		// Tear down swapchain-dependent resources
 		cleanupSwapChain();
@@ -2917,7 +2935,11 @@ namespace lightGraphics
 		if (!hasRegularObjects && riggedInstances_.empty() &&
 			meshDrawRequests_.empty() && !hasVisibleVolume)
 		{
-			// Nothing to draw
+			// Nothing in the scene to draw -- but the GUI still has to be recorded, or
+			// it would vanish exactly when the 3D scene is empty.
+#ifdef LVG_WITH_UI
+			recordUi(cmd);
+#endif
 			vkCmdEndRenderPass(cmd);
 			if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
 			{
@@ -3331,6 +3353,13 @@ namespace lightGraphics
 
 		// Custom meshes and volumes share a stable application-controlled order.
 		drawOrderedCustomResources(cmd, imageIndex);
+
+		// The UI draws after the scene, inside the same render pass, immediately
+		// before it ends -- opening a second pass would cost a full attachment
+		// load/store on tiled GPUs for nothing.
+#ifdef LVG_WITH_UI
+		recordUi(cmd);
+#endif
 
 		vkCmdEndRenderPass(cmd);
 
