@@ -56,6 +56,30 @@ target_compile_features(lvgui_input_tests PRIVATE cxx_std_17)
 
 add_test(NAME lvgui_input_tests COMMAND lvgui_input_tests)
 
+# Phase 5: GuiContext/Panel/Widget layout and interaction, headless -- no Vulkan device,
+# no window, no GLFW. Constructs a real Font from the bundled test font.
+add_executable(lvgui_layout_tests
+	test_layout.cpp
+)
+target_link_libraries(lvgui_layout_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_layout_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_layout_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_layout_tests COMMAND lvgui_layout_tests)
+
+add_executable(lvgui_hittest_tests
+	test_hittest.cpp
+)
+target_link_libraries(lvgui_hittest_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_hittest_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_hittest_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_hittest_tests COMMAND lvgui_hittest_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)

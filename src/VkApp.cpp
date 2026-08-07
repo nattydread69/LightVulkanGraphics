@@ -963,8 +963,27 @@ namespace lightGraphics
 				float xscale = 1.0f, yscale = 1.0f;
 				glfwGetWindowContentScale(window_, &xscale, &yscale);
 				(void) yscale;
-				uiPlatform_->beginFrame({ static_cast<float>(winW), static_cast<float>(winH) },
-				                        xscale, dt);
+				const ui::Vec2 displaySize{ static_cast<float>(winW), static_cast<float>(winH) };
+				uiPlatform_->beginFrame(displaySize, xscale, dt);
+
+				if (guiContext_)
+				{
+					// docs/gui/01-architecture.md per-frame sequence, steps 1-3:
+					// uiPlatform_ already turned this frame's raw GLFW callbacks into a
+					// resolved InputState; forwardInputToGui() replays that into
+					// guiContext_ (which cannot receive GLFW callbacks itself -- see
+					// VkApp.h) before guiContext_ does its own beginFrame()/update().
+					forwardInputToGui();
+					uiLastDisplaySize_ = displaySize;
+					guiContext_->beginFrame(displaySize, xscale, dt);
+					guiContext_->update();
+
+					if (uiRenderer_ && guiContext_->atlasNeedsRebuild())
+					{
+						uiRenderer_->rebuildAtlas(guiContext_->font());
+						guiContext_->acknowledgeAtlasRebuild();
+					}
+				}
 			}
 #endif
 
@@ -990,6 +1009,17 @@ namespace lightGraphics
 
 			sceneGraph_->updateWorldTransforms();
 			sceneGraph_->syncToRenderer();
+
+#ifdef LVG_WITH_UI
+			// docs/gui/01-architecture.md step 5: layout + build this frame's DrawList,
+			// which recordUi() (called from inside drawFrame()'s recordCommandBuffer)
+			// reads via guiContext_->drawList().
+			if (guiContext_)
+			{
+				guiContext_->endFrame();
+			}
+#endif
+
 			drawFrame();
 
 #ifdef LVG_WITH_UI

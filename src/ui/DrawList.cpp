@@ -28,6 +28,39 @@ namespace {
 	};
 
 	static const CircleTable kCircleTable;
+
+	struct RoundedCorner { Vec2 centre; int tableStart; };
+
+	// Traces the boundary of a rounded rect as a single perimeter loop: four
+	// quarter-circle corner arcs, each anchored at its own corner's inset centre
+	// (not the rect's centre -- anchoring all four at the rect's centre is what
+	// draws a circle instead of a rounded rect). Consecutive arcs' endpoints
+	// already lie on the flat edge between them, so the loop needs no separate
+	// straight-edge points: a closed polyline or a fan drawn over these points
+	// alone reproduces the flat runs for free.
+	//
+	// `rounding` is clamped to half the shorter side so two opposing corners can
+	// never cross past each other and fold the geometry inside out.
+	float buildRoundedRectPerimeter(const Rect& rect, float rounding, std::vector<Vec2>& out) {
+		float r = std::min(rounding, std::min(rect.w, rect.h) * 0.5f);
+
+		const RoundedCorner corners[4] = {
+			{ { rect.right() - r, rect.bottom() - r }, 0  },  // bottom-right
+			{ { rect.left()  + r, rect.bottom() - r }, 16 },  // bottom-left
+			{ { rect.left()  + r, rect.top()    + r }, 32 },  // top-left
+			{ { rect.right() - r, rect.top()    + r }, 48 },  // top-right
+		};
+
+		out.reserve(out.size() + 4 * 17);
+		for (const RoundedCorner& corner : corners) {
+			for (int i = 0; i <= 16; ++i) {
+				const Vec2& circlePoint = kCircleTable[corner.tableStart + i];
+				out.push_back({ corner.centre.x + circlePoint.x * r,
+				                 corner.centre.y + circlePoint.y * r });
+			}
+		}
+		return r;
+	}
 }
 
 DrawList::DrawList() {
@@ -153,41 +186,52 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 		m_indices.push_back(idx + 3);
 
 	} else {
-		float r = std::min(rounding, std::min(rect.w, rect.h) * 0.5f);
+		// A proper rounded rect, not a circle: a triangle fan over the perimeter's
+		// own first vertex (docs/gui/02-rendering.md, "build a convex fan"), the same
+		// technique addConvexPolyFilled uses. A rounded rect is convex, so fanning
+		// from any one of its own boundary points -- rather than from a separate hub
+		// planted at the rect's centre -- tiles it correctly with one fewer vertex
+		// and no vertex left sitting at the centre.
 		std::uint32_t col = packColor(color);
+
+		std::vector<Vec2> perimeter;
+		buildRoundedRectPerimeter(rect, rounding, perimeter);
+
 		std::uint32_t baseIdx = m_vertices.size();
-
-		Vec2 centre = rect.centre();
-
-		for (int i = 0; i <= 64; ++i) {
-			const Vec2& circlePoint = kCircleTable[i];
-			Vec2 offset = { circlePoint.x * r, circlePoint.y * r };
-			Vec2 pos = snapToPixel({ centre.x + offset.x, centre.y + offset.y });
+		for (const Vec2& p : perimeter) {
+			Vec2 pos = snapToPixel(p);
 			m_vertices.push_back(UiVertex(glm::vec2(pos.x, pos.y), wuv, col));
 		}
 
-		std::uint32_t centreIdx = m_vertices.size();
-		Vec2 snappedCentre = snapToPixel(centre);
-		m_vertices.push_back(UiVertex(glm::vec2(snappedCentre.x, snappedCentre.y), wuv, col));
-
-		for (int i = 0; i < 64; ++i) {
+		std::uint32_t perimeterCount = static_cast<std::uint32_t>(perimeter.size());
+		for (std::uint32_t i = 1; i + 1 < perimeterCount; ++i) {
+			m_indices.push_back(baseIdx);
 			m_indices.push_back(baseIdx + i);
 			m_indices.push_back(baseIdx + i + 1);
-			m_indices.push_back(centreIdx);
 		}
 	}
 
 	updateCurrentCommandIndexCount();
 }
 
-void DrawList::addRect(const Rect& rect, Color color, float thickness, float) {
-	Vec2 pts[4] = {
-		rect.min(),
-		{ rect.right(), rect.top() },
-		{ rect.right(), rect.bottom() },
-		{ rect.left(), rect.bottom() }
-	};
-	addPolyline(pts, 4, color, thickness, true);
+void DrawList::addRect(const Rect& rect, Color color, float thickness, float rounding) {
+	if (rounding <= 0.0f) {
+		Vec2 pts[4] = {
+			rect.min(),
+			{ rect.right(), rect.top() },
+			{ rect.right(), rect.bottom() },
+			{ rect.left(), rect.bottom() }
+		};
+		addPolyline(pts, 4, color, thickness, true);
+		return;
+	}
+
+	// Shares the exact perimeter addRectFilled uses so a rounded outline drawn over
+	// a rounded fill (slider handles, the text box border) actually follows the same
+	// curve instead of a square outline showing corners past the fill's rounding.
+	std::vector<Vec2> perimeter;
+	buildRoundedRectPerimeter(rect, rounding, perimeter);
+	addPolyline(perimeter.data(), static_cast<int>(perimeter.size()), color, thickness, true);
 }
 
 void DrawList::addRectFilledMultiColor(const Rect& rect, Color tl, Color tr, Color br, Color bl) {
@@ -381,7 +425,15 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 	ensureCommand();
 
 	std::uint32_t col = packColor(color);
-	Vec2 pen = topLeft;
+	// glyph.offset is baseline-relative (negative for the ink above the baseline, which
+	// is most of a typical glyph -- see stb_truetype's pc.yoff), but `topLeft` is
+	// documented as the text's TOP-LEFT corner, and addTextClipped's callers size their
+	// clip rect to exactly font.lineHeight() with no slack. Advancing the pen to the
+	// baseline here (topLeft.y + ascent) is what makes "topLeft" actually mean top-left:
+	// without it every glyph renders shifted up by a full ascent, which a tall clip rect
+	// (a title bar, a button) has enough headroom to absorb invisibly, but a row sized to
+	// exactly lineHeight() clips away everything except a sliver near the baseline.
+	Vec2 pen = { topLeft.x, topLeft.y + font.ascent(pixelSize) };
 	float scale = (font.bakedPixelSize() > 0.0f) ? pixelSize / font.bakedPixelSize() : 0.0f;
 
 	std::size_t pos = 0;
@@ -476,6 +528,30 @@ void DrawList::addTextClipped(const Font& font, float pixelSize, const Rect& rec
 	pushClipRect(rect);
 	addText(font, pixelSize, { x, y }, color, display);
 	popClipRect();
+}
+
+void DrawList::append(const DrawList& other) {
+	if (other.m_vertices.empty()) {
+		return;
+	}
+
+	std::uint32_t vertexOffset = static_cast<std::uint32_t>(m_vertices.size());
+	std::uint32_t indexOffset = static_cast<std::uint32_t>(m_indices.size());
+
+	m_vertices.insert(m_vertices.end(), other.m_vertices.begin(), other.m_vertices.end());
+	m_indices.reserve(m_indices.size() + other.m_indices.size());
+	for (std::uint32_t idx : other.m_indices) {
+		m_indices.push_back(idx + vertexOffset);
+	}
+
+	for (const DrawCmd& cmd : other.m_commands) {
+		if (cmd.indexCount == 0) {
+			continue;
+		}
+		DrawCmd copy = cmd;
+		copy.indexOffset += indexOffset;
+		m_commands.push_back(copy);
+	}
 }
 
 } // namespace lightGraphics::ui

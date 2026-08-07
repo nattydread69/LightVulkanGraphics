@@ -140,12 +140,15 @@ namespace lightGraphics::detail
 }
 
 #ifdef LVG_WITH_UI
+#include <lightVulkanGraphics/ui/Types.h>
+
 namespace lightGraphics::ui
 {
 	class DrawList;
 	class Font;
 	class UiRenderer;
 	class UiPlatformGlfw;
+	class GuiContext;
 }
 #endif
 
@@ -593,38 +596,46 @@ namespace lightGraphics
 		// The core library owns and drives the GUI's Vulkan backend; the dependency
 		// runs core -> LightVulkanGraphicsUI and never the reverse. These are
 		// unique_ptrs to incomplete types, so ~VkApp must stay out-of-line.
-		std::unique_ptr<ui::Font> uiFont_;
 		std::unique_ptr<ui::UiRenderer> uiRenderer_;
-		// Phase 3 verification harness: a hard-coded draw list enabled by setting
-		// LVG_UI_DEBUG_DRAW=1 or calling setUiDebugDrawEnabled(true). Phase 5 replaces
-		// this with a real GuiContext.
-		std::unique_ptr<ui::DrawList> uiDebugDrawList_;
-		bool uiDebugDrawEnabled_ = false;
 
-		// Phase 4: input plumbing (docs/gui/04). Installed in createWindow() so input
-		// capture starts as soon as the window exists, independent of Vulkan readiness.
+		// Phase 4: raw GLFW input capture (docs/gui/04). Installed in createWindow() so
+		// input capture starts as soon as the window exists, independent of Vulkan
+		// readiness. GuiContext.h must never see a GLFW header (docs/gui/01's layering
+		// rule), so it cannot itself be an installCallbacks() target; forwardInputToGui()
+		// replays this object's already-resolved per-frame InputState into guiContext_
+		// via the same inject* calls a platform layer would use.
 		std::unique_ptr<ui::UiPlatformGlfw> uiPlatform_;
+
+		// Phase 5: the real GUI (docs/gui/01-05). Owns the theme, font, and panels, and
+		// produces the DrawList uiRenderer_ plays back each frame.
+		std::unique_ptr<ui::GuiContext> guiContext_;
+
+		// Logical display size as of this frame's guiContext_->beginFrame() call, kept
+		// so recordUi() can pass it to UiRenderer::record()'s logicalSize parameter
+		// (docs/gui/06, "DPI and content scale") without re-querying GLFW mid-recording.
+		ui::Vec2 uiLastDisplaySize_{};
 
 		void initUi();
 		void destroyUi();
-		void buildUiDebugDrawList();
+		void forwardInputToGui();
 		void recordUi(VkCommandBuffer cmd);
 		std::string findFontPath(const std::string& fontName);
 
-		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). GuiContext
-		// does not exist until phase 5, so these are a stub that always yields the
-		// camera the input it already had; phase 5 replaces the bodies with
-		// uiContext_->wantsMouse()/wantsKeyboard(). The guard call sites in
-		// onMouseButton/onScroll and mainLoop() are real now so that swap is the only
-		// change phase 5 needs to make here.
-		bool uiWantsMouse() const { return false; }
-		bool uiWantsKeyboard() const { return false; }
+		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). Defined
+		// out-of-line in VkAppUi.cpp -- ui::GuiContext is only forward-declared here, and
+		// an inline body would need it complete in every translation unit that includes
+		// this header.
+		bool uiWantsMouse() const;
+		bool uiWantsKeyboard() const;
 
 	public:
-		// Draws a hard-coded draw list (a red rect, a clipped rect and the string
-		// "Hello") over the scene, for verifying the phase 3 Vulkan backend by eye.
-		void setUiDebugDrawEnabled(bool enabled) { uiDebugDrawEnabled_ = enabled; }
-		bool getUiDebugDrawEnabled() const { return uiDebugDrawEnabled_; }
+		// Phase 10 (docs/gui/08-implementation-plan.md) formalises this into
+		// LightVulkanGraphicsCreateInfo::enableGui / guiCreateInfo plus install rules for
+		// the bundled font; until then the GUI is always constructed with theme defaults
+		// as soon as LVG_WITH_UI is compiled in and init() has brought up a device and
+		// render pass (see initUi()).
+		bool hasGui() const { return guiContext_ != nullptr; }
+		ui::GuiContext& gui();   // asserts hasGui()
 
 	private:
 #endif

@@ -19,7 +19,7 @@ namespace Mod {
 namespace Key {
 	enum : int {
 		Unknown = -1,
-		Backspace, Delete, Tab, Enter, Escape,
+		Backspace, Delete, Tab, Enter, Escape, Space,
 		Left, Right, Up, Down, Home, End, PageUp, PageDown,
 		A, C, V, X, Z, Y,          // for the standard editing shortcuts
 		Count

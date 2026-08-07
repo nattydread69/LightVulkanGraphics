@@ -83,4 +83,28 @@ inline constexpr std::uint32_t Color::packed() const {
 
 enum class Align { Start, Center, End };
 
+enum class PanelFlags : std::uint32_t {
+	None         = 0,
+	Movable      = 1 << 0,
+	Resizable    = 1 << 1,
+	Collapsible  = 1 << 2,
+	Closable     = 1 << 3,
+	Scrollable   = 1 << 4,
+	NoTitleBar   = 1 << 5,
+	NoBackground = 1 << 6,
+	// operator| below isn't declared yet at this point in the enum body, so Default is
+	// built from the raw bit values rather than the sibling enumerators directly.
+	Default      = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4),  // Movable | Resizable | Collapsible | Scrollable
+};
+
+constexpr PanelFlags operator|(PanelFlags a, PanelFlags b) {
+	return static_cast<PanelFlags>(static_cast<std::uint32_t>(a) | static_cast<std::uint32_t>(b));
+}
+constexpr PanelFlags operator&(PanelFlags a, PanelFlags b) {
+	return static_cast<PanelFlags>(static_cast<std::uint32_t>(a) & static_cast<std::uint32_t>(b));
+}
+constexpr bool hasFlag(PanelFlags flags, PanelFlags bit) {
+	return static_cast<std::uint32_t>(flags & bit) != 0;
+}
+
 } // namespace lightGraphics::ui

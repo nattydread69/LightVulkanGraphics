@@ -451,6 +451,13 @@ if(LVG_BUILD_UI)
 		src/ui/Utf8.cpp
 		src/ui/UiRenderer.cpp
 		src/ui/UiPlatformGlfw.cpp
+		src/ui/Theme.cpp
+		src/ui/Widget.cpp
+		src/ui/Panel.cpp
+		src/ui/GuiContext.cpp
+		src/ui/widgets/Label.cpp
+		src/ui/widgets/Separator.cpp
+		src/ui/widgets/Button.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
@@ -617,6 +624,21 @@ if (LVG_BUILD_EXAMPLES)
 
 	add_executable(rotation_glyph_example examples/rotation_glyph_example.cpp)
 	lvg_configure_build_tree_example(rotation_glyph_example)
+
+	# THROWAWAY -- phase 5 visual smoke test. Remove this target and
+	# examples/phase5_gui_smoke_demo.cpp once the GUI integration has been confirmed by
+	# eye; it is not part of the phase 5 deliverable.
+	if (LVG_BUILD_UI)
+		add_executable(phase5_gui_smoke_demo examples/phase5_gui_smoke_demo.cpp)
+		lvg_configure_build_tree_example(phase5_gui_smoke_demo)
+		# Consumer code that instantiates Panel::add<W>() for a concrete widget type is
+		# the only place those widgets' constructors/vtables get instantiated -- the core
+		# library's own object code never references them, so its PRIVATE static link of
+		# LightVulkanGraphicsUI does not re-export those symbols. Any real consumer needs
+		# both targets; docs/gui/00-overview.md's phase 0 CMake requirements anticipate
+		# this ("an external consumer doing find_package() gets both targets").
+		target_link_libraries(phase5_gui_smoke_demo PRIVATE LightVulkanGraphics::UI)
+	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.
 	if (WIN32 AND ASSIMP_DLL)

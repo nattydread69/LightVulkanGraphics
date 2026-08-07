@@ -287,6 +287,223 @@ namespace {
 
 		std::cout << "✓ testColorOperations\n";
 	}
+
+	// --- Geometry-position tests -------------------------------------------------
+	// These assert WHERE vertices land, not just how many are produced. Count-only
+	// tests (testRectFilledBasic above) already passed while addRectFilled emitted a
+	// circle instead of a rounded rect, and while addText baselined glyphs a full
+	// ascent too high -- both bugs preserved vertex/index counts exactly.
+
+	float dist(lvgui::Vec2 a, lvgui::Vec2 b) {
+		float dx = a.x - b.x, dy = a.y - b.y;
+		return std::sqrt(dx * dx + dy * dy);
+	}
+
+	void testRectFilledSquareCornersExact() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect r = { 10, 10, 80, 50 };
+		list.addRectFilled(r, lvgui::Color(255, 0, 0, 255));  // rounding = 0
+
+		assert(list.vertices().size() == 4);
+		const auto& v = list.vertices();
+		// Winding is TL, TR, BR, BL -- pinned because addRectFilledMultiColor and the
+		// index list both assume this order.
+		assert(v[0].pos.x == r.left()  && v[0].pos.y == r.top());
+		assert(v[1].pos.x == r.right() && v[1].pos.y == r.top());
+		assert(v[2].pos.x == r.right() && v[2].pos.y == r.bottom());
+		assert(v[3].pos.x == r.left()  && v[3].pos.y == r.bottom());
+
+		std::cout << "✓ testRectFilledSquareCornersExact\n";
+	}
+
+	void testRectFilledRoundedStaysInBoundsAndOffCentre() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect r = { 10, 20, 100, 40 };
+		float rounding = 4.0f;
+		list.addRectFilled(r, lvgui::Color(255, 0, 0, 255), rounding);
+
+		assert(!list.vertices().empty());
+
+		lvgui::Vec2 centre = r.centre();
+		// A circular corner's arc point at 45 degrees into its quadrant sweep is the
+		// one boundary vertex that sits closest to the *middle* of that corner's own
+		// treatment -- distinct from its two tangent points, which sit at the ends of
+		// the flat runs instead. The four rect corners give four such reference
+		// points; each must actually be represented by emitted geometry, not just
+		// "some point somewhere near that corner."
+		float diag = rounding * 0.70710678f;  // cos(45deg) == sin(45deg)
+		lvgui::Vec2 cornerArcMids[4] = {
+			{ r.right() - rounding + diag, r.bottom() - rounding + diag },  // bottom-right
+			{ r.left()  + rounding - diag, r.bottom() - rounding + diag },  // bottom-left
+			{ r.left()  + rounding - diag, r.top()    + rounding - diag },  // top-left
+			{ r.right() - rounding + diag, r.top()    + rounding - diag },  // top-right
+		};
+		bool nearCornerArcMid[4] = { false, false, false, false };
+
+		for (const auto& v : list.vertices()) {
+			// Snapping to whole pixels can only move a vertex by <= ~0.71px diagonally.
+			assert(v.pos.x >= r.left() - 1.0f && v.pos.x <= r.right() + 1.0f);
+			assert(v.pos.y >= r.top() - 1.0f && v.pos.y <= r.bottom() + 1.0f);
+
+			// The assertion that would have caught the circle bug: a fan hub placed
+			// at the rect's centre (as a naive centre-anchored circle fan would need)
+			// leaves a vertex sitting exactly there. A correct rounded-rect fill has
+			// no reason to ever place a vertex at the centre.
+			assert(dist({ v.pos.x, v.pos.y }, centre) > 1.0f);
+
+			for (int i = 0; i < 4; ++i) {
+				if (dist({ v.pos.x, v.pos.y }, cornerArcMids[i]) <= 1.0f) {
+					nearCornerArcMid[i] = true;
+				}
+			}
+		}
+
+		for (int i = 0; i < 4; ++i) assert(nearCornerArcMid[i]);
+
+		std::cout << "✓ testRectFilledRoundedStaysInBoundsAndOffCentre\n";
+	}
+
+	void testRectFilledRoundingClampsInsteadOfInverting() {
+		lvgui::DrawList list;
+		list.clear();
+
+		// rounding (100) far exceeds min(w,h)/2 (20) -- must clamp to a full stadium
+		// (here, since w == h, a circle inscribed in the square) rather than letting
+		// corner centres cross past each other and fold the geometry inside out.
+		lvgui::Rect r = { 0, 0, 40, 40 };
+		list.addRectFilled(r, lvgui::Color(255, 0, 0, 255), 100.0f);
+
+		assert(!list.vertices().empty());
+		assert(list.indices().size() % 3 == 0);
+
+		lvgui::Vec2 centre = r.centre();
+		float maxClampedRadius = std::min(r.w, r.h) * 0.5f;  // 20
+
+		for (const auto& v : list.vertices()) {
+			assert(v.pos.x >= r.left() - 1.0f && v.pos.x <= r.right() + 1.0f);
+			assert(v.pos.y >= r.top() - 1.0f && v.pos.y <= r.bottom() + 1.0f);
+			// Inverted geometry (unclamped radius) would push corner arc centres past
+			// the rect's own centre and out the far side, producing vertices well
+			// beyond the clamped incircle radius from the centre.
+			assert(dist({ v.pos.x, v.pos.y }, centre) <= maxClampedRadius + 1.0f);
+		}
+
+		std::cout << "✓ testRectFilledRoundingClampsInsteadOfInverting\n";
+	}
+
+	void testAddTextBaselineWithinLineHeightOfTopLeft() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Vec2 topLeft = { 5, 10 };
+		float pixelSize = 14.0f;
+		list.addText(testFont(), pixelSize, topLeft, lvgui::Color(255, 255, 255), "Hi");
+
+		assert(list.vertices().size() >= 4);
+
+		// First glyph's quad is vertices [0..3]: tl, tr, br, bl.
+		float quadTop = list.vertices()[0].pos.y;
+		float quadBottom = list.vertices()[2].pos.y;
+		float lineHeight = testFont().lineHeight(pixelSize);
+
+		// The baseline bug advanced the pen by a full ascent *without* moving
+		// topLeft down first, so glyphs rendered a whole ascent above topLeft.y --
+		// this is exactly what these two bounds pin down.
+		assert(quadTop >= topLeft.y - 1.0f);
+		assert(quadTop <= topLeft.y + lineHeight + 1.0f);
+		assert(quadBottom >= topLeft.y - 1.0f);
+		assert(quadBottom <= topLeft.y + lineHeight + 1.0f);
+
+		std::cout << "✓ testAddTextBaselineWithinLineHeightOfTopLeft\n";
+	}
+
+	void testAddRectFormsRingAndHonoursRounding() {
+		// rounding == 0: a plain outline. No vertex should sit in the interior
+		// region inset by more than the outline's own thickness -- that's what
+		// distinguishes a ring from a filled or malformed shape.
+		{
+			lvgui::DrawList list;
+			list.clear();
+
+			lvgui::Rect r = { 10, 10, 80, 50 };
+			float thickness = 4.0f;
+			list.addRect(r, lvgui::Color(0, 0, 255, 255), thickness, 0.0f);
+
+			assert(!list.vertices().empty());
+
+			float slack = 1.0f;  // pixel snapping
+			float forbiddenInset = thickness + slack;
+			float ix0 = r.left() + forbiddenInset, ix1 = r.right() - forbiddenInset;
+			float iy0 = r.top() + forbiddenInset, iy1 = r.bottom() - forbiddenInset;
+
+			for (const auto& v : list.vertices()) {
+				bool strictlyInside = v.pos.x > ix0 && v.pos.x < ix1 &&
+				                       v.pos.y > iy0 && v.pos.y < iy1;
+				assert(!strictlyInside);
+			}
+
+			std::cout << "✓ testAddRectFormsRingAndHonoursRounding (rounding=0 ring)\n";
+		}
+
+		// rounding > 0: the outline must actually follow the rounded corners --
+		// fixed here because phase 6's slider handles and phase 7's text box both
+		// draw a rounded outline over a rounded fill, and a square outline over a
+		// rounded fill reads as broken.
+		{
+			lvgui::DrawList list;
+			list.clear();
+
+			lvgui::Rect r = { 10, 10, 80, 50 };
+			float thickness = 4.0f;
+			float rounding = 8.0f;
+			list.addRect(r, lvgui::Color(0, 0, 255, 255), thickness, rounding);
+
+			assert(!list.vertices().empty());
+
+			// Still a ring: nothing deep in the interior.
+			float slack = 1.0f;
+			float forbiddenInset = thickness + slack;
+			float ix0 = r.left() + forbiddenInset, ix1 = r.right() - forbiddenInset;
+			float iy0 = r.top() + forbiddenInset, iy1 = r.bottom() - forbiddenInset;
+			for (const auto& v : list.vertices()) {
+				bool strictlyInside = v.pos.x > ix0 && v.pos.x < ix1 &&
+				                       v.pos.y > iy0 && v.pos.y < iy1;
+				assert(!strictlyInside);
+			}
+
+			// The rounding is not ignored: an unmitred square-outline join already
+			// keeps vertices a couple pixels clear of the raw corner point, so
+			// "no vertex at the exact corner" holds even when rounding is dropped on
+			// the floor and can't tell the two cases apart. What *can* tell them
+			// apart is the flat-edge tangent point where a rounded corner's arc is
+			// supposed to hand off to the straight run: a square outline has no
+			// vertex anywhere near it (nearest is 3*thickness away, at the corner),
+			// while a rounded outline puts one right there (within half the
+			// thickness). Check all 8 (two per corner, one on each adjoining edge).
+			lvgui::Vec2 tangentPoints[8] = {
+				{ r.left() + rounding, r.top() },     { r.right() - rounding, r.top() },
+				{ r.left() + rounding, r.bottom() },  { r.right() - rounding, r.bottom() },
+				{ r.left(),  r.top() + rounding },    { r.left(),  r.bottom() - rounding },
+				{ r.right(), r.top() + rounding },    { r.right(), r.bottom() - rounding },
+			};
+			for (const auto& tp : tangentPoints) {
+				bool found = false;
+				for (const auto& v : list.vertices()) {
+					if (dist({ v.pos.x, v.pos.y }, tp) <= thickness * 0.5f + 1.0f) {
+						found = true;
+						break;
+					}
+				}
+				assert(found);
+			}
+
+			std::cout << "✓ testAddRectFormsRingAndHonoursRounding (rounding=8 rounded ring)\n";
+		}
+	}
 }
 
 int main() {
@@ -305,6 +522,12 @@ int main() {
 	testAddTextEmitsOneQuadPerVisibleGlyph();
 	testAddTextSkipsWhitespaceQuads();
 	testAddTextClippedTruncatesAndClips();
+
+	testRectFilledSquareCornersExact();
+	testRectFilledRoundedStaysInBoundsAndOffCentre();
+	testRectFilledRoundingClampsInsteadOfInverting();
+	testAddTextBaselineWithinLineHeightOfTopLeft();
+	testAddRectFormsRingAndHonoursRounding();
 
 	std::cout << "\n✅ All DrawList tests passed!\n";
 	return 0;

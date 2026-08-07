@@ -5,22 +5,21 @@
 //
 // UiPlatformGlfw owns the pending/current InputState split and the inject* family
 // described in docs/gui/04-input-and-events.md. GLFW's own callbacks feed it through
-// install Callbacks(); tests call inject* directly with no window at all. Once
-// GuiContext exists (phase 5), it either owns one of these or absorbs this logic
-// directly -- either way the inject* signatures here already match the ones normative
-// in docs/gui/07-public-api.md, so the swap is mechanical.
+// install Callbacks(); tests call inject* directly with no window at all. From phase 5
+// on, GuiContext owns one of these internally and forwards its own inject*/beginFrame/
+// endFrame calls to it -- the signatures here already matched the ones normative in
+// docs/gui/07-public-api.md, so that swap was mechanical.
 //
-// PlatformHooks is declared here for now so it is usable and testable in this phase.
-// docs/gui/07-public-api.md's header table places it in GuiContext.h; phase 5 should
-// move the declaration there (or have GuiContext.h re-export this one) so the project
-// ends up with a single definition.
+// PlatformHooks now lives in GuiContext.h (docs/gui/07-public-api.md's header table);
+// this header used to carry its own copy (it needed to exist before GuiContext did) and
+// now just reuses that definition instead.
 
+#include <lightVulkanGraphics/ui/GuiContext.h>
 #include <lightVulkanGraphics/ui/InputState.h>
 #include <lightVulkanGraphics/ui/KeyCodes.h>
 #include <lightVulkanGraphics/ui/Types.h>
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,12 +27,6 @@
 struct GLFWwindow;
 
 namespace lightGraphics::ui {
-
-struct PlatformHooks {
-	std::function<std::string()>          getClipboardText;
-	std::function<void(std::string_view)> setClipboardText;
-	std::function<void(CursorShape)>      setCursorShape;
-};
 
 class UiPlatformGlfw {
 public:

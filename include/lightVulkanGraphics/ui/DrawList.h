@@ -52,6 +52,13 @@ public:
 	void addTextClipped(const Font& font, float pixelSize, const Rect& rect, Color color,
 	                     std::string_view utf8, Align h, Align v);
 
+	// Appends another DrawList's geometry onto this one: vertices are copied verbatim,
+	// indices are offset to stay valid, and non-empty commands are copied with their
+	// indexOffset adjusted. Used by GuiContext::endFrame() to merge the overlay list
+	// (tooltips, popups, world labels) after the panel draw pass -- see
+	// docs/gui/01-architecture.md, per-frame sequence step 5.
+	void append(const DrawList& other);
+
 	// Every non-text primitive samples this UV so it shares the font atlas texture
 	// instead of needing a texture switch. Defaults to {0,0} (only correct once a Font
 	// has baked and called this) -- see docs/gui/02-rendering.md.
