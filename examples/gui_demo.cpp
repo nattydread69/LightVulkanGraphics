@@ -13,8 +13,11 @@
 //   Phase 8 (session A) -- DropDown: a short-list combo, a 20-item one to exercise
 //              popup scrolling, and a third in its own panel pinned near the bottom
 //              edge of the window to exercise the upward flip. CompositeWidget itself
-//              has no standalone widget yet (Row/Vec3Field/CollapsingSection land in
-//              session B) so there is nothing further to add here for it this phase.
+//              has no standalone widget yet.
+//   Phase 8 (session B) -- Row (horizontal layout by weight), Vec3Field (X/Y/Z with
+//              coloured borders), CollapsingSection (header + collapsible children),
+//              ProgressBar (fraction + indeterminate animation), PlotLine (sparkline with
+//              auto-scale hysteresis).
 
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -22,6 +25,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cmath>
 #include <exception>
 #include <iostream>
 
@@ -53,7 +57,7 @@ int main()
 		// z-order raising it to the front (docs/gui/05, "Panel").
 		gui.createPanel("Back Panel", { 700.0f, 400.0f, 220.0f, 120.0f });
 
-		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 560.0f });
+		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 800.0f });
 
 		panel->add<lvgui::Label>("Phase 5 -- Label, Separator, Spacer, Button");
 		panel->add<lvgui::Label>("Drag this title bar around")->setColor({ 0x9A, 0xA3, 0xAF, 0xFF });
@@ -170,6 +174,45 @@ int main()
 		// framebuffer") is visible by eye.
 		auto* bottomPanel = gui.createPanel("Near bottom edge", { 420.0f, 700.0f, 280.0f, 80.0f });
 		bottomPanel->add<lvgui::DropDown>("Flips upward", qualityPresets, 0);
+
+		// Phase 8 session B: CompositeWidget-derived and simple value widgets
+		panel->add<lvgui::Separator>("Phase 8 (session B) -- Row, Vec3Field, CollapsingSection");
+
+		// Row: horizontal layout by weight (1:2:1)
+		auto* row = panel->add<lvgui::Row>();
+		row->add<lvgui::Label>("Short");
+		row->add<lvgui::Label>("This takes twice the space");
+		row->add<lvgui::Label>("Short");
+		row->setWeights({ 1.0f, 2.0f, 1.0f });
+
+		// Vec3Field: X/Y/Z with colour-coded borders (this will be implemented with
+		// coloured borders in future when DragValue gains border-tinting; for now it's
+		// three DragValues in a row)
+		glm::vec3 position{ 1.5f, 2.3f, -0.8f };
+		auto* posField = panel->add<lvgui::Vec3Field>("Position", position);
+		posField->setOnChange([](glm::vec3 v) {
+			std::cout << "[gui-demo] position -> (" << v.x << ", " << v.y << ", " << v.z << ")" << std::endl;
+		});
+
+		// CollapsingSection: header + collapsible children
+		auto* section = panel->add<lvgui::CollapsingSection>("Advanced Settings", false);
+		section->add<lvgui::Checkbox>("Enable optimization");
+		section->add<lvgui::Checkbox>("Use caching");
+
+		// ProgressBar with indeterminate animation
+		auto* progressBar = panel->add<lvgui::ProgressBar>("Loading");
+		progressBar->setIndeterminate(true);
+		progressBar->setOverlayText("Processing...");
+
+		// PlotLine: sparkline (starts with sample data showing a sine pattern)
+		auto* plotLine = panel->add<lvgui::PlotLine>("Frame data", 100);
+		plotLine->setShowLatestValue(true);
+		plotLine->setHeight(60.0f);
+		// Populate with a sine wave for demonstration
+		for (int i = 0; i < 50; ++i) {
+			float angle = (i / 50.0f) * 6.28f;  // 0 to 2π
+			plotLine->push(std::sin(angle) * 0.5f + 0.5f);
+		}
 
 		app.run();
 	}

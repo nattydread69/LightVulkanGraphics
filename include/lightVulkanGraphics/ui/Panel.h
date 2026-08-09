@@ -7,6 +7,7 @@
 
 #include "Types.h"
 #include "Widget.h"
+#include "widgets/CompositeWidget.h"
 
 #include <cstddef>
 #include <memory>
@@ -42,6 +43,11 @@ public:
 		// (docs/gui/05, "CompositeWidget", effectivelyEnabled()), not just one of them.
 		ptr->m_parent = nullptr;
 		m_widgets.push_back(std::move(widget));
+		// If this widget is a CompositeWidget, propagate m_panel to its children
+		// (they may have been added in the constructor before m_panel was set)
+		if (auto* composite = dynamic_cast<CompositeWidget*>(ptr)) {
+			composite->propagatePanelToChildren();
+		}
 		return ptr;
 	}
 

@@ -121,6 +121,30 @@ target_compile_definitions(lvgui_dropdown_tests PRIVATE
 
 add_test(NAME lvgui_dropdown_tests COMMAND lvgui_dropdown_tests)
 
+# Phase 8, session B: CompositeWidget-derived widgets (Row, Vec3Field, CollapsingSection)
+# and simple value widgets (ProgressBar, PlotLine), headless -- same pattern as tests above.
+add_executable(lvgui_composites_tests
+	test_composites.cpp
+)
+target_link_libraries(lvgui_composites_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_composites_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_composites_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_composites_tests COMMAND lvgui_composites_tests)
+
+add_executable(lvgui_progressbar_tests
+	test_progressbar.cpp
+)
+target_link_libraries(lvgui_progressbar_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_progressbar_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_progressbar_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_progressbar_tests COMMAND lvgui_progressbar_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)

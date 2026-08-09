@@ -31,3 +31,8 @@
 #include "widgets/TextBox.h"
 #include "widgets/CompositeWidget.h"
 #include "widgets/DropDown.h"
+#include "widgets/Row.h"
+#include "widgets/Vec3Field.h"
+#include "widgets/CollapsingSection.h"
+#include "widgets/ProgressBar.h"
+#include "widgets/PlotLine.h"

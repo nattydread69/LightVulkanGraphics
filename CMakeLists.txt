@@ -465,6 +465,11 @@ if(LVG_BUILD_UI)
 		src/ui/widgets/TextBox.cpp
 		src/ui/widgets/CompositeWidget.cpp
 		src/ui/widgets/DropDown.cpp
+		src/ui/widgets/Row.cpp
+		src/ui/widgets/Vec3Field.cpp
+		src/ui/widgets/CollapsingSection.cpp
+		src/ui/widgets/ProgressBar.cpp
+		src/ui/widgets/PlotLine.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})

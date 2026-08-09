@@ -30,12 +30,9 @@ namespace lightGraphics::ui {
 class CompositeWidget : public Widget {
 public:
 	// Mirrors Panel::add<W>(Args&&...): constructs W in place, takes ownership, returns
-	// a raw observing pointer. Unlike Panel::add, this does NOT set the child's
-	// m_panel -- that member is set via Panel's own friend access when a widget is
-	// added directly to a Panel, and nothing in the codebase currently reads a nested
-	// composite child's panel() (grep confirms Widget::panel() has no callers yet), so
-	// there is nothing to wire up correctly here without extending that friendship. It
-	// DOES set m_parent to this composite -- see Widget::effectivelyEnabled().
+	// a raw observing pointer. Sets the child's m_panel to match this composite's m_panel,
+	// allowing nested widgets to walk up to the owning Panel. Also sets m_parent to this
+	// composite -- see Widget::effectivelyEnabled().
 	template <typename W, typename... Args>
 	W* add(Args&&... args) {
 		static_assert(std::is_base_of<Widget, W>::value,
@@ -43,12 +40,26 @@ public:
 		auto child = std::make_unique<W>(std::forward<Args>(args)...);
 		W* ptr = child.get();
 		ptr->m_parent = this;
+		ptr->m_panel = m_panel;  // Propagate owning Panel to children
 		m_children.push_back(std::move(child));
 		return ptr;
 	}
 
 	std::size_t childCount() const { return m_children.size(); }
 	Widget* childAt(std::size_t index) const { return m_children[index].get(); }
+
+	// Propagates this composite's m_panel to all children (and their descendants if they're
+	// composites). Called by Panel after adding a CompositeWidget, since children may be
+	// added during the composite's constructor before m_panel is set.
+	void propagatePanelToChildren() {
+		for (auto& child : m_children) {
+			child->m_panel = m_panel;
+			// If the child is also a composite, propagate recursively
+			if (auto* childComposite = dynamic_cast<CompositeWidget*>(child.get())) {
+				childComposite->propagatePanelToChildren();
+			}
+		}
+	}
 
 	// ---- Widget overrides: traversal only ----
 	void update(GuiContext&) override;
