@@ -36,6 +36,11 @@ public:
 		auto widget = std::make_unique<W>(std::forward<Args>(args)...);
 		W* ptr = widget.get();
 		ptr->m_panel = this;
+		// A widget added directly to a Panel has no CompositeWidget ancestor -- explicit
+		// here (rather than relying on Widget's default member initializer) so the
+		// invariant "whoever owns a widget sets m_parent" holds for both owners
+		// (docs/gui/05, "CompositeWidget", effectivelyEnabled()), not just one of them.
+		ptr->m_parent = nullptr;
 		m_widgets.push_back(std::move(widget));
 		return ptr;
 	}

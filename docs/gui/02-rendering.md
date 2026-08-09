@@ -16,7 +16,9 @@ struct DrawCmd {
     uint32_t indexOffset;  // into the index buffer
     uint32_t indexCount;
     Rect     clipRect;     // in framebuffer pixels
-    uint32_t textureId;    // 0 = font atlas (the default and, in v1, the only value)
+    uint32_t textureId;    // 0 = font atlas. Reserved for a future second texture (e.g.
+                            // an addImage primitive); always 0 today -- v1 has no such
+                            // primitive, and everything routes through the one atlas.
 };
 
 class DrawList {

@@ -31,11 +31,22 @@ struct InputState {
     std::vector<uint32_t> charQueue;  // Unicode codepoints from text input
     std::vector<KeyEvent> keyQueue;   // ordered key transitions
 
+    int   modsDown {0};            // level: bitmask of Mod:: flags currently held
+
     float deltaTime {0};
     Vec2  displaySize {0, 0};      // logical size
     float contentScale {1.0f};
 };
 ```
+
+**Deviation added in phase 6:** `modsDown` was not in the original struct above. Phase 6's
+Shift-drag (Slider, DragValue) and Ctrl-click hooks need to know whether a modifier is
+*currently* held across many frames of an ongoing drag, which `keyQueue`'s edge-only
+events cannot answer on frames with no new key transitions. `UiPlatformGlfw::injectKey`
+now also writes `mods` into `m_pending.modsDown` (GLFW always reports the *full* current
+modifier bitmask on every key event, not just a delta for the key involved, so
+last-writer-wins is correct), and `beginFrame` copies it into `current` unconditionally —
+unlike `keyQueue`/`charQueue` it is never cleared, since it is level state, not a queue.
 
 Level flags and edge flags are both needed. A button widget fires on release-inside
 (level plus edge); a slider drags on level; a checkbox toggles on press-edge. Deriving
@@ -166,11 +177,74 @@ before dispatch:
 - **Tab / Shift-Tab** — move focus to the next/previous focusable widget within the
   focused widget's panel, wrapping. If nothing is focused, Tab focuses the first
   focusable widget in the topmost panel.
-- **Escape** — if a popup is open, close it; else clear focus. A `TextBox` intercepts
-  Escape first to revert its edit, and the context must let the focused widget consume
-  an event before applying its own handling.
+- **Escape** — if a popup is open, close it; else clear focus.
 
-So the order is: popup → focused widget → context-level defaults.
+### Ordering: the context's own Escape/Tab handling runs BEFORE the widget's
+
+The per-frame sequence in [01-architecture.md](01-architecture.md) is normative here and
+worth restating precisely, because it is easy to read "the focused widget should get
+first refusal on Escape" into this document and implement the opposite of what step 3
+actually says:
+
+```
+3.  gui.update()
+    d. dispatch keyboard events to focusedId; handle Tab / Shift-Tab focus cycling
+    e. for each panel front-to-back: panel->update(ctx) → widget->update(ctx)
+```
+
+**3.d runs before 3.e.** By the time a widget's own `update()` executes, `GuiContext`
+has *already* applied its Escape default (`focusedId` cleared) and its Tab default
+(`focusedId` moved to the next focusable widget) for this frame. A widget cannot get a
+"first look" at the raw event before the context's default fires — the context sees
+every key event first, unconditionally, because that dispatch is baked into its own
+`update()` before panels are touched at all.
+
+This matters for any widget whose Escape/Tab behaviour is more than "lose focus" —
+`TextBox` (Escape must **revert** the edit, not merely lose focus with the typed text
+still committed) is the first case, and phase 8's `DropDown` (Escape must close the
+popup) is the next. Naively comparing `ctx.focusedId() == id()` inside `update()` cannot
+distinguish "I still have focus, nothing happened" from "I had focus a moment ago and
+Escape just took it away, unlocked by GuiContext before I even ran this frame" — both
+read as `ctx.focusedId() != id()` by the time the widget can look.
+
+**The fix: compare against the *entering* focus state, not the current one.** Have the
+widget remember, at the end of every `update()` call, whether it was focused as of that
+call (`m_wasFocused` in `TextBox`). On the next frame, that remembered value is the
+focus state *as it was before this frame's context-level Escape/Tab handling ran* —
+because nothing else can have changed `focusedId` between frames. So:
+
+```
+enteringFocused = m_wasFocused          // focus state BEFORE this frame's Escape/Tab default
+hasFocusNow     = ctx.focusedId() == id()   // focus state AFTER it
+
+if enteringFocused:
+    process this frame's key queue as normal (Escape included) — the widget still
+    sees every key event regardless of what the context already did to focusedId,
+    because events are read from ctx.input().keyQueue, not gated on hasFocusNow
+if enteringFocused and !hasFocusNow and the widget's own Escape branch did NOT run:
+    an external cause (click elsewhere, Tab cycling past this widget) took focus —
+    this is the "commit on focus loss" case, not the "revert on Escape" case
+```
+
+`enteringFocused` is what lets the widget tell "Escape fired" (revert, no commit) apart
+from "focus moved elsewhere for any other reason" (commit, no revert) — both of which
+look identical if you only ever ask `ctx.focusedId()` in the present tense. See
+`TextBox::update()` (`src/ui/widgets/TextBox.cpp`) for the worked implementation;
+`SliderT`/`DragValueT`'s inline Ctrl-click text entry sidesteps the problem entirely by
+never routing its embedded `TextBox` through `ctx.focusedId()` at all (`setForcedFocus`,
+`updateEmbedded`) and inspecting the key queue directly instead.
+
+**Phase 8 resolution:** it turned out `DropDown` needs neither the entering-state pattern
+nor a plain `ctx.focusedId() == id()` check. Instead, `GuiContext`'s own Escape default
+(below) was changed to close the popup itself, before `DropDown::update()` ever runs:
+`if (isPopupOpen()) closePopup(); else m_focusedId = kInvalidWidgetId;` — i.e. "if a
+popup is open, close it; else clear focus" is now literally what this branch does, rather
+than something left to the widget. Since GuiContext is the one source of truth for "is a
+popup open" (`ctx.popupOwner() == this`), and `DropDown::update()` just reads that fresh
+every frame, there is no second cause of the popup closing that it ever needs to
+distinguish Escape from — a click outside the popup is also handled entirely inside
+`GuiContext::update()`, before `DropDown::update()` runs. See docs/gui/05-widgets.md,
+"DropDown", for the full mechanism.
 
 ### Key codes
 

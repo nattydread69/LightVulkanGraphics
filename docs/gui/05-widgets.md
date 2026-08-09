@@ -371,6 +371,91 @@ Alt/Ctrl = 10×. Ctrl-click for text entry, as with `Slider`. The control region
 as a `frameBg` rect with the formatted value centred — visually identical to a text box,
 which correctly signals "this holds a number you can edit".
 
+## CompositeWidget
+
+*Landed in phase 8, session A — implemented ahead of Row/Vec3Field/CollapsingSection so
+those three (session B) can build on it.*
+
+```cpp
+class CompositeWidget : public Widget {
+public:
+    template <typename W, typename... Args>
+    W* add(Args&&... args);          // mirrors Panel::add<W>
+
+    std::size_t childCount() const;
+    Widget* childAt(std::size_t) const;
+
+    // update()/draw()/hitTest()/hitTestDeep()/findDescendant()/collectFocusable() are
+    // all overridden to forward to children. preferredSize() and layout() (see below)
+    // are NOT overridden — every derived composite must supply both; there is no
+    // default that suits more than one of Row/Vec3Field/CollapsingSection.
+protected:
+    std::vector<std::unique_ptr<Widget>> m_children;
+};
+```
+
+A derived composite overrides `preferredSize()` (still pure-virtual, inherited from
+`Widget`) and `layout(const GuiContext&)` (see below) to run its own placement policy —
+Row splits horizontally, Vec3Field into thirds, CollapsingSection stacks vertically below
+a header.
+
+**Getting individual children interactive required extending `Widget` itself**, beyond
+what this document originally specified. Each child (e.g. a `DragValue` inside a future
+`Vec3Field`) needs its own hover/capture/focus, exactly like a top-level `Panel` widget —
+but `GuiContext`'s hit-testing, id lookup, and Tab-cycling only ever walked a panel's
+*top-level* widget list. Three small virtuals were added to `Widget`, each with a
+leaf-widget default that makes every existing widget's behaviour unchanged:
+
+```cpp
+virtual Widget* hitTestDeep(Vec2 p) { return hitTest(p) ? this : nullptr; }
+virtual Widget* findDescendant(WidgetId) { return nullptr; }
+virtual void collectFocusable(std::vector<Widget*>&);   // default: push self iff
+                                                          // visible && enabled && acceptsFocus()
+```
+
+`GuiContext::update()`'s hit-test, `findWidget()`, and `updateFocusNavigation()`'s
+Tab-list now call these instead of `hitTest()` / an id-equality loop / an inlined
+`acceptsFocus()` check, so they transparently recurse into a composite's children
+without knowing composites exist as a concept. `CompositeWidget` overrides all three:
+`hitTestDeep`/`collectFocusable` gate on the composite's OWN `enabled()`/`visible()`
+before recursing (see below), and `hitTestDeep` never resolves to the composite itself —
+only to a child, or to nothing (the gaps between a Vec3Field's three fields are not a
+click target, the same way `Label`'s `acceptsCapture() == false` lets a click pass
+through it).
+
+**Layout timing: `layout(const GuiContext&)`, not `setBounds()`.** `Widget::setBounds`
+takes only a `Rect` — no `GuiContext` — but a composite's placement policy needs theme
+metrics and font measurement. Rather than caching a `GuiContext*` across calls (which
+would be one frame stale whenever the composite itself moves or resizes in the same
+frame, e.g. during a panel drag), `Widget` gained a second, sibling virtual:
+
+```cpp
+virtual void layout(const GuiContext&) {}    // no-op default; CompositeWidget leaves it
+                                              // un-overridden -- derived composites
+                                              // override it directly to position m_children
+```
+
+`Panel::layout()` calls `w->layout(ctx)` immediately after **every** `w->setBounds(...)`
+it performs on a widget — including the bounds-override (absolute placement) path — so a
+composite's children are always positioned from the exact same bounds, in the exact same
+pass, as the composite's own. This is a change from the original sketch, which had
+`CompositeWidget` itself own the traversal-into-children call from inside `setBounds()`
+via a cached context; that version was replaced because it depended on state cached from
+an earlier call in the same frame, which broke for a composite placed via the
+bounds-override escape hatch (`Panel::layout()` calls `setBounds()` there without ever
+calling `preferredSize()` first, so nothing populated the cache in time).
+
+**Enabled/visible inheritance is functional, not (fully) visual.** A disabled or
+invisible composite skips calling `update()`/`hitTestDeep()`/`collectFocusable()` on its
+children entirely, without ever touching a child's own `m_enabled`/`m_visible` — this is
+what "a disabled composite disables its children without mutating their own flags"
+means in practice. Visual greying-out piggybacks on a NEW `Widget::effectivelyEnabled()`
+(`m_enabled && (m_parent == nullptr || m_parent->effectivelyEnabled())`, walking a new
+`m_parent` back-pointer that `CompositeWidget::add()` sets), which every existing
+widget's `draw()` now reads instead of `m_enabled` directly. `update()`/interaction code
+paths were deliberately left reading `m_enabled` — the composite's own gating already
+makes them unreachable when a parent is disabled, and mixing the two would be redundant.
+
 ## Vec3Field
 
 Three `DragValue`s in a row, labelled X/Y/Z with the conventional red/green/blue tint on
@@ -389,9 +474,9 @@ public:
 ```
 
 Implement as a composite that owns three `DragValueT<float>` children, splitting the
-control column into thirds with `theme.itemSpacing` between. The composite pattern used
-here should be reusable — factor out a small `CompositeWidget` base that forwards
-`update`, `draw`, and hit-testing to children.
+control column into thirds with `theme.itemSpacing` between. `CompositeWidget` (above)
+is that reusable base, already landed — override `preferredSize()` and `layout(const
+GuiContext&)` to run this splitting policy.
 
 ---
 
@@ -521,14 +606,80 @@ public:
 };
 ```
 
-The popup must escape its parent panel's clip rect and draw above every other panel.
-Mechanism: when open, the context records `popupOwner = this`; `GuiContext::endFrame`
-draws the popup into `overlayList` after all panels, using `pushClipRect(rect, false)` to
-replace rather than intersect.
+*Landed in phase 8, session A.* Does **not** derive from `CompositeWidget` — the popup's
+items are not separate `Widget`s (no per-item `WidgetId`); the whole control-plus-popup is
+a single widget that answers "which item" from its own coordinate math
+(`itemAtY()`), the same way a `Panel`'s content region maps a click to a row.
+
+**Popup mechanism, as actually implemented.** `GuiContext` gained an explicit API rather
+than a bare `popupOwner` field:
+
+```cpp
+void openPopup(Widget* owner, const Rect& screenRect);   // (re-)registers; idempotent
+void closePopup();
+bool isPopupOpen() const;
+Widget* popupOwner() const;   // resolves via findWidget() -- see "must not dangle" below
+Rect popupRect() const;
+```
+
+`DropDown::update()` calls `ctx.openPopup(this, computePopupRect(ctx))` **every frame**
+its popup stays open, not just once at open time — see "Popup position when the world
+moves under it" below for why. `Widget` gained a matching `virtual void drawPopup(DrawList&,
+const GuiContext&) const {}` (default no-op); `GuiContext::endFrame()` calls
+`popupOwner()->drawPopup(overlayList, ctx)` after every panel has drawn, wrapped in
+`pushClipRect(popupRect(), /*intersect=*/false)` — REPLACE, not intersect, so the popup
+escapes whatever clip its owning panel left pushed. `DropDown::drawPopup()` is the only
+override.
+
+**Hit-test priority.** `GuiContext::update()` computes `popupHit = popupOwner() &&
+popupRect().contains(mouse)` before the normal per-panel scan, and skips that scan
+entirely when true — the popup wins over every panel, including one that overlaps it and
+sits in front of the popup's own owner in z-order (this is the scenario the test suite
+weights most heavily). The owning control's OWN bounds are explicitly exempted from the
+"any press outside the popup closes it" rule — otherwise a second click meant to close
+the popup via the control would close it via this generic path and then the control's own
+press-driven open/close toggle would immediately reopen it, net leaving it open.
+
+**Escape ordering — resolved differently than docs/04's phase 8 note anticipated.**
+That note expected `DropDown` might need `TextBox`'s `m_wasFocused`-style
+entering-focus-state comparison. It doesn't. `GuiContext`'s own Escape default
+(`updateFocusNavigation()`) was changed to `if (isPopupOpen()) closePopup(); else
+m_focusedId = kInvalidWidgetId;` — i.e. GuiContext closes the popup itself, before
+`DropDown::update()` ever runs, and does *not* also clear focus (the control stays
+focused, matching every native combo box). `DropDown::update()` then just reads
+`ctx.popupOwner() == this` fresh each frame as its sole "am I open" signal; since
+GuiContext is the one source of truth for that state and DropDown never needs to tell
+"Escape closed it" apart from any other cause, there is nothing left to disambiguate — no
+`m_wasFocused` equivalent needed.
+
+**Popup position when the world moves under it: FOLLOW, not close.** Chosen because
+`Panel::layout()` already recomputes every widget's bounds unconditionally, every frame,
+regardless of whether anything actually moved — so recomputing the popup rect from
+`computePopupRect(ctx)` (which reads the control's current `splitRow(ctx)`) and
+re-calling `ctx.openPopup(this, rect)` every frame the popup is open is free, not an
+added mechanism. Closing on movement, by contrast, would need extra bookkeeping
+(remembering the bounds at open time, comparing every frame) purely to detect the case
+this doesn't need to detect.
+
+**`popupOwner` must not dangle when the owning panel is destroyed.** `GuiContext` stores
+only a `WidgetId`; `popupOwner()` resolves it via `findWidget()` and — since that already
+answers `nullptr` for an id nothing claims — self-heals `m_popupOwnerId` back to
+"no popup" the moment the owner's panel (and the widget with it) is gone. No explicit
+teardown call in `destroyPanel()`/`destroyAllPanels()` was needed.
+
+**Keyboard.** Arrow keys move the highlight and **wrap** at both ends (matching
+`RadioGroup`'s existing arrow-key convention elsewhere in this library), Enter selects the
+highlighted item and closes. Beyond the original spec: Enter/Space also **open** a
+focused-but-closed control — without this a keyboard-only user who tabs to a `DropDown`
+has no way to operate it at all (same baseline `Button`/`Checkbox` already provide).
 
 Popup rules: opens below the control, flips above if it would run off the bottom of the
-framebuffer; scrolls if more than 12 items; closes on selection, Escape, or any click
-outside; arrow keys move the highlight and Enter selects.
+framebuffer; scrolls if more than 12 items, with a visual (wheel- and
+arrow-key-scrolled, not drag-to-scroll) scrollbar using `theme.scrollbarBg`/
+`scrollbarGrab`/`scrollbarWidth` — `Panel`'s own scrollbar is phase-9 scope and doesn't
+exist yet to literally match pixel-for-pixel, so this is the reference implementation of
+what "matching the panel scrollbar style" means; closes on selection, Escape, or any
+mouse press outside the popup rect (control excepted, see above).
 
 While a popup is open, `GuiContext::wantsMouse()` returns true regardless of cursor
 position, and hit testing checks the popup before any panel.

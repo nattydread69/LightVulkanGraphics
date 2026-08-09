@@ -58,7 +58,7 @@ void Button::draw(DrawList& dl, const GuiContext& ctx) const {
 
 	Color fill;
 	Color textColor = th.text;
-	if (!m_enabled) {
+	if (!effectivelyEnabled()) {
 		fill = th.frameBg.withAlpha(0.4f);
 		textColor = th.textDisabled;
 	} else if (ctx.activeId() == id() && m_held) {
@@ -73,7 +73,7 @@ void Button::draw(DrawList& dl, const GuiContext& ctx) const {
 
 	dl.addRectFilled(m_bounds, fill, th.rounding);
 
-	if (m_enabled && ctx.focusedId() == id()) {
+	if (effectivelyEnabled() && ctx.focusedId() == id()) {
 		dl.addRect(m_bounds, th.accent, 1.0f, th.rounding);
 	}
 

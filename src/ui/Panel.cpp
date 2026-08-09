@@ -117,11 +117,16 @@ void Panel::layout(const GuiContext& ctx) {
 			Rect ov = w->boundsOverride();
 			Rect abs{ m_bounds.x + ov.x, m_bounds.y + ov.y, ov.w, ov.h };
 			w->setBounds(snapToPixels(abs));
+			// A composite placed via the bounds-override escape hatch still needs its
+			// own children laid out (docs/gui/05, "CompositeWidget") -- layout() is a
+			// no-op for every other widget, so calling it unconditionally here is free.
+			w->layout(ctx);
 			continue;
 		}
 		Vec2 pref = w->preferredSize(ctx);
 		Rect r{ x, y - m_scrollY, contentW, pref.y };
 		w->setBounds(snapToPixels(r));
+		w->layout(ctx);
 		y += pref.y + th.itemSpacing;
 	}
 	m_contentHeight = y - (m_bounds.y + titleOffset) + th.windowPadding;

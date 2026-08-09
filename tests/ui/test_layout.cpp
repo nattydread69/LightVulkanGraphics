@@ -8,6 +8,21 @@ namespace lvgui = lightGraphics::ui;
 
 namespace {
 
+	// A minimal concrete CompositeWidget (docs/gui/05, "CompositeWidget") for exercising
+	// the base class ahead of session B's Row/Vec3Field/CollapsingSection: one Label
+	// child, stretched to the composite's full bounds every layout() call.
+	class OneLabelComposite : public lvgui::CompositeWidget {
+	public:
+		lvgui::Label* label = add<lvgui::Label>("Hi");
+
+		lvgui::Vec2 preferredSize(const lvgui::GuiContext& ctx) const override {
+			return { 0.0f, ctx.theme().rowHeight };
+		}
+		void layout(const lvgui::GuiContext&) override {
+			label->setBounds(bounds());
+		}
+	};
+
 	lvgui::GuiCreateInfo testCreateInfo() {
 		lvgui::GuiCreateInfo info;
 		info.fontPath = LVG_UI_TEST_FONT_PATH;
@@ -158,6 +173,100 @@ namespace {
 		std::cout << "✓ testSpacerAndSeparatorContributeFixedHeightRows\n";
 	}
 
+	void testDisabledCompositeChildDrawsWithDisabledColorWithoutMutatingItsOwnFlag() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
+		auto* composite = panel->add<OneLabelComposite>();
+
+		step(ctx);
+
+		const lvgui::Theme& th = ctx.theme();
+
+		// Enabled composite: the child Label draws with the normal text colour.
+		{
+			lvgui::DrawList list;
+			composite->draw(list, ctx);
+			assert(!list.vertices().empty());
+			for (const auto& v : list.vertices()) {
+				assert(v.color == th.text.packed());
+			}
+		}
+
+		// Disabling the COMPOSITE (not the label) must still grey the label out --
+		// effectivelyEnabled() (docs/gui/05, "CompositeWidget") walks m_parent, so
+		// Label::draw() sees the inherited disablement without CompositeWidget ever
+		// touching the label's own m_enabled.
+		composite->setEnabled(false);
+		assert(composite->label->enabled());   // child's own flag left untouched
+
+		{
+			lvgui::DrawList list;
+			composite->draw(list, ctx);
+			assert(!list.vertices().empty());
+			for (const auto& v : list.vertices()) {
+				assert(v.color == th.textDisabled.packed());
+			}
+		}
+
+		assert(composite->label->enabled());   // still untouched after drawing too
+
+		std::cout << "✓ testDisabledCompositeChildDrawsWithDisabledColorWithoutMutatingItsOwnFlag\n";
+	}
+
+	void testCompositeChildBoundsReflectSameFrameResizeNoLag() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
+		auto* composite = panel->add<OneLabelComposite>();
+
+		step(ctx);
+		lvgui::Rect firstLabelBounds = composite->label->bounds();
+		assert(firstLabelBounds.w > 0.0f);
+
+		// Move the panel (title bar drag) and confirm the child's bounds already
+		// reflect the composite's NEW bounds by the end of the SAME frame the panel
+		// moved in -- not one frame behind (docs/gui/05, "CompositeWidget": "children
+		// must reflect the composite's bounds in the same frame those bounds change").
+		// Widget::layout(ctx) is called synchronously by Panel::layout() right after
+		// setBounds(), so there is no cached-from-an-earlier-call state involved.
+		ctx.injectMousePos({ 50.0f, 5.0f });
+		ctx.injectMouseButton(lvgui::MouseButton::Left, true);
+		step(ctx);
+		ctx.injectMousePos({ 150.0f, 55.0f });   // well past the 4px drag threshold
+		step(ctx);
+
+		lvgui::Rect movedCompositeBounds = composite->bounds();
+		lvgui::Rect movedLabelBounds = composite->label->bounds();
+		assert(movedCompositeBounds.x != firstLabelBounds.x);   // panel actually moved
+		assert(movedLabelBounds.x == movedCompositeBounds.x);
+		assert(movedLabelBounds.y == movedCompositeBounds.y);
+		assert(movedLabelBounds.w == movedCompositeBounds.w);
+
+		ctx.injectMouseButton(lvgui::MouseButton::Left, false);
+		step(ctx);
+
+		std::cout << "✓ testCompositeChildBoundsReflectSameFrameResizeNoLag\n";
+	}
+
+	void testCompositeViaBoundsOverrideStillLaysOutChildren() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
+		auto* composite = panel->add<OneLabelComposite>();
+
+		// docs/gui/06-layout-and-theme.md's absolute-placement escape hatch: setBounds()
+		// is called from a DIFFERENT branch in Panel::layout() than the normal stack
+		// path. A composite must still get its children positioned there too.
+		composite->setBoundsOverride({ 20.0f, 30.0f, 100.0f, 22.0f });
+
+		step(ctx);
+
+		lvgui::Rect expected{ panel->bounds().x + 20.0f, panel->bounds().y + 30.0f, 100.0f, 22.0f };
+		assert(composite->bounds().x == expected.x);
+		assert(composite->label->bounds().x == composite->bounds().x);
+		assert(composite->label->bounds().w == composite->bounds().w);
+
+		std::cout << "✓ testCompositeViaBoundsOverrideStillLaysOutChildren\n";
+	}
+
 }
 
 int main() {
@@ -166,6 +275,9 @@ int main() {
 	testZOrderClickBringsBackPanelToFront();
 	testWrappingLabelConvergesInOneFrame();
 	testSpacerAndSeparatorContributeFixedHeightRows();
+	testDisabledCompositeChildDrawsWithDisabledColorWithoutMutatingItsOwnFlag();
+	testCompositeChildBoundsReflectSameFrameResizeNoLag();
+	testCompositeViaBoundsOverrideStillLaysOutChildren();
 
 	std::cout << "\n✅ All layout tests passed!\n";
 	return 0;

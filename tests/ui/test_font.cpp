@@ -1,4 +1,5 @@
 #include <lightVulkanGraphics/ui/Font.h>
+#include <lightVulkanGraphics/ui/widgets/TextBox.h>
 #include "Utf8.h"
 
 #include <cassert>
@@ -188,6 +189,19 @@ namespace {
 		assert(g.size.y > 0.0f);
 		std::cout << "✓ testFallbackGlyphIsNeverZeroSize\n";
 	}
+
+	// Regression pin for the bug GuiContext::verifyInternalGlyphsBaked (GuiContext.cpp)
+	// exists to catch at runtime: a codepoint LVGUI draws with internally (independent of
+	// any consumer's own label text) silently falling back to a visible "?" glyph instead
+	// of the intended one -- U+2022 BULLET, the original password-mask choice, was
+	// outside every default range and rendered exactly that way before it was switched to
+	// U+00B7. If TextBox::kPasswordMaskCodepoint is ever changed, this must keep pointing
+	// at a codepoint the DEFAULT ranges actually bake, or every GuiContext construction
+	// throws (docs/gui/04-input-and-events.md, "Internal glyph verification").
+	void testTextBoxPasswordMaskCodepointIsBakedByDefault(const lvgui::Font& font) {
+		assert(font.hasGlyph(lvgui::TextBox::kPasswordMaskCodepoint));
+		std::cout << "✓ testTextBoxPasswordMaskCodepointIsBakedByDefault\n";
+	}
 }
 
 int main() {
@@ -206,6 +220,7 @@ int main() {
 	testAllDefaultGlyphsPresentAtHiDpiBake();
 	testGlyphInkFitsItsAdvance(font);
 	testFallbackGlyphIsNeverZeroSize(font);
+	testTextBoxPasswordMaskCodepointIsBakedByDefault(font);
 
 	std::cout << "\n✅ All Font tests passed!\n";
 	return 0;

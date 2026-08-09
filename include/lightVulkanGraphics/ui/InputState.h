@@ -36,6 +36,16 @@ struct InputState {
 
 	float wheelDelta {0};          // vertical, positive = away from user
 
+	// Level: bitmask of Mod:: flags (KeyCodes.h) currently held. docs/gui/04's original
+	// InputState had no level view of modifiers, only the per-event KeyEvent::mods
+	// snapshot -- fine for Tab/Escape, but phase 6 needs to know "is Shift down right
+	// now" across many frames of an ongoing slider drag, which an edge-only queue can't
+	// answer. Maintained from the `mods` argument every injectKey() call already carries
+	// (GLFW reports the full current modifier set on every key event, including the
+	// modifier key's own press/release), so it needs no new platform plumbing beyond
+	// UiPlatformGlfw persisting it instead of discarding it. See docs/gui/04, "InputState".
+	int modsDown {0};
+
 	std::vector<std::uint32_t> charQueue;  // Unicode codepoints from text input
 	std::vector<KeyEvent>      keyQueue;   // ordered key transitions
 

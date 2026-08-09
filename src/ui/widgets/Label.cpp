@@ -63,7 +63,7 @@ void Label::draw(DrawList& dl, const GuiContext& ctx) const {
 		return;
 	}
 	const Theme& th = ctx.theme();
-	Color color = m_colorOverride ? *m_colorOverride : (m_enabled ? th.text : th.textDisabled);
+	Color color = m_colorOverride ? *m_colorOverride : (effectivelyEnabled() ? th.text : th.textDisabled);
 
 	if (m_wordWrap) {
 		auto lines = wrapLines(ctx.font(), th.fontSize, m_bounds.w);

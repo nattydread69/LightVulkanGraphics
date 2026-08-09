@@ -458,6 +458,13 @@ if(LVG_BUILD_UI)
 		src/ui/widgets/Label.cpp
 		src/ui/widgets/Separator.cpp
 		src/ui/widgets/Button.cpp
+		src/ui/widgets/Checkbox.cpp
+		src/ui/widgets/RadioButton.cpp
+		src/ui/widgets/Slider.cpp
+		src/ui/widgets/DragValue.cpp
+		src/ui/widgets/TextBox.cpp
+		src/ui/widgets/CompositeWidget.cpp
+		src/ui/widgets/DropDown.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
@@ -638,6 +645,16 @@ if (LVG_BUILD_EXAMPLES)
 		# both targets; docs/gui/00-overview.md's phase 0 CMake requirements anticipate
 		# this ("an external consumer doing find_package() gets both targets").
 		target_link_libraries(phase5_gui_smoke_demo PRIVATE LightVulkanGraphics::UI)
+	endif()
+
+	# The permanent, growing LVGUI demo (docs/gui/09-claude-code-prompts.md): every widget
+	# gets added here as it lands, phase by phase. Same "consumer code is what actually
+	# instantiates widget templates/vtables" reasoning as phase5_gui_smoke_demo above for
+	# why it needs LightVulkanGraphics::UI linked directly.
+	if (LVG_BUILD_UI)
+		add_executable(gui_demo examples/gui_demo.cpp)
+		lvg_configure_build_tree_example(gui_demo)
+		target_link_libraries(gui_demo PRIVATE LightVulkanGraphics::UI)
 	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.

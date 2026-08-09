@@ -504,6 +504,132 @@ namespace {
 			std::cout << "✓ testAddRectFormsRingAndHonoursRounding (rounding=8 rounded ring)\n";
 		}
 	}
+
+	// --- Never-called-in-src/ui primitives -----------------------------------------
+	// addCircleFilled sat broken from phase 1 until RadioButton (phase 6) became its
+	// first real caller and made the wedge-shaped fan visible. These primitives have no
+	// caller in src/ui/ today either, so nothing would surface a similar bug by eye until
+	// phase 8 (addTriangleFilled, addPolyline-as-a-line) wires them up -- these tests are
+	// what stand in for that eyeball check now.
+
+	void testAddTriangleFilledVerticesMatchInputExactly() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Vec2 a{ 10, 20 }, b{ 90, 20 }, c{ 50, 80 };
+		list.addTriangleFilled(a, b, c, lvgui::Color(255, 0, 0, 255));
+
+		assert(list.vertices().size() == 3);
+		assert(list.indices().size() == 3);
+		const auto& v = list.vertices();
+		assert(v[0].pos.x == a.x && v[0].pos.y == a.y);
+		assert(v[1].pos.x == b.x && v[1].pos.y == b.y);
+		assert(v[2].pos.x == c.x && v[2].pos.y == c.y);
+		assert(list.indices()[0] == 0 && list.indices()[1] == 1 && list.indices()[2] == 2);
+
+		std::cout << "✓ testAddTriangleFilledVerticesMatchInputExactly\n";
+	}
+
+	void testAddConvexPolyFilledVerticesAndFanIndicesAreCorrect() {
+		lvgui::DrawList list;
+		list.clear();
+
+		// A square expressed as a 4-point convex polygon (not the addRectFilled path) --
+		// the known-correct fan for 4 points is exactly two triangles: (0,1,2), (0,2,3).
+		// The addCircleFilled bug was precisely a wrong FAN INDEX pattern with vertex
+		// positions that looked plausible in isolation, so asserting the index list
+		// itself, not just vertex positions, is the point of this test.
+		lvgui::Vec2 pts[4] = { { 0, 0 }, { 40, 0 }, { 40, 40 }, { 0, 40 } };
+		list.addConvexPolyFilled(pts, 4, lvgui::Color(0, 255, 0, 255));
+
+		assert(list.vertices().size() == 4);
+		assert(list.indices().size() == 6);
+		const auto& v = list.vertices();
+		for (int i = 0; i < 4; ++i) {
+			assert(v[i].pos.x == pts[i].x && v[i].pos.y == pts[i].y);
+		}
+		const auto& idx = list.indices();
+		std::uint32_t expected[6] = { 0, 1, 2, 0, 2, 3 };
+		for (int i = 0; i < 6; ++i) {
+			assert(idx[i] == expected[i]);
+		}
+
+		std::cout << "✓ testAddConvexPolyFilledVerticesAndFanIndicesAreCorrect\n";
+	}
+
+	void testAddRectFilledMultiColorCornersExactPositionsAndColors() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect r{ 10, 20, 60, 30 };
+		lvgui::Color tl(255, 0, 0, 255), tr(0, 255, 0, 255), br(0, 0, 255, 255), bl(255, 255, 0, 255);
+		list.addRectFilledMultiColor(r, tl, tr, br, bl);
+
+		assert(list.vertices().size() == 4);
+		const auto& v = list.vertices();
+
+		// Position AND colour together: a corner-position bug and a swapped-colour bug
+		// would both hide behind a "4 vertices, right bounding box" count-only test, so
+		// this pins each corner's position to its OWN expected colour, not just the set.
+		assert(v[0].pos.x == r.left()  && v[0].pos.y == r.top()    && v[0].color == tl.packed());
+		assert(v[1].pos.x == r.right() && v[1].pos.y == r.top()    && v[1].color == tr.packed());
+		assert(v[2].pos.x == r.right() && v[2].pos.y == r.bottom() && v[2].color == br.packed());
+		assert(v[3].pos.x == r.left()  && v[3].pos.y == r.bottom() && v[3].color == bl.packed());
+
+		std::cout << "✓ testAddRectFilledMultiColorCornersExactPositionsAndColors\n";
+	}
+
+	void testAddPolylineOpenThreePointStraightLineTwoNonOverlappingQuadsSharedEdgeAtMiddle() {
+		lvgui::DrawList list;
+		list.clear();
+
+		// Collinear so both segments share the exact same perpendicular offset -- the
+		// only configuration where "shared edge" means the two quads' touching edges are
+		// literally the same two points, not just nearby (addPolyline explicitly does no
+		// mitring, so a bent polyline's joint is NOT guaranteed to line up).
+		lvgui::Vec2 p0{ 0, 50 }, p1{ 50, 50 }, p2{ 100, 50 };
+		lvgui::Vec2 pts[3] = { p0, p1, p2 };
+		float thickness = 10.0f;
+		list.addPolyline(pts, 3, lvgui::Color(255, 255, 255, 255), thickness, false);
+
+		// Two quads, no closing segment (open): 8 vertices, 12 indices.
+		assert(list.vertices().size() == 8);
+		assert(list.indices().size() == 12);
+		const auto& v = list.vertices();
+
+		// Quad 0 covers p0->p1: v0,v1 at the p0 end, v2,v3 at the p1 end.
+		assert(v[0].pos.x == 0.0f  && v[0].pos.y == 45.0f);
+		assert(v[1].pos.x == 0.0f  && v[1].pos.y == 55.0f);
+		assert(v[2].pos.x == 50.0f && v[2].pos.y == 55.0f);
+		assert(v[3].pos.x == 50.0f && v[3].pos.y == 45.0f);
+
+		// Quad 1 covers p1->p2: v4,v5 at the p1 end, v6,v7 at the p2 end.
+		assert(v[4].pos.x == 50.0f  && v[4].pos.y == 45.0f);
+		assert(v[5].pos.x == 50.0f  && v[5].pos.y == 55.0f);
+		assert(v[6].pos.x == 100.0f && v[6].pos.y == 55.0f);
+		assert(v[7].pos.x == 100.0f && v[7].pos.y == 45.0f);
+
+		// Shared edge at the middle point (50,50): quad 0's p1-end pair {v2,v3} and quad
+		// 1's p1-end pair {v4,v5} must be the exact same two points (as a set, since
+		// per-quad winding order need not match).
+		bool sharedEdgeMatches =
+			((v[2].pos.x == v[4].pos.x && v[2].pos.y == v[4].pos.y &&
+			  v[3].pos.x == v[5].pos.x && v[3].pos.y == v[5].pos.y) ||
+			 (v[2].pos.x == v[5].pos.x && v[2].pos.y == v[5].pos.y &&
+			  v[3].pos.x == v[4].pos.x && v[3].pos.y == v[4].pos.y));
+		assert(sharedEdgeMatches);
+
+		// Non-overlapping: quad 0 never crosses past x=50 into quad 1's span, and vice
+		// versa -- they meet exactly at the shared edge, nothing more.
+		for (int i = 0; i < 4; ++i) {
+			assert(v[i].pos.x <= 50.0f);
+		}
+		for (int i = 4; i < 8; ++i) {
+			assert(v[i].pos.x >= 50.0f);
+		}
+
+		std::cout << "✓ testAddPolylineOpenThreePointStraightLineTwoNonOverlappingQuadsSharedEdgeAtMiddle\n";
+	}
 }
 
 int main() {
@@ -528,6 +654,11 @@ int main() {
 	testRectFilledRoundingClampsInsteadOfInverting();
 	testAddTextBaselineWithinLineHeightOfTopLeft();
 	testAddRectFormsRingAndHonoursRounding();
+
+	testAddTriangleFilledVerticesMatchInputExactly();
+	testAddConvexPolyFilledVerticesAndFanIndicesAreCorrect();
+	testAddRectFilledMultiColorCornersExactPositionsAndColors();
+	testAddPolylineOpenThreePointStraightLineTwoNonOverlappingQuadsSharedEdgeAtMiddle();
 
 	std::cout << "\n✅ All DrawList tests passed!\n";
 	return 0;

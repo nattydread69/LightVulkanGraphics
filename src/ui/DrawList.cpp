@@ -311,10 +311,17 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 	std::uint32_t centreIdx = m_vertices.size();
 	m_vertices.push_back(UiVertex(glm::vec2(snappedCentre.x, snappedCentre.y), wuv, col));
 
-	for (int i = 0; i <= segments; ++i) {
-		m_indices.push_back(baseIdx);
-		m_indices.push_back(baseIdx + 1 + i);
+	// Fan from the centre through each consecutive pair of perimeter points. The
+	// perimeter loop above pushes segments+1 points (i=0..segments), where the last one
+	// lands back on the first (angle 2*pi == angle 0), so this closes the circle without
+	// any wraparound modulo. The previous version of this loop instead fanned from a
+	// fixed perimeter point (baseIdx) through unrelated other perimeter points back to
+	// the centre, which draws a self-intersecting wedge instead of a circle -- nothing
+	// called addCircleFilled until RadioButton (phase 6) made the bug visible.
+	for (int i = 0; i < segments; ++i) {
 		m_indices.push_back(centreIdx);
+		m_indices.push_back(baseIdx + i);
+		m_indices.push_back(baseIdx + i + 1);
 	}
 }
 

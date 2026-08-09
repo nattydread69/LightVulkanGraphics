@@ -94,6 +94,16 @@ public:
 	void     setFocus(Widget*);
 	void     clearFocus();
 
+	// ---- platform pass-through ----
+	// docs/gui/07-public-api.md's GuiContext table (written phase 4, before any widget
+	// needed the platform directly) does not list these; PlatformHooks lives on this
+	// class specifically so a widget deep inside a panel can reach the platform without
+	// every intermediate layer re-exposing it. Added for TextBox (phase 7): copy/cut/
+	// paste need clipboard access, and hovering a text box requests the I-beam cursor.
+	std::string clipboardText() const;
+	void        setClipboardText(std::string_view text) const;
+	void        requestCursorShape(CursorShape shape) const;
+
 	// ---- internal: used by Panel and widget update() implementations, not part of the
 	// consumer-facing surface normative in docs/gui/07-public-api.md, but required for
 	// the generic capture/focus/z-order machinery docs/gui/01-architecture.md describes.
@@ -101,6 +111,26 @@ public:
 	void clearActiveId();
 	Widget* findWidget(WidgetId) const;
 	void bringPanelToFront(Panel*);
+
+	// ---- popup (docs/gui/05-widgets.md, "DropDown") ----
+	// At most one popup is open at a time -- opening a new one implicitly replaces
+	// whatever was open, exactly as clicking a second DropDown while the first is still
+	// expanded should look. `screenRect` is expected to be re-supplied by the owner
+	// every frame it stays open (DropDown::update() calls this unconditionally each
+	// frame it is open, recomputed from its own current bounds): that is what makes the
+	// popup FOLLOW the owner when the owning panel is dragged, scrolled, or resized,
+	// rather than the rect going stale -- see docs/gui/05's "Popup position when the
+	// world moves under it".
+	void openPopup(Widget* owner, const Rect& screenRect);
+	void closePopup();
+	bool isPopupOpen() const { return popupOwner() != nullptr; }
+	// Resolves the current popup owner through findWidget(), which naturally answers
+	// nullptr if the owner (or its whole panel) has been destroyed since the popup was
+	// opened, self-healing m_popupOwnerId back to "no popup" in that case -- see
+	// docs/gui/05's "handle the panel being destroyed while its popup is open". Every
+	// other popup accessor funnels through this one so that guarantee always applies.
+	Widget* popupOwner() const;
+	Rect popupRect() const { return m_popupRect; }
 
 	// ---- extras ----
 	void addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewProj,
@@ -133,6 +163,11 @@ private:
 	WidgetId m_activeId  = kInvalidWidgetId;
 	WidgetId m_focusedId = kInvalidWidgetId;
 	Panel*   m_hoveredPanel = nullptr;
+
+	// mutable: popupOwner() is const (queried from wantsMouse(), also const) but still
+	// needs to self-heal this back to kInvalidWidgetId when the owner no longer exists.
+	mutable WidgetId m_popupOwnerId = kInvalidWidgetId;
+	Rect m_popupRect;
 
 	Vec2 m_lastDisplaySize;
 	bool m_atlasNeedsRebuild = false;

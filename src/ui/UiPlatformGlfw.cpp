@@ -229,6 +229,10 @@ void UiPlatformGlfw::beginFrame(Vec2 displaySize, float contentScale, float delt
 	m_current.wheelDelta   = m_pending.wheelDelta;
 	m_current.charQueue    = std::move(m_pending.charQueue);
 	m_current.keyQueue     = std::move(m_pending.keyQueue);
+	// modsDown is level state, not an edge queue -- it must survive frames with no new
+	// key events at all (e.g. every frame of a slider drag after Shift was already held
+	// down before the press), so unlike charQueue/keyQueue it is copied, never cleared.
+	m_current.modsDown      = m_pending.modsDown;
 	m_pending.charQueue.clear();
 	m_pending.keyQueue.clear();
 	m_pending.wheelDelta = 0.0f;
@@ -298,6 +302,10 @@ void UiPlatformGlfw::injectScroll(float delta) {
 
 void UiPlatformGlfw::injectKey(int key, int mods, bool pressed, bool repeat) {
 	m_pending.keyQueue.push_back(KeyEvent{ key, mods, pressed, repeat });
+	// `mods` is always the full current modifier bitmask (GLFW's own convention, mirrored
+	// by tests calling inject* directly), so last-writer-wins is correct here even though
+	// this fires for every key, not just modifier keys themselves.
+	m_pending.modsDown = mods;
 }
 
 void UiPlatformGlfw::injectChar(std::uint32_t codepoint) {

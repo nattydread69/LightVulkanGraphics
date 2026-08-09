@@ -1,13 +1,54 @@
 #include <lightVulkanGraphics/ui/GuiContext.h>
+#include <lightVulkanGraphics/ui/widgets/TextBox.h>
 #include "UiPlatformGlfw.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 #include <stdexcept>
 
 namespace lightGraphics::ui {
+
+namespace {
+	struct RequiredGlyph {
+		std::uint32_t codepoint;
+		const char* usedFor;
+	};
+
+	// Codepoints LVGUI itself draws with, independent of whatever a consumer's own
+	// labels happen to contain. These must resolve to a real glyph, not Font's fallback
+	// glyph -- the fallback is deliberately never zero-size (docs/gui/03-text-and-fonts.md,
+	// "no zero-size quad"), which means an unbaked internal codepoint doesn't fail loudly
+	// or disappear, it silently renders as visible mojibake (a password box full of "?"
+	// was exactly this bug -- see TextBox::kPasswordMaskCodepoint's comment for why
+	// U+00B7 was chosen over U+2022 once it was found). Checked once, right after every
+	// bake, rather than trusting each call site to have picked a baked codepoint.
+	//
+	// addTextClipped's ellipsis is deliberately three ASCII periods, not U+2026 HORIZONTAL
+	// ELLIPSIS (see DrawList.cpp, kEllipsis) -- chosen specifically so truncated labels
+	// don't need an entry here at all, unlike the password mask, which has no plain-ASCII
+	// equivalent that still reads as "obscured".
+	constexpr RequiredGlyph kRequiredInternalGlyphs[] = {
+		{ TextBox::kPasswordMaskCodepoint, "TextBox password-mode masking" },
+	};
+
+	// docs/gui/04-input-and-events.md, "Internal glyph verification".
+	void verifyInternalGlyphsBaked(const Font& font) {
+		for (const RequiredGlyph& g : kRequiredInternalGlyphs) {
+			if (!font.hasGlyph(g.codepoint)) {
+				char buf[256];
+				std::snprintf(buf, sizeof(buf),
+					"GuiContext: the baked font is missing U+%04X, which LVGUI requires "
+					"internally for %s. Add it to Font::kDefaultGlyphRanges (Font.cpp) or "
+					"pick a different codepoint that IS covered by those ranges.",
+					g.codepoint, g.usedFor);
+				throw std::runtime_error(buf);
+			}
+		}
+	}
+}
 
 GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 	: m_theme(info.theme)
@@ -34,6 +75,7 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 	}
 
 	m_font.bake(m_fontData, m_fontSizeLogical, m_atlasWidth, m_atlasHeight, 1.0f);
+	verifyInternalGlyphsBaked(m_font);
 
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 	m_overlayList.setWhitePixelUV(m_font.whitePixelUV());
@@ -83,6 +125,7 @@ void GuiContext::bringPanelToFront(Panel* panel) {
 
 void GuiContext::rebakeFont(float contentScale) {
 	m_font.bake(m_fontData, m_fontSizeLogical * contentScale, m_atlasWidth, m_atlasHeight, contentScale);
+	verifyInternalGlyphsBaked(m_font);
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 	m_overlayList.setWhitePixelUV(m_font.whitePixelUV());
 	m_atlasNeedsRebuild = true;
@@ -116,8 +159,13 @@ void GuiContext::beginFrame(Vec2 displaySize, float contentScale, float deltaTim
 Widget* GuiContext::hitTestWidgets(Panel& panel, Vec2 p) const {
 	for (std::size_t i = 0; i < panel.widgetCount(); ++i) {
 		Widget* w = panel.widgetAt(i);
-		if (w->visible() && w->hitTest(p)) {
-			return w;
+		// hitTestDeep() recurses into composites (docs/gui/05, "CompositeWidget") to
+		// find the specific CHILD a point belongs to; for a plain leaf widget it is
+		// exactly the old `w->hitTest(p) ? w : nullptr`.
+		if (w->visible()) {
+			if (Widget* hit = w->hitTestDeep(p)) {
+				return hit;
+			}
 		}
 	}
 	return nullptr;
@@ -134,6 +182,11 @@ Widget* GuiContext::findWidget(WidgetId id) const {
 			if (w->id() == id) {
 				return w;
 			}
+			// A composite's activeId/focusedId is always a CHILD's id, never its own
+			// (see CompositeWidget::hitTestDeep) -- descend to find it.
+			if (Widget* found = w->findDescendant(id)) {
+				return found;
+			}
 		}
 	}
 	return nullptr;
@@ -145,7 +198,19 @@ void GuiContext::updateFocusNavigation() {
 			continue;
 		}
 		if (ev.key == Key::Escape) {
-			m_focusedId = kInvalidWidgetId;
+			// docs/gui/04-input-and-events.md, "Keyboard": "if a popup is open, close it;
+			// else clear focus" -- closing takes priority over the generic default and
+			// does NOT also clear focusedId, so the DropDown control itself stays
+			// focused (every native combo box collapses its list on Escape without also
+			// kicking focus off the control). This also means DropDown itself never
+			// needs to inspect the key queue for Escape at all: by the time its own
+			// update() runs, ctx.popupOwner() == this is already false, so it just sees
+			// "not open" like any other frame the popup happens to be closed.
+			if (isPopupOpen()) {
+				closePopup();
+			} else {
+				m_focusedId = kInvalidWidgetId;
+			}
 			continue;
 		}
 		if (ev.key != Key::Tab) {
@@ -158,10 +223,10 @@ void GuiContext::updateFocusNavigation() {
 				continue;
 			}
 			for (std::size_t i = 0; i < panelPtr->widgetCount(); ++i) {
-				Widget* w = panelPtr->widgetAt(i);
-				if (w->visible() && w->enabled() && w->acceptsFocus()) {
-					focusable.push_back(w);
-				}
+				// collectFocusable() applies the same visible/enabled/acceptsFocus test
+				// this loop used to inline, and additionally recurses into composites
+				// (docs/gui/05, "CompositeWidget") so Tab can reach an individual child.
+				panelPtr->widgetAt(i)->collectFocusable(focusable);
 			}
 		}
 		if (focusable.empty()) {
@@ -194,20 +259,42 @@ void GuiContext::update() {
 	const bool leftPressed  = in.mousePressed[static_cast<int>(MouseButton::Left)];
 	const bool leftReleased = in.mouseReleased[static_cast<int>(MouseButton::Left)];
 
-	// (a) hit test panels front-to-back; m_panels[0] is frontmost.
+	// docs/gui/05-widgets.md, "DropDown": an open popup floats above every panel and is
+	// hit-tested BEFORE any of them.
+	Widget* popup = popupOwner();
+	const bool popupHit = popup && m_popupRect.contains(mouse);
+
+	// "Closes on ... any mouse press outside the popup rect." The owner's own CONTROL is
+	// deliberately exempt from this: clicking it is the owner's OWN toggle gesture
+	// ("closes on a second click of the control", handled inside DropDown::update()
+	// itself). If a control click also closed the popup here, DropDown's own
+	// press-driven toggle would then see "currently closed" on the very same press and
+	// reopen it -- popup would net stay open on what the user meant as a close click.
+	if (popup && leftPressed && !popupHit && !popup->hitTest(mouse)) {
+		closePopup();
+		popup = nullptr;
+	}
+
+	// (a) hit test panels front-to-back; m_panels[0] is frontmost. Skipped entirely when
+	// the popup claims the point -- it must win even over a DIFFERENT panel that
+	// happens to overlap the popup rect and sits in front of the popup's own owner.
 	Panel* hoveredPanel = nullptr;
-	for (auto& panelPtr : m_panels) {
-		Panel* p = panelPtr.get();
-		if (p->visible() && p->hitTest(mouse)) {
-			hoveredPanel = p;
-			break;
+	if (!popupHit) {
+		for (auto& panelPtr : m_panels) {
+			Panel* p = panelPtr.get();
+			if (p->visible() && p->hitTest(mouse)) {
+				hoveredPanel = p;
+				break;
+			}
 		}
 	}
 	m_hoveredPanel = hoveredPanel;
 
 	// (b)/(c) capture pins the hovered widget regardless of cursor position.
 	Widget* hoveredWidget = nullptr;
-	if (m_activeId != kInvalidWidgetId) {
+	if (popupHit) {
+		hoveredWidget = popup;
+	} else if (m_activeId != kInvalidWidgetId) {
 		hoveredWidget = findWidget(m_activeId);
 	} else if (hoveredPanel) {
 		hoveredWidget = hitTestWidgets(*hoveredPanel, mouse);
@@ -266,6 +353,17 @@ void GuiContext::endFrame() {
 		}
 	}
 
+	// The popup draws into overlayList AFTER every panel above -- docs/gui/05,
+	// "DropDown": it "must escape its parent panel's clip rect and draw above every
+	// other panel, including panels in front of its owner." pushClipRect(rect, false)
+	// REPLACES rather than intersects the current clip, so the popup is not additionally
+	// clamped by whatever clip its owning panel happened to leave pushed.
+	if (Widget* owner = popupOwner()) {
+		m_overlayList.pushClipRect(m_popupRect, /*intersectWithCurrent=*/false);
+		owner->drawPopup(m_overlayList, *this);
+		m_overlayList.popClipRect();
+	}
+
 	// m_overlayList is deliberately NOT cleared at the top of this function: content
 	// (world labels now; tooltips/popups from phases 8-9) may be added any time between
 	// the previous endFrame() and this one, including during update() above, so clearing
@@ -279,8 +377,7 @@ void GuiContext::endFrame() {
 }
 
 bool GuiContext::wantsMouse() const {
-	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr;
-	// popupOpen (docs/gui/01) arrives in phase 8.
+	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr || isPopupOpen();
 }
 
 bool GuiContext::wantsKeyboard() const {
@@ -289,6 +386,29 @@ bool GuiContext::wantsKeyboard() const {
 	}
 	Widget* w = findWidget(m_focusedId);
 	return w != nullptr && w->wantsTextInput();
+}
+
+void GuiContext::openPopup(Widget* owner, const Rect& screenRect) {
+	m_popupOwnerId = owner ? owner->id() : kInvalidWidgetId;
+	m_popupRect = screenRect;
+}
+
+void GuiContext::closePopup() {
+	m_popupOwnerId = kInvalidWidgetId;
+}
+
+Widget* GuiContext::popupOwner() const {
+	if (m_popupOwnerId == kInvalidWidgetId) {
+		return nullptr;
+	}
+	Widget* w = findWidget(m_popupOwnerId);
+	if (!w) {
+		// The owner's panel was destroyed while the popup was open -- self-heal instead
+		// of leaving m_popupOwnerId pointing at an id nothing will ever claim again
+		// (docs/gui/05, "DropDown": "popupOwner must not dangle").
+		m_popupOwnerId = kInvalidWidgetId;
+	}
+	return w;
 }
 
 void GuiContext::injectMousePos(Vec2 logicalPos) { m_platform->injectMousePos(logicalPos); }
@@ -309,6 +429,22 @@ void GuiContext::clearFocus() {
 
 void GuiContext::setActiveId(WidgetId id) { m_activeId = id; }
 void GuiContext::clearActiveId() { m_activeId = kInvalidWidgetId; }
+
+std::string GuiContext::clipboardText() const {
+	return m_hooks.getClipboardText ? m_hooks.getClipboardText() : std::string();
+}
+
+void GuiContext::setClipboardText(std::string_view text) const {
+	if (m_hooks.setClipboardText) {
+		m_hooks.setClipboardText(text);
+	}
+}
+
+void GuiContext::requestCursorShape(CursorShape shape) const {
+	if (m_hooks.setCursorShape) {
+		m_hooks.setCursorShape(shape);
+	}
+}
 
 void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewProj,
                                 std::string_view text, Color color, Vec2 pixelOffset) {

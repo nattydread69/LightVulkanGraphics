@@ -80,6 +80,47 @@ target_compile_definitions(lvgui_hittest_tests PRIVATE
 
 add_test(NAME lvgui_hittest_tests COMMAND lvgui_hittest_tests)
 
+# Phase 6: Checkbox, RadioGroup/RadioButton, SliderT<float|int>, DragValueT -- headless,
+# same pattern as test_layout.cpp/test_hittest.cpp.
+add_executable(lvgui_slider_tests
+	test_slider.cpp
+)
+target_link_libraries(lvgui_slider_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_slider_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_slider_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_slider_tests COMMAND lvgui_slider_tests)
+
+# Phase 7: TextBox's editing state machine, headless -- same pattern as
+# test_slider.cpp/test_hittest.cpp. Includes the random-operation caret/anchor
+# boundary-validity property test from docs/gui/10-testing.md.
+add_executable(lvgui_textedit_tests
+	test_textedit.cpp
+)
+target_link_libraries(lvgui_textedit_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_textedit_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_textedit_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_textedit_tests COMMAND lvgui_textedit_tests)
+
+# Phase 8, session A: CompositeWidget (covered inline in test_layout.cpp, since it's a
+# layout-mechanics concern) and DropDown's popup, headless -- same pattern as the tests
+# above.
+add_executable(lvgui_dropdown_tests
+	test_dropdown.cpp
+)
+target_link_libraries(lvgui_dropdown_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_dropdown_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_dropdown_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_dropdown_tests COMMAND lvgui_dropdown_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)
