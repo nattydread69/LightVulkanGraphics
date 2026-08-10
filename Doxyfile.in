@@ -1,0 +1,56 @@
+# Doxygen configuration for LightVulkanGraphics
+# Generated from Doxyfile.in by CMake
+
+PROJECT_NAME = "LightVulkanGraphics"
+PROJECT_NUMBER = @PROJECT_VERSION@
+PROJECT_BRIEF = "A high-performance Vulkan graphics library for real-time visualization"
+
+OUTPUT_DIRECTORY = @CMAKE_CURRENT_BINARY_DIR@/docs
+INPUT = @CMAKE_CURRENT_SOURCE_DIR@/include
+FILE_PATTERNS = *.h *.hpp
+RECURSIVE = YES
+
+# Documentation style
+GENERATE_HTML = YES
+GENERATE_LATEX = NO
+GENERATE_MAN = NO
+HTML_OUTPUT = html
+HTML_THEME = doxygen-dark
+
+# Include source code
+SOURCE_BROWSER = YES
+INLINE_SOURCES = NO
+
+# Set up aliases for common patterns
+ALIASES = "threadsafe=\xrefitem threadsafe \"Thread-Safe\" \"Thread-Safety\""
+ALIASES += "internal=\xrefitem internal \"Internal API\" \"Internal\""
+ALIASES += "deprecated{1}=\xrefitem deprecated \"Deprecated\" \"Deprecated\" \1"
+
+# Exclude patterns
+EXCLUDE_PATTERNS = */tests/* */build/* */examples/*
+
+# Additional options
+QUIET = NO
+WARNINGS = YES
+WARN_IF_UNDOCUMENTED = YES
+WARN_IF_DOC_LAGS_BEHIND_USE = YES
+
+# Performance
+NUM_PROC_THREADS = 4
+
+# Dot/GraphViz
+HAVE_DOT = YES
+CALL_GRAPH = YES
+CALLER_GRAPH = YES
+GRAPHICAL_HIERARCHY = YES
+DOT_IMAGE_FORMAT = svg
+INTERACTIVE_SVG = YES
+
+# Namespaces
+NAMESPACE_ALIAS = lightGraphics=lg
+
+# Enable component documentation
+ENABLE_PREPROCESSING = YES
+PREDEFINED = DOXYGEN_DOCUMENTING=1 \
+             "DOXYGEN_PUBLIC=[[]]" \
+             "DOXYGEN_INTERNAL=[[deprecated]]"

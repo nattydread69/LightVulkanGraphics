@@ -1,10 +1,48 @@
 @PACKAGE_INIT@
 
+# LightVulkanGraphics CMake Config
+# Version: @PROJECT_VERSION@
+# This config file allows find_package() to locate LightVulkanGraphics
+
 include(CMakeFindDependencyMacro)
 
+# Find required dependencies
 find_dependency(Vulkan REQUIRED)
 find_dependency(glm REQUIRED CONFIG)
+
+# Check for optional components
+set(_LVG_REQUIRED_COMPONENTS)
+set(_LVG_OPTIONAL_COMPONENTS UI Loaders)
+
+foreach(_comp ${LightVulkanGraphics_FIND_COMPONENTS})
+    if(_comp IN_LIST _LVG_OPTIONAL_COMPONENTS)
+        set(LightVulkanGraphics_${_comp}_FOUND TRUE)
+    endif()
+endforeach()
+
+# Import the targets
 include("${CMAKE_CURRENT_LIST_DIR}/LightVulkanGraphicsTargets.cmake")
 
+# Component validation
+if(LightVulkanGraphics_FIND_REQUIRED_UI AND NOT TARGET LightVulkanGraphics::LightVulkanGraphicsUI)
+    set(LightVulkanGraphics_FOUND FALSE)
+    set(LightVulkanGraphics_NOT_FOUND_MESSAGE "LightVulkanGraphics::LightVulkanGraphicsUI component not found")
+    return()
+endif()
+
+# Create UI alias for convenience
+if(TARGET LightVulkanGraphics::LightVulkanGraphicsUI AND NOT TARGET LightVulkanGraphics::UI)
+    add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphics::LightVulkanGraphicsUI)
+endif()
+
+# Check all required components
 check_required_components(LightVulkanGraphics)
+
+# Print version info if not in quiet mode
+if(NOT LightVulkanGraphics_FIND_QUIETLY)
+    message(STATUS "Found LightVulkanGraphics: @PROJECT_VERSION@")
+    if(LightVulkanGraphics_FIND_COMPONENTS)
+        message(STATUS "  Components: ${LightVulkanGraphics_FIND_COMPONENTS}")
+    endif()
+endif()
 

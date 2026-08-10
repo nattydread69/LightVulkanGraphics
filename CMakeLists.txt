@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(libLightVulkanGraphics VERSION 2.0.0 LANGUAGES CXX)
+project(libLightVulkanGraphics VERSION 2.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,6 +12,7 @@ option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project tar
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
 option(LVG_BUILD_UI "Build the LVGUI GUI layer" ON)
+option(LVG_BUILD_DOXYGEN "Build Doxygen documentation" ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -20,6 +21,9 @@ include(CTest)
 
 set(LVG_PACKAGE_NAME "LightVulkanGraphics")
 set(LVG_ABI_VERSION 2)
+set(LVG_VERSION_MAJOR 2)
+set(LVG_VERSION_MINOR 1)
+set(LVG_VERSION_PATCH 0)
 set(LVG_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/${LVG_PACKAGE_NAME}")
 set(LVG_SHADER_INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
 set(LVG_SHADER_INSTALL_FULL_DIR "${CMAKE_INSTALL_FULL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
@@ -514,7 +518,8 @@ if(LVG_BUILD_UI)
 	endif()
 
 	# Core owns and drives the UI renderer, so it links the UI target (see above).
-	target_link_libraries(${PROJECT_NAME} PRIVATE LightVulkanGraphicsUI)
+	# UI symbols are linked PUBLIC so external code can use the UI API
+	target_link_libraries(${PROJECT_NAME} PUBLIC LightVulkanGraphicsUI)
 
 	# The core library advertises GUI availability to its consumers.
 	target_compile_definitions(${PROJECT_NAME} PUBLIC LVG_WITH_UI)
@@ -591,6 +596,41 @@ install(FILES
 	${CMAKE_CURRENT_BINARY_DIR}/${LVG_PACKAGE_NAME}ConfigVersion.cmake
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${LVG_PACKAGE_NAME}
 )
+
+# Doxygen documentation target
+if(LVG_BUILD_DOXYGEN)
+	find_package(Doxygen)
+	if(DOXYGEN_FOUND)
+		configure_file(
+			${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in
+			${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY
+		)
+		add_custom_target(doxygen
+			COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+			WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+			COMMENT "Generating API documentation with Doxygen"
+			VERBATIM
+		)
+		# Install documentation
+		install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/docs/html/
+			DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${LVG_PACKAGE_NAME}
+			OPTIONAL
+		)
+	else()
+		message(WARNING "Doxygen not found: documentation will not be built")
+	endif()
+endif()
+
+# Uninstall target
+if(NOT TARGET uninstall)
+	configure_file(
+		"${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+		"${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+		IMMEDIATE @ONLY)
+	add_custom_target(uninstall
+		COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
+	message(STATUS "Added 'uninstall' target: use 'cmake --build build --target uninstall' or 'make uninstall'")
+endif()
 
 # Add examples
 
