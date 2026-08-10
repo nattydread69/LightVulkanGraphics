@@ -27,6 +27,7 @@ https://patreon.com/Nattydread?utm_medium=unknown&utm_source=join_link&utm_campa
 - Multiple pipelines: flexible shapes, wireframe, unlit
 - Camera API: keyboard navigation, orbit controls, `setCameraLookAt`, FOV/planes/sensitivity setters
 - Cylinder helpers: connect points and objects conveniently
+- Built-in Vulkan-native GUI layer (panels, sliders, checkboxes, dropdowns, and more) for parameter/debug UI beside your scene -- see `docs/gui_usage.md`
 - CMake package install (`find_package(LightVulkanGraphics)`)
 
 ## Dependencies

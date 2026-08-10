@@ -1,7 +1,8 @@
 # 07 — Public API
 
-The contract Claude Code implements against. Signatures here are normative; if an
-implementation needs to deviate, update this file in the same commit.
+The public header layout, and the shape of the surface each header exposes. The headers
+under `include/lightVulkanGraphics/ui/` are authoritative for exact signatures; what
+follows is a sketch precise enough to work from, trimmed of internal-only members.
 
 ## Header layout
 
@@ -23,12 +24,9 @@ include/lightVulkanGraphics/ui/
         ProgressBar.h  PlotLine.h  CollapsingSection.h  Row.h
 ```
 
-`*` **Current deviation (as of phase 4):** `PlatformHooks` is declared in
-`src/ui/UiPlatformGlfw.h`, not `GuiContext.h` — it needed to exist before `GuiContext`
-did, so phase 4's `UiPlatformGlfw::makeHooks()` could build and test it without a
-window. The shape matches this doc exactly. Phase 5 should move the declaration into
-`GuiContext.h` (or have `GuiContext.h` re-export the `UiPlatformGlfw.h` one) so the
-project ends up with the single definition this table describes.
+`*` `PlatformHooks` is declared in `GuiContext.h` itself; `src/ui/UiPlatformGlfw.h`
+includes it from there rather than declaring its own copy, so there is a single
+definition.
 
 Consumers include one thing:
 
@@ -146,8 +144,7 @@ public:
 } // namespace lightGraphics::ui
 ```
 
-Two deliberate departures from the sketch in
-[03-text-and-fonts.md](03-text-and-fonts.md):
+Two choices worth calling out:
 
 - **`ranges` is a pointer+count pair, not `std::span`.** `std::span` is C++20 and this
   project builds its public headers as C++17.
@@ -170,7 +167,11 @@ compare it against the live content scale and decide when to rebake.
 namespace lightGraphics::ui {
 
 struct GuiCreateInfo {
-    std::string fontPath;                 // empty = use the standard search order
+    // Required for now -- GuiContext throws if this is empty. VkApp resolves it via its
+    // own font search order (see 03-text-and-fonts.md, "Font asset resolution") before
+    // ever constructing a GuiCreateInfo; GuiContext itself has no fallback search of its
+    // own yet.
+    std::string fontPath;
     float       fontSize      = 14.0f;
     Theme       theme         = Theme::dark();
     int         atlasWidth    = 512;
@@ -178,9 +179,6 @@ struct GuiCreateInfo {
     bool        enableTooltips = true;
 };
 
-// As of phase 4 this struct is actually declared in src/ui/UiPlatformGlfw.h, not here
-// -- see the header-layout table above. Move it into this file (or re-export it from
-// here) when GuiContext lands.
 struct PlatformHooks {
     std::function<std::string()>          getClipboardText;
     std::function<void(std::string_view)> setClipboardText;
@@ -245,22 +243,23 @@ public:
 The `inject*` family is the whole platform seam. Layer 5 calls it from GLFW callbacks;
 tests call it directly. Nothing else crosses that boundary.
 
+This sketch covers the primary consumer-facing surface; `GuiContext.h` additionally
+exposes a handful of narrower queries used mainly by the camera hand-off and by widgets
+themselves — `wantsScroll()`, `isTooltipVisible()`, the popup API (`openPopup` /
+`closePopup` / `isPopupOpen` / `popupOwner` / `popupRect`, see
+[05-widgets.md](05-widgets.md)'s "DropDown") — see the header for the complete list.
+
 ## The core library integration
 
-Additions to `include/lightVulkanGraphics.h`:
+`VkApp` (`include/VkApp.h`) owns the GUI's lifetime. As soon as `LVG_WITH_UI` is
+compiled in and `VkApp::init()` has brought up a Vulkan device and render pass, it
+constructs a `GuiContext` with theme defaults and the bundled font (see
+[03-text-and-fonts.md](03-text-and-fonts.md), "Font asset resolution"):
 
 ```cpp
 namespace lightGraphics {
 
-struct LightVulkanGraphicsCreateInfo {
-    // ... existing fields ...
-#ifdef LVG_WITH_UI
-    bool          enableGui = true;
-    ui::GuiCreateInfo guiCreateInfo {};
-#endif
-};
-
-class LightVulkanGraphics {
+class VkApp {
 public:
     // ... existing API ...
 
@@ -273,81 +272,17 @@ public:
 } // namespace lightGraphics
 ```
 
+Threading a caller-supplied `GuiCreateInfo` (custom font path/size, initial theme)
+through `VkApp::init()` is not wired up yet — every app currently gets the same
+defaults. Switch themes at runtime with `gui.theme() = ...` in the meantime (see
+[06-layout-and-theme.md](06-layout-and-theme.md), "Theme").
+
 ## Usage — what a consumer writes
 
-This is the target. If the final API is more verbose than this, something went wrong.
-
-```cpp
-#include "lightVulkanGraphics.h"
-#include <lightVulkanGraphics/ui/Ui.h>
-
-namespace lvgui = lightGraphics::ui;
-
-struct SimParams {
-    float dt        = 0.016f;
-    float gravity   = 9.81f;
-    int   substeps  = 4;
-    bool  showGrid  = true;
-    bool  wireframe = false;
-    glm::vec3 windDir { 1.0f, 0.0f, 0.0f };
-};
-
-int main()
-{
-    lightGraphics::LightVulkanGraphics gfx("Simulation");
-    SimParams params;
-
-    auto& gui = gfx.gui();
-    auto* panel = gui.createPanel("Simulation", { 16, 16, 320, 460 });
-    panel->setAnchor(lvgui::Panel::Anchor::TopLeft);
-
-    panel->add<lvgui::Separator>("Integration");
-
-    auto* dt = panel->add<lvgui::Slider>("Timestep", 1e-4f, 0.1f, params.dt);
-    dt->setScale(lvgui::SliderScale::Logarithmic);
-    dt->setUnitSuffix(" s");
-    dt->setFormat("%.4f");
-    dt->bind(&params.dt);
-
-    panel->add<lvgui::SliderInt>("Substeps", 1, 32, params.substeps)
-         ->bind(&params.substeps);
-
-    auto* g = panel->add<lvgui::Slider>("Gravity", 0.0f, 30.0f, params.gravity);
-    g->setUnitSuffix(" m/s²");
-    g->setOnCommit([&](float v){ rebuildIntegrator(v); });
-
-    panel->add<lvgui::Separator>("Display");
-    panel->add<lvgui::Checkbox>("Show grid", params.showGrid)->bind(&params.showGrid);
-    panel->add<lvgui::Checkbox>("Wireframe", params.wireframe)
-         ->setOnChange([&](bool on){ gfx.setWireframe(on); });
-
-    panel->add<lvgui::Vec3Field>("Wind", params.windDir)->bind(&params.windDir);
-
-    auto* name = panel->add<lvgui::TextBox>("Run name", "run_001");
-    name->setFilter(lvgui::TextFilter::Identifier);
-    name->setOnCommit([&](std::string_view s){ setOutputPrefix(s); });
-
-    auto* energy = panel->add<lvgui::PlotLine>("Energy", 512);
-    energy->setHeight(48.0f);
-
-    panel->add<lvgui::Row>()
-         ->add<lvgui::Button>("Reset")->setOnClick([&]{ resetSim(); });
-
-    gfx.setCameraLookAt({ 0, 2, 6 }, { 0, 0, 0 });
-    gfx.finalizeScene();
-
-    while (gfx.beginFrame()) {
-        stepSimulation(params);
-        energy->push(totalEnergy());
-        gfx.endFrame();
-    }
-    return 0;
-}
-```
-
-Note what is absent: no per-frame UI declaration, no ImGui-style `if (Button(...))`
-polling, no manual draw calls. The panel is built once and the callbacks and bindings do
-the rest.
+No per-frame UI declaration, no ImGui-style `if (Button(...))` polling, no manual draw
+calls: the panel is built once, and callbacks/bindings do the rest. See
+[`../gui_usage.md`](../gui_usage.md) for the full how-to and a worked example against the
+real `VkApp` API.
 
 ## Error handling policy
 

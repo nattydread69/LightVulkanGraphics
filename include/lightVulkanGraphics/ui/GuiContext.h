@@ -74,6 +74,15 @@ public:
 	// ---- input hand-off ----
 	bool wantsMouse()    const;
 	bool wantsKeyboard() const;
+	// docs/gui/04-input-and-events.md, "Scroll wheel": the phase-9 resolution of "wheel
+	// over a panel with no overflow currently dies silently" (wantsMouse() is true over
+	// ANY panel, scrollable or not, so the wheel neither scrolled the panel nor reached
+	// the camera). True when SOMETHING under the cursor will actually consume the wheel
+	// this frame -- an open popup, a specific hovered widget that claims it
+	// (Widget::wantsWheel(), e.g. SliderT/DropDown), or a hovered panel that currently has
+	// overflow to scroll (Panel::needsScrollbar()). False otherwise, even while hovering a
+	// panel, so the camera keeps getting the wheel when there is nothing here for it to do.
+	bool wantsScroll() const;
 
 	// ---- input injection (called by the platform layer or by tests) ----
 	void injectMousePos(Vec2 logicalPos);
@@ -93,6 +102,18 @@ public:
 	WidgetId focusedId() const { return m_focusedId; }
 	void     setFocus(Widget*);
 	void     clearFocus();
+	// The topmost panel whose rect contains the cursor this frame, or nullptr -- what
+	// m_hoveredId/m_hoveredPanel were already resolved from in update(). Exposed so a
+	// Panel can tell "the cursor is over ME specifically" apart from "over some other
+	// panel that happens to overlap mine" (docs/gui/09 phase 9, "Scrolling": the wheel
+	// must scroll only the panel actually under the cursor).
+	Panel* hoveredPanel() const { return m_hoveredPanel; }
+
+	// ---- tooltips (docs/gui/06-layout-and-theme.md, "Tooltips") ----
+	// True the same frame endFrame() would draw a tooltip. The geometry itself only ever
+	// lands in the overlay draw list, so this is the test-facing hook
+	// (tests/ui/test_panel.cpp) for "the timer reset" without parsing DrawList output.
+	bool isTooltipVisible() const;
 
 	// ---- platform pass-through ----
 	// docs/gui/07-public-api.md's GuiContext table (written phase 4, before any widget
@@ -143,6 +164,10 @@ private:
 	void rebakeFont(float contentScale);
 	void updateFocusNavigation();
 	Widget* hitTestWidgets(Panel&, Vec2) const;
+	// Returns the widget a tooltip should be drawn for this frame, or nullptr -- shared by
+	// endFrame() (which draws it) and isTooltipVisible() (which just answers the question).
+	Widget* tooltipWidgetIfVisible() const;
+	void drawTooltip(const Widget&);
 
 	Theme    m_theme;
 	Font     m_font;
@@ -163,6 +188,14 @@ private:
 	WidgetId m_activeId  = kInvalidWidgetId;
 	WidgetId m_focusedId = kInvalidWidgetId;
 	Panel*   m_hoveredPanel = nullptr;
+
+	// docs/gui/06-layout-and-theme.md, "Tooltips": "reset the hover timer whenever
+	// hoveredId changes... track it in GuiContext, not the widget, so only one tooltip can
+	// ever be pending." m_tooltipTargetId is the id the timer below is currently counting
+	// for; it is deliberately a separate field from m_hoveredId rather than reusing it, so
+	// "did hoveredId change since last frame" has something to compare against.
+	WidgetId m_tooltipTargetId = kInvalidWidgetId;
+	float    m_tooltipHoverTime = 0.0f;
 
 	// mutable: popupOwner() is const (queried from wantsMouse(), also const) but still
 	// needs to self-heal this back to kInvalidWidgetId when the owner no longer exists.

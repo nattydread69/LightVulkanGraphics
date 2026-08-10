@@ -1,4 +1,4 @@
-# 10 — Testing
+# 08 — Testing
 
 ## The strategy in one line
 
@@ -33,22 +33,22 @@ installing anything.
 
 ## Test target
 
+`tests/ui/` builds one small executable per feature area (`lvgui_layout_tests`,
+`lvgui_hittest_tests`, `lvgui_slider_tests`, `lvgui_dropdown_tests`, `lvgui_panel_tests`,
+and so on — see `tests/ui/CMakeLists.txt` for the current, authoritative list), each
+registered with `add_test`. Font-dependent ones get the bundled font's path via a compile
+definition:
+
 ```cmake
-if(LVG_BUILD_UI AND BUILD_TESTING)
-    add_executable(lvgui_tests
-        test_types.cpp test_drawlist.cpp test_utf8.cpp test_font.cpp
-        test_layout.cpp test_hittest.cpp test_slider.cpp test_textedit.cpp
-        test_header_selfcontained.cpp)
-    target_link_libraries(lvgui_tests PRIVATE LightVulkanGraphics::UI)
-    target_compile_definitions(lvgui_tests PRIVATE
-        LVGUI_TEST_FONT_PATH="${CMAKE_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf")
-    add_test(NAME lvgui_tests COMMAND lvgui_tests)
-endif()
+add_executable(lvgui_widget_area_tests test_widget_area.cpp)
+target_link_libraries(lvgui_widget_area_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_definitions(lvgui_widget_area_tests PRIVATE
+    LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf")
+add_test(NAME lvgui_widget_area_tests COMMAND lvgui_widget_area_tests)
 ```
 
-Match whatever framework `tests/` already uses. If it is bare `assert` plus a `main`,
-stay with that rather than introducing a dependency — these tests do not need fixtures
-or mocking.
+Plain `assert` plus a `main`, matching the rest of the project — these tests do not need
+fixtures or mocking.
 
 ## The headless harness
 
@@ -198,8 +198,8 @@ problem before a consumer does.
   exactly 67 vertices locks in an implementation detail and breaks on every tweak. Test
   the invariants instead: the geometry lies within the rect's bounds, the vertex count is
   non-zero, the index count is a multiple of three, every index is in range.
-- **Colours of individual pixels.** That is what golden images are for (phase 11), and
-  they are a maintenance burden. Defer.
+- **Colours of individual pixels.** That is what golden-image testing is for, and it's a
+  maintenance burden not currently worth taking on.
 - **Panel drag arithmetic beyond the threshold rule.** It is three lines of vector maths
   and testing it adds nothing.
 

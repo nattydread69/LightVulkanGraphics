@@ -38,9 +38,7 @@ ranges, gives better atlas utilisation, and supports oversampling.
 
 ### Call `stbtt_PackFontRanges` once per range — never batched
 
-This document originally said to pass all ranges to a single `stbtt_PackFontRanges`
-call. **Do not.** Batching them corrupts glyph metrics.
-
+Passing all ranges to a single `stbtt_PackFontRanges` call corrupts glyph metrics.
 `stbtt_PackFontRangesRenderIntoRects` keeps a `missing_glyph` variable holding the
 per-character index `j` of the first glyph the font does not have. It is **not reset
 between ranges**. When a later range contains a codepoint the font lacks, stb copies
@@ -100,24 +98,19 @@ which is why the renderer must read `font.atlasWidth()`/`atlasHeight()` rather t
 assuming 512 (see [02-rendering.md](02-rendering.md)).
 
 ```cpp
-bool Font::bake(const std::vector<uint8_t>& ttfData,
-                float pixelHeight,
-                std::span<const GlyphRange> ranges,
-                int atlasWidth = 512, int atlasHeight = 512);
+void Font::bake(const std::vector<uint8_t>& ttfData, float pixelHeight,
+                const GlyphRange* ranges, std::size_t rangeCount,
+                int atlasWidth = 512, int atlasHeight = 512, float contentScale = 1.0f);
 ```
 
-**Implementation note:** the shipped signature is
-`void Font::bake(const std::vector<uint8_t>& ttfData, float pixelHeight,
-const GlyphRange* ranges, std::size_t rangeCount, int atlasWidth = 512,
-int atlasHeight = 512, float contentScale = 1.0f)`, plus a convenience overload that
-defaults `ranges`/`rangeCount` to `kDefaultGlyphRanges`. Two deviations from the
-signature above: `std::span` is C++20 and this project is pinned to C++17, so it is a
-pointer+count pair instead; and the `bool` return became a thrown `std::runtime_error`,
-matching the "construction failures throw" policy in
-[07-public-api.md](07-public-api.md) -- there is no meaningful `false` case left once
-the one-shot 1024x1024 retry also fails. `contentScale` is recorded on `Font` purely for
-the caller's rebake-threshold bookkeeping (see the DPI section below); it does not
-change how `bake()` itself behaves.
+Plus a convenience overload that defaults `ranges`/`rangeCount` to
+`kDefaultGlyphRanges`. `ranges` is a pointer+count pair rather than `std::span` because
+this project targets C++17. `bake` throws `std::runtime_error` rather than returning a
+`bool`, matching the "construction failures throw" policy in
+[07-public-api.md](07-public-api.md) — there is no meaningful `false` case once the
+one-shot 1024×1024 retry also fails. `contentScale` is recorded on `Font` purely for the
+caller's rebake-threshold bookkeeping (see the DPI section below); it does not change how
+`bake()` itself behaves.
 
 Settings:
 
@@ -226,7 +219,8 @@ glyph's ink if you want tight visual alignment; but for layout purposes the accu
 **Recommendation: skip kerning in v1.** UI text is short, small, and mostly labels and
 numbers. Unkerned text at 14px is indistinguishable from kerned text to anyone not
 looking for it, and kerning complicates `offsetAtIndex`/`indexAtOffset` (the caret
-position becomes context-dependent). Note it as a possible phase-11 addition.
+position becomes context-dependent). A candidate for a future revision if it turns out
+to matter in practice.
 
 ## UTF-8 decoding
 
@@ -250,14 +244,17 @@ caret movement goes through the boundary helpers, so a caret can never land mid-
 
 ## Font asset resolution
 
-Reuse the existing shader-payload mechanism exactly. Search order, matching what
-`SHADER_PATHS.md` already describes for `spv/`:
+Mirrors the search order `SHADER_PATHS.md` already describes for `spv/`. Search order:
 
-1. Explicit `fontPath` in `GuiCreateInfo`
-2. `LIGHT_VULKAN_GRAPHICS_FONT_PATH` environment variable
-3. Build-tree `assets/fonts/`
-4. Paths relative to the loaded shared library
-5. Paths relative to the executable, then the current working directory
+1. `LIGHT_VULKAN_GRAPHICS_FONT_PATH` environment variable
+2. The build-tree font directory (compiled in as `LVG_BUILD_FONT_DIR`)
+3. `assets/fonts/` and `../assets/fonts/`, relative to the current working directory
+4. `../share/LightVulkanGraphics/fonts/`, `/usr/local/share/LightVulkanGraphics/fonts/`,
+   `/usr/share/LightVulkanGraphics/fonts/` — install locations
+
+The resolved path is what's actually passed into `GuiCreateInfo::fontPath`; there is no
+separate "explicit override" step yet at the `GuiCreateInfo` level itself (fontPath is
+currently required and used as-is — see [07-public-api.md](07-public-api.md)).
 
 Install to `${DATAROOTDIR}/LightVulkanGraphics/fonts/`.
 

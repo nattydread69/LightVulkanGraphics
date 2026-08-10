@@ -157,6 +157,12 @@ void GuiContext::beginFrame(Vec2 displaySize, float contentScale, float deltaTim
 }
 
 Widget* GuiContext::hitTestWidgets(Panel& panel, Vec2 p) const {
+	// docs/gui/04-input-and-events.md, "Hit testing": "intersect with the clip rect,
+	// always" -- a widget (or part of one) scrolled out of the content region must not be
+	// hittable even though its stored Rect might still geometrically contain p.
+	if (!panel.contentClipRect(*this).contains(p)) {
+		return nullptr;
+	}
 	for (std::size_t i = 0; i < panel.widgetCount(); ++i) {
 		Widget* w = panel.widgetAt(i);
 		// hitTestDeep() recurses into composites (docs/gui/05, "CompositeWidget") to
@@ -291,15 +297,43 @@ void GuiContext::update() {
 	m_hoveredPanel = hoveredPanel;
 
 	// (b)/(c) capture pins the hovered widget regardless of cursor position.
+	//
+	// docs/gui/05-widgets.md, "Resize grip": the grip and the scrollbar grab are
+	// hit-tested BEFORE widgets, so an overlapping corner (docs/gui/09 phase 9 geometry:
+	// resizeGripSize can exceed windowPadding, putting the grip's hit box a few pixels
+	// into the content clip rect's own bottom-right corner) always resolves to the grip
+	// over the scrollbar over whatever widget might also be there. Neither is a Widget
+	// (Panel itself isn't one -- docs/gui/01-architecture.md, "Ownership"), so they are
+	// asked for directly rather than falling out of hitTestWidgets()'s per-widget walk.
+	enum class PanelGrab { None, ResizeGrip, ScrollbarGrab };
+	PanelGrab grab = PanelGrab::None;
+
 	Widget* hoveredWidget = nullptr;
 	if (popupHit) {
 		hoveredWidget = popup;
 	} else if (m_activeId != kInvalidWidgetId) {
 		hoveredWidget = findWidget(m_activeId);
 	} else if (hoveredPanel) {
-		hoveredWidget = hitTestWidgets(*hoveredPanel, mouse);
+		if (hoveredPanel->hitTestResizeGrip(*this, mouse)) {
+			grab = PanelGrab::ResizeGrip;
+		} else if (hoveredPanel->hitTestScrollbarGrab(*this, mouse)) {
+			grab = PanelGrab::ScrollbarGrab;
+		} else {
+			hoveredWidget = hitTestWidgets(*hoveredPanel, mouse);
+		}
 	}
 	m_hoveredId = hoveredWidget ? hoveredWidget->id() : kInvalidWidgetId;
+
+	// docs/gui/06-layout-and-theme.md, "Tooltips": "reset the hover timer whenever
+	// hoveredId changes." Grip/scrollbar hover (m_hoveredId stays invalid for both, since
+	// neither is a Widget) never starts a tooltip timer -- there is no tooltip text to
+	// show for either.
+	if (m_hoveredId != m_tooltipTargetId) {
+		m_tooltipTargetId = m_hoveredId;
+		m_tooltipHoverTime = 0.0f;
+	} else if (m_hoveredId != kInvalidWidgetId) {
+		m_tooltipHoverTime += in.deltaTime;
+	}
 
 	// Press: establish capture/focus/z-order before dispatching to widgets, so a widget
 	// observes ctx.activeId() == id() from inside its own update() this same frame.
@@ -307,8 +341,18 @@ void GuiContext::update() {
 		if (hoveredPanel) {
 			bringPanelToFront(hoveredPanel);
 		}
-		if (m_activeId == kInvalidWidgetId && hoveredWidget && hoveredWidget->enabled() &&
-		    hoveredWidget->acceptsCapture()) {
+		// "Takes mouse capture like any other widget" (docs/gui/09 phase 9, "Scrolling")
+		// -- the grip/scrollbar branches claim m_activeId exactly like the widget branch
+		// below does, via the SAME field, which is what makes wantsMouse() stay true and
+		// the drag keep tracking once the cursor leaves the panel.
+		if (m_activeId == kInvalidWidgetId && grab == PanelGrab::ResizeGrip) {
+			m_activeId = hoveredPanel->resizeGripId();
+			hoveredPanel->beginResizeDrag(mouse);
+		} else if (m_activeId == kInvalidWidgetId && grab == PanelGrab::ScrollbarGrab) {
+			m_activeId = hoveredPanel->scrollbarGrabId();
+			hoveredPanel->beginScrollbarDrag(*this, mouse);
+		} else if (m_activeId == kInvalidWidgetId && hoveredWidget && hoveredWidget->enabled() &&
+		           hoveredWidget->acceptsCapture()) {
 			m_activeId = hoveredWidget->id();
 			m_focusedId = hoveredWidget->acceptsFocus() ? hoveredWidget->id() : kInvalidWidgetId;
 		} else if (!hoveredWidget && !hoveredPanel) {
@@ -364,6 +408,14 @@ void GuiContext::endFrame() {
 		m_overlayList.popClipRect();
 	}
 
+	// docs/gui/06-layout-and-theme.md, "Tooltips" -- drawn after the popup, into the same
+	// overlay list, so it floats above every panel too. A popup being open already
+	// suppresses this (see tooltipWidgetIfVisible()), so there is no ordering conflict
+	// between the two ever actually drawing at once.
+	if (Widget* w = tooltipWidgetIfVisible()) {
+		drawTooltip(*w);
+	}
+
 	// m_overlayList is deliberately NOT cleared at the top of this function: content
 	// (world labels now; tooltips/popups from phases 8-9) may be added any time between
 	// the previous endFrame() and this one, including during update() above, so clearing
@@ -378,6 +430,23 @@ void GuiContext::endFrame() {
 
 bool GuiContext::wantsMouse() const {
 	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr || isPopupOpen();
+}
+
+bool GuiContext::wantsScroll() const {
+	// docs/gui/04-input-and-events.md, "Scroll wheel": the phase-9 decision. Unlike
+	// wantsMouse() (deliberately true over any panel, to swallow drags/clicks aimed at the
+	// panel's own background), this asks the narrower question "will something actually
+	// react to a wheel tick right now" so a non-overflowing panel doesn't blind the camera
+	// to zoom/dolly for no reason.
+	if (isPopupOpen()) {
+		return true;
+	}
+	if (Widget* w = findWidget(m_hoveredId)) {
+		if (w->wantsWheel()) {
+			return true;
+		}
+	}
+	return m_hoveredPanel != nullptr && m_hoveredPanel->needsScrollbar();
 }
 
 bool GuiContext::wantsKeyboard() const {
@@ -462,6 +531,51 @@ void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewP
 		(1.0f - (ndc.y * 0.5f + 0.5f)) * m_lastDisplaySize.y + pixelOffset.y
 	};
 	m_overlayList.addText(m_font, m_theme.fontSize, screen, color, text);
+}
+
+Widget* GuiContext::tooltipWidgetIfVisible() const {
+	// Mid-drag (m_activeId set, including a Panel resize/scrollbar drag) or with a popup
+	// open, a tooltip would be visual noise on top of something the user is actively
+	// doing -- suppress it rather than showing both.
+	if (m_activeId != kInvalidWidgetId || isPopupOpen()) {
+		return nullptr;
+	}
+	if (m_hoveredId == kInvalidWidgetId || m_tooltipHoverTime < m_theme.tooltipDelay) {
+		return nullptr;
+	}
+	Widget* w = findWidget(m_hoveredId);
+	if (!w || w->tooltip().empty()) {
+		return nullptr;
+	}
+	return w;
+}
+
+bool GuiContext::isTooltipVisible() const {
+	return tooltipWidgetIfVisible() != nullptr;
+}
+
+void GuiContext::drawTooltip(const Widget& w) {
+	const Vec2 mouse = input().mousePos;
+	const Vec2 pad{ 6.0f, 4.0f };
+	const Vec2 cursorOffset{ 16.0f, 16.0f };   // below-right of the cursor
+
+	Vec2 textSize = m_font.measureText(w.tooltip(), m_theme.fontSize);
+	Vec2 size = textSize + pad * 2.0f;
+	Vec2 pos = mouse + cursorOffset;
+
+	// docs/gui/06-layout-and-theme.md, "Tooltips": "flipped if it would leave the
+	// framebuffer." Flips independently per axis, to the OTHER side of the cursor.
+	if (pos.x + size.x > m_lastDisplaySize.x) {
+		pos.x = mouse.x - cursorOffset.x - size.x;
+	}
+	if (pos.y + size.y > m_lastDisplaySize.y) {
+		pos.y = mouse.y - cursorOffset.y - size.y;
+	}
+
+	Rect box{ pos.x, pos.y, size.x, size.y };
+	m_overlayList.addRectFilled(box, m_theme.windowBg, m_theme.rounding);
+	m_overlayList.addRect(box, m_theme.border, 1.0f, m_theme.rounding);
+	m_overlayList.addText(m_font, m_theme.fontSize, { box.x + pad.x, box.y + pad.y }, m_theme.text, w.tooltip());
 }
 
 void GuiContext::postToMainThread(std::function<void()> fn) {

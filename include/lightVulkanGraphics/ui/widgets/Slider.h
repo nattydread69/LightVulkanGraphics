@@ -24,7 +24,7 @@ public:
 	T value() const { return m_value; }
 	void setValue(T value, bool fireCallback = false);
 	// Sets the value from a normalised [0,1] track position (out-of-range t clamps),
-	// applying the same scale/step/clamp pipeline a drag does. docs/gui/10-testing.md's
+	// applying the same scale/step/clamp pipeline a drag does. docs/gui/08-testing.md's
 	// stepping property test drives this directly across an out-of-range sweep, and it is
 	// the cleanest way to test scale placement without depending on drag pixel math.
 	void setValueFromNormalised(float t);
@@ -60,6 +60,9 @@ public:
 	bool acceptsFocus()   const override { return true; }
 	// True only while the inline TextBox edit session is open -- see beginTextEdit().
 	bool wantsTextInput() const override { return m_editBox != nullptr; }
+	// docs/gui/05, "Wheel while hovered": steps the value and keeps the panel from also
+	// scrolling underneath it.
+	bool wantsWheel() const override { return true; }
 
 private:
 	float normalisedPosition(T value) const;

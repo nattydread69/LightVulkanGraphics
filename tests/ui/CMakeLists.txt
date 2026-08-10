@@ -93,9 +93,9 @@ target_compile_definitions(lvgui_slider_tests PRIVATE
 
 add_test(NAME lvgui_slider_tests COMMAND lvgui_slider_tests)
 
-# Phase 7: TextBox's editing state machine, headless -- same pattern as
+# TextBox's editing state machine, headless -- same pattern as
 # test_slider.cpp/test_hittest.cpp. Includes the random-operation caret/anchor
-# boundary-validity property test from docs/gui/10-testing.md.
+# boundary-validity property test from docs/gui/08-testing.md.
 add_executable(lvgui_textedit_tests
 	test_textedit.cpp
 )
@@ -144,6 +144,19 @@ target_compile_definitions(lvgui_progressbar_tests PRIVATE
 )
 
 add_test(NAME lvgui_progressbar_tests COMMAND lvgui_progressbar_tests)
+
+# Phase 9: Panel scrolling, resize grip, anchoring, and tooltips -- headless, same
+# pattern as tests above.
+add_executable(lvgui_panel_tests
+	test_panel.cpp
+)
+target_link_libraries(lvgui_panel_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_panel_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_panel_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_panel_tests COMMAND lvgui_panel_tests)
 
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.

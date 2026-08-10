@@ -17,6 +17,19 @@ class DrawList;
 class GuiContext;
 class Panel;
 
+// Allocates a fresh WidgetId from the same process-wide, never-reused id-space Widget's
+// own constructor draws from (Widget.cpp). Exists for Panel's phase-9 resize grip and
+// scrollbar grab (docs/gui/05-widgets.md, "Resize grip"/"Scrolling"): neither is a Widget
+// (Panel itself isn't one -- docs/gui/01-architecture.md, "Ownership"), but both need to
+// participate in GuiContext's activeId capture exactly like a widget does ("takes mouse
+// capture like any other widget, and keeps tracking outside the panel"). Drawing from the
+// SAME counter, rather than a private one starting over at 1, is what guarantees these
+// ids can never collide with a real widget's -- GuiContext::findWidget() naturally
+// resolves them to nullptr (nothing claims them), which is exactly what lets
+// GuiContext::update() tell "captured by a real widget" apart from "captured by a panel
+// grip/grab" while still sharing the one activeId field for both.
+WidgetId allocateWidgetId();
+
 class Widget {
 public:
 	Widget();
@@ -56,6 +69,13 @@ public:
 	virtual bool acceptsFocus()   const { return false; }
 	virtual bool acceptsCapture() const { return true;  }
 	virtual bool wantsTextInput() const { return false; }
+	// True for a widget that consumes the wheel itself while hovered (SliderT, DropDown --
+	// docs/gui/05-widgets.md, Slider's "Wheel while hovered: Step, and consume the wheel
+	// so the panel doesn't scroll"). Panel::update() (docs/gui/09 phase 9, "Scrolling")
+	// checks this on whatever GuiContext says is currently hovered before scrolling
+	// itself, so a wheel tick over a slider steps the slider exactly once instead of also
+	// moving the panel underneath it.
+	virtual bool wantsWheel() const { return false; }
 	virtual bool hitTest(Vec2 p) const { return m_bounds.contains(p); }
 
 	// ---- composite support (docs/gui/05-widgets.md, "CompositeWidget") ----

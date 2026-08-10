@@ -50,6 +50,9 @@ public:
 	void drawPopup(DrawList&, const GuiContext&) const override;
 
 	bool acceptsFocus() const override { return true; }
+	// docs/gui/05: the popup scrolls on the wheel while hovered; the owning Panel must not
+	// also scroll underneath it (docs/gui/09 phase 9, "Scrolling").
+	bool wantsWheel() const override { return true; }
 
 private:
 	// docs/gui/05: "scrolls if more than 12 items".

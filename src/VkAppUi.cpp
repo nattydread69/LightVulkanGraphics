@@ -221,6 +221,11 @@ namespace lightGraphics
 		return guiContext_ && guiContext_->wantsKeyboard();
 	}
 
+	bool VkApp::uiWantsScroll() const
+	{
+		return guiContext_ && guiContext_->wantsScroll();
+	}
+
 	ui::GuiContext& VkApp::gui()
 	{
 		assert(guiContext_ && "VkApp::gui() called before the GUI was initialised -- check hasGui() first");

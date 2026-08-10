@@ -1,7 +1,7 @@
-// The permanent, growing LVGUI demo (docs/gui/09-claude-code-prompts.md). Every widget
-// implemented so far gets a home in here as it lands, phase by phase, so there is always
-// one place to look at (and run) to see the whole library working together. Contrast with
-// examples/phase5_gui_smoke_demo.cpp, which was a throwaway visual check for phase 5 only.
+// The permanent, growing LVGUI demo. Every widget in the library gets a home in here, so
+// there is always one place to look at (and run) to see the whole library working
+// together. See docs/gui_usage.md for a guide and docs/gui/05-widgets.md for the full
+// per-widget spec.
 //
 // Currently demonstrates:
 //   Phase 5 -- Label, Separator, Spacer, Button, Panel (drag, z-order)
@@ -18,6 +18,13 @@
 //              coloured borders), CollapsingSection (header + collapsible children),
 //              ProgressBar (fraction + indeterminate animation), PlotLine (sparkline with
 //              auto-scale hysteresis).
+//   Phase 9   -- Panel scrolling (the main panel is now deliberately shorter than its
+//              accumulated content, so it needs the scrollbar to show everything below
+//              the fold -- try the wheel and the scrollbar grab), the resize grip
+//              (bottom-right corner of any panel), an anchored panel (top-right "Theme"
+//              panel, which also hosts the light/dark/high-contrast theme switcher --
+//              resize the window to see it hold its corner offset), and a tooltip
+//              (hover "Gravity").
 
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -57,7 +64,12 @@ int main()
 		// z-order raising it to the front (docs/gui/05, "Panel").
 		gui.createPanel("Back Panel", { 700.0f, 400.0f, 220.0f, 120.0f });
 
-		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 800.0f });
+		// Phase 9: deliberately shorter than the content phases 5-8 have accumulated into
+		// it, so the panel needs its own scrollbar to show everything below the fold --
+		// try the wheel over the panel, or drag the scrollbar grab in the right-hand
+		// gutter. The bottom-right corner is also a resize grip (Resizable is on by
+		// default, PanelFlags::Default); drag it to see the minimum-size clamp.
+		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 700.0f });
 
 		panel->add<lvgui::Label>("Phase 5 -- Label, Separator, Spacer, Button");
 		panel->add<lvgui::Label>("Drag this title bar around")->setColor({ 0x9A, 0xA3, 0xAF, 0xFF });
@@ -94,6 +106,9 @@ int main()
 		// reset, drag past the panel edge to confirm capture keeps tracking.
 		auto* gravity = panel->add<lvgui::Slider>("Gravity", 0.0f, 30.0f, 9.81f);
 		gravity->setUnitSuffix(" m/s^2");
+		// Phase 9: hover for theme.tooltipDelay seconds to see it appear below-right of
+		// the cursor (docs/gui/06, "Tooltips").
+		gravity->setTooltip("Acceleration due to gravity, applied every simulation step.");
 		gravity->setOnChange([](float v) { std::cout << "[gui-demo] gravity (live) = " << v << std::endl; });
 		gravity->setOnCommit([](float v) { std::cout << "[gui-demo] gravity (committed) = " << v << std::endl; });
 
@@ -213,6 +228,29 @@ int main()
 			float angle = (i / 50.0f) * 6.28f;  // 0 to 2π
 			plotLine->push(std::sin(angle) * 0.5f + 0.5f);
 		}
+
+		// Phase 9: an anchored panel (docs/gui/09, "Anchoring") pinned to the top-right
+		// corner -- resize the window and it holds its offset from that corner instead of
+		// floating wherever it happened to start. Doubles as the theme switcher, since a
+		// DropDown was already built (docs/gui/09: "Add a way for the demo to switch
+		// between them at runtime -- a DropDown is the obvious choice and you already have
+		// one").
+		auto* themePanel = gui.createPanel("Theme", { 1280.0f - 220.0f, 20.0f, 200.0f, 60.0f });
+		themePanel->setAnchor(lvgui::Panel::Anchor::TopRight);
+		static std::vector<std::string> themeNames = { "Dark", "Light", "High Contrast" };
+		auto* themeDropdown = themePanel->add<lvgui::DropDown>("Theme", themeNames, 0);
+		themeDropdown->setOnChange([&gui](int idx) {
+			switch (idx) {
+				case 1:  gui.theme() = lvgui::Theme::light(); break;
+				case 2:  gui.theme() = lvgui::Theme::highContrast(); break;
+				default: gui.theme() = lvgui::Theme::dark(); break;
+			}
+		});
+
+		// Phase 9: the "Near bottom edge" panel anchored to the bottom-left corner --
+		// thematically fitting, since it already exists to sit near an edge (its
+		// DropDown's upward popup flip, phase 8).
+		bottomPanel->setAnchor(lvgui::Panel::Anchor::BottomLeft);
 
 		app.run();
 	}

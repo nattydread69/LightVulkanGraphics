@@ -1,8 +1,7 @@
 # 05 — Widgets
 
 Every widget is specified here as: purpose, public interface, interaction rules, drawing
-recipe, and edge cases. Claude Code should be able to implement each one from this
-document alone.
+recipe, and edge cases.
 
 ## The base class
 
@@ -373,8 +372,9 @@ which correctly signals "this holds a number you can edit".
 
 ## CompositeWidget
 
-*Landed in phase 8, session A — implemented ahead of Row/Vec3Field/CollapsingSection so
-those three (session B) can build on it.*
+A shared base for widgets that own a small tree of interactive children — implemented
+once here rather than duplicated across `Row`, `Vec3Field`, and `CollapsingSection`
+below, all three of which derive from it.
 
 ```cpp
 class CompositeWidget : public Widget {
@@ -399,9 +399,9 @@ A derived composite overrides `preferredSize()` (still pure-virtual, inherited f
 Row splits horizontally, Vec3Field into thirds, CollapsingSection stacks vertically below
 a header.
 
-**Getting individual children interactive required extending `Widget` itself**, beyond
-what this document originally specified. Each child (e.g. a `DragValue` inside a future
-`Vec3Field`) needs its own hover/capture/focus, exactly like a top-level `Panel` widget —
+**Each child is independently interactive**, which requires three small extensions to
+`Widget` itself. A child (e.g. a `DragValue` inside a `Vec3Field`) needs its own
+hover/capture/focus, exactly like a top-level `Panel` widget —
 but `GuiContext`'s hit-testing, id lookup, and Tab-cycling only ever walked a panel's
 *top-level* widget list. Three small virtuals were added to `Widget`, each with a
 leaf-widget default that makes every existing widget's behaviour unchanged:
@@ -438,12 +438,12 @@ virtual void layout(const GuiContext&) {}    // no-op default; CompositeWidget l
 `Panel::layout()` calls `w->layout(ctx)` immediately after **every** `w->setBounds(...)`
 it performs on a widget — including the bounds-override (absolute placement) path — so a
 composite's children are always positioned from the exact same bounds, in the exact same
-pass, as the composite's own. This is a change from the original sketch, which had
-`CompositeWidget` itself own the traversal-into-children call from inside `setBounds()`
-via a cached context; that version was replaced because it depended on state cached from
-an earlier call in the same frame, which broke for a composite placed via the
-bounds-override escape hatch (`Panel::layout()` calls `setBounds()` there without ever
-calling `preferredSize()` first, so nothing populated the cache in time).
+pass, as the composite's own. The alternative — `CompositeWidget` caching a `GuiContext*`
+from an earlier call and driving the traversal itself from inside `setBounds()` — doesn't
+work: it depends on state cached from an earlier call in the same frame, which breaks for
+a composite placed via the bounds-override escape hatch (`Panel::layout()` calls
+`setBounds()` there without ever calling `preferredSize()` first, so nothing populates
+the cache in time).
 
 **Enabled/visible inheritance is functional, not (fully) visual.** A disabled or
 invisible composite skips calling `update()`/`hitTestDeep()`/`collectFocusable()` on its
@@ -473,9 +473,9 @@ public:
 };
 ```
 
-Implement as a composite that owns three `DragValueT<float>` children, splitting the
-control column into thirds with `theme.itemSpacing` between. `CompositeWidget` (above)
-is that reusable base, already landed — override `preferredSize()` and `layout(const
+Implemented as a composite that owns three `DragValueT<float>` children, splitting the
+control column into thirds with `theme.itemSpacing` between. `CompositeWidget` (above) is
+the reusable base; `Vec3Field` overrides `preferredSize()` and `layout(const
 GuiContext&)` to run this splitting policy.
 
 ---
@@ -483,7 +483,7 @@ GuiContext&)` to run this splitting policy.
 ## TextBox
 
 The hardest widget. Budget more time for this than for the rest combined, and test the
-editing state machine headlessly ([10-testing.md](10-testing.md)).
+editing state machine headlessly ([08-testing.md](08-testing.md)).
 
 ```cpp
 enum class TextFilter { None, Integer, Decimal, Identifier };
@@ -606,13 +606,13 @@ public:
 };
 ```
 
-*Landed in phase 8, session A.* Does **not** derive from `CompositeWidget` — the popup's
-items are not separate `Widget`s (no per-item `WidgetId`); the whole control-plus-popup is
-a single widget that answers "which item" from its own coordinate math
-(`itemAtY()`), the same way a `Panel`'s content region maps a click to a row.
+Does **not** derive from `CompositeWidget` — the popup's items are not separate
+`Widget`s (no per-item `WidgetId`); the whole control-plus-popup is a single widget that
+answers "which item" from its own coordinate math (`itemAtY()`), the same way a
+`Panel`'s content region maps a click to a row.
 
-**Popup mechanism, as actually implemented.** `GuiContext` gained an explicit API rather
-than a bare `popupOwner` field:
+**Popup mechanism.** `GuiContext` exposes an explicit API rather than a bare
+`popupOwner` field:
 
 ```cpp
 void openPopup(Widget* owner, const Rect& screenRect);   // (re-)registers; idempotent
@@ -640,9 +640,11 @@ weights most heavily). The owning control's OWN bounds are explicitly exempted f
 the popup via the control would close it via this generic path and then the control's own
 press-driven open/close toggle would immediately reopen it, net leaving it open.
 
-**Escape ordering — resolved differently than docs/04's phase 8 note anticipated.**
-That note expected `DropDown` might need `TextBox`'s `m_wasFocused`-style
-entering-focus-state comparison. It doesn't. `GuiContext`'s own Escape default
+**Escape ordering.** Unlike `TextBox`, `DropDown` needs neither the entering-state
+pattern nor a plain `ctx.focusedId() == id()` check for Escape — see
+[04-input-and-events.md](04-input-and-events.md) for `TextBox`'s `m_wasFocused`-style
+entering-focus-state comparison, which this widget sidesteps entirely. `GuiContext`'s own
+Escape default
 (`updateFocusNavigation()`) was changed to `if (isPopupOpen()) closePopup(); else
 m_focusedId = kInvalidWidgetId;` — i.e. GuiContext closes the popup itself, before
 `DropDown::update()` ever runs, and does *not* also clear focus (the control stays
@@ -668,18 +670,17 @@ answers `nullptr` for an id nothing claims — self-heals `m_popupOwnerId` back 
 teardown call in `destroyPanel()`/`destroyAllPanels()` was needed.
 
 **Keyboard.** Arrow keys move the highlight and **wrap** at both ends (matching
-`RadioGroup`'s existing arrow-key convention elsewhere in this library), Enter selects the
-highlighted item and closes. Beyond the original spec: Enter/Space also **open** a
-focused-but-closed control — without this a keyboard-only user who tabs to a `DropDown`
-has no way to operate it at all (same baseline `Button`/`Checkbox` already provide).
+`RadioGroup`'s arrow-key convention elsewhere in this library), Enter selects the
+highlighted item and closes. Enter/Space also **open** a focused-but-closed control —
+without this a keyboard-only user who tabs to a `DropDown` has no way to operate it at
+all (same baseline `Button`/`Checkbox` already provide).
 
 Popup rules: opens below the control, flips above if it would run off the bottom of the
 framebuffer; scrolls if more than 12 items, with a visual (wheel- and
 arrow-key-scrolled, not drag-to-scroll) scrollbar using `theme.scrollbarBg`/
-`scrollbarGrab`/`scrollbarWidth` — `Panel`'s own scrollbar is phase-9 scope and doesn't
-exist yet to literally match pixel-for-pixel, so this is the reference implementation of
-what "matching the panel scrollbar style" means; closes on selection, Escape, or any
-mouse press outside the popup rect (control excepted, see above).
+`scrollbarGrab`/`scrollbarWidth` — the same tokens `Panel`'s own scrollbar draws with (see
+"Panel" below); closes on selection, Escape, or any mouse press outside the popup rect
+(control excepted, see above).
 
 While a popup is open, `GuiContext::wantsMouse()` returns true regardless of cursor
 position, and hit testing checks the popup before any panel.
@@ -791,3 +792,47 @@ and offset widget layout by `-scrollY`. Wheel scrolls by 3 × `lineHeight`. Clam
 
 **Resize grip.** A `theme.resizeGripSize` triangle in the bottom-right corner, hit-tested
 before widgets. Sets the cursor to `ResizeNWSE` on hover.
+
+### Implementation notes
+
+A few decisions worth recording because they're easy to get wrong or aren't obvious from
+the summary above:
+
+- **Minimum size axis mapping.** "`titleBarHeight + 2*windowPadding` by `8*fontSize`" is
+  read as height-by-width: `titleBarHeight` is a vertical metric, so that half can only
+  sensibly be the minimum *height*; `8*fontSize` is the minimum *width*.
+- **The scrollbar-presence ordering trap — whether the scrollbar is needed depends on
+  content height, which depends on content width, which depends on whether the scrollbar
+  is needed — is resolved by reading `needsScrollbar()` from the PREVIOUS `layout()`
+  pass**, not deciding it fresh mid-pass. `GuiContext::endFrame()` already runs
+  `layout()` twice a frame for wrapping-`Label` convergence (see `Label` above); the same
+  double pass corrects a scrollbar-presence flip within the same frame it happens, for
+  the same reason: for every widget whose `preferredSize()` doesn't itself depend on row
+  width (everything except a wrapping `Label`), content height doesn't depend on
+  `contentW` at all, so the two passes can't disagree twice. The flag is stable
+  frame-to-frame otherwise — it does not oscillate.
+- **`Widget::wantsWheel()`** (virtual, default `false`, overridden `true` on
+  `SliderT`/`DropDown`) is what lets Panel tell "the hovered widget will consume this
+  wheel tick itself" apart from "nothing hovered will, so scroll the panel instead" — the
+  mechanism behind the Slider entry's "consume the wheel so the panel doesn't scroll"
+  above.
+- **Resize grip / scrollbar grab capture is real `GuiContext` capture**, not a
+  Panel-private bool the way title-bar dragging is. Each gets its own `WidgetId` from the
+  same counter real widgets draw from (`allocateWidgetId()`, `Widget.h`) even though
+  neither is a `Widget` — `GuiContext::findWidget()` naturally resolves that id to
+  `nullptr` (nothing claims it), which is what lets `activeId` be shared by both kinds of
+  capture without collision. This is what makes `wantsMouse()` stay true, and a
+  scrollbar-thumb drag keep tracking, once the cursor leaves the panel's own bounds —
+  title-bar dragging doesn't need the same treatment, because the panel's bounds move
+  WITH the cursor during that drag, so the cursor never actually leaves them.
+- **Resize grip hit-testing uses the full `resizeGripSize` bounding box**, not the
+  triangle's exact diagonal half — easier to grab, and only the *drawing* needs to be a
+  triangle.
+- **A non-scrollable (or non-overflowing) panel passes the wheel through to the
+  camera** rather than swallowing it — see [04-input-and-events.md](04-input-and-events.md),
+  "Scroll wheel" for the full reasoning and the resulting `GuiContext::wantsScroll()` /
+  `VkApp::uiWantsScroll()` split from `wantsMouse()`.
+- **Tooltips are suppressed while `activeId` is set** (any drag, including a panel's own
+  resize/scrollbar drag) **or a popup is open** — showing one on top of an in-progress
+  drag or an open popup would be visual noise for state the user is already mid-gesture
+  on.

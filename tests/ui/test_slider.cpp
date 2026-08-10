@@ -1,6 +1,6 @@
-// Phase 6 acceptance tests (docs/gui/08-implementation-plan.md, "Phase 6 -- Value
-// widgets"): Checkbox, RadioGroup/RadioButton, SliderT<float|int>, DragValueT. Headless --
-// no Vulkan device, no window, same pattern as test_layout.cpp/test_hittest.cpp.
+// Value-widget tests (docs/gui/05-widgets.md): Checkbox, RadioGroup/RadioButton,
+// SliderT<float|int>, DragValueT. Headless -- no Vulkan device, no window, same pattern
+// as test_layout.cpp/test_hittest.cpp.
 
 #include <lightVulkanGraphics/ui/Ui.h>
 
@@ -140,7 +140,7 @@ namespace {
 	}
 
 	void testSliderIntStepClampsAfterRoundingNeverExceedsRange() {
-		// docs/gui/10-testing.md, "Range/stepping edge cases": round-then-clamp, not
+		// docs/gui/08-testing.md, "Range/stepping edge cases": round-then-clamp, not
 		// clamp-then-round, or 0-10 step 3 can produce 12 at the extremes.
 		lvgui::SliderInt s("n", 0, 10, 0);
 		s.setStep(3);

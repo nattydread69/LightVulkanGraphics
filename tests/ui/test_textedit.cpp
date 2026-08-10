@@ -1,9 +1,8 @@
-// Phase 7 acceptance tests (docs/gui/08-implementation-plan.md, "Phase 7 -- TextBox").
-// Headless -- no Vulkan device, no window, same pattern as test_slider.cpp. Most of these
-// exercise TextBox's editing operations directly (docs/gui/10-testing.md: "test the
-// editing state machine directly, without rendering"); a few drive a real GuiContext to
-// cover focus/commit/revert and the mouse-click-to-caret path, which need real Font
-// metrics.
+// TextBox tests (docs/gui/05-widgets.md, "TextBox"). Headless -- no Vulkan device, no
+// window, same pattern as test_slider.cpp. Most of these exercise TextBox's editing
+// operations directly (docs/gui/08-testing.md: "test the editing state machine
+// directly, without rendering"); a few drive a real GuiContext to cover focus/commit/
+// revert and the mouse-click-to-caret path, which need real Font metrics.
 
 #include <lightVulkanGraphics/ui/Ui.h>
 

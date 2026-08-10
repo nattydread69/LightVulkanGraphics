@@ -1391,11 +1391,15 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
-		// docs/gui/04, "The camera hand-off": if the cursor is over a scrollable panel
-		// the wheel scrolls the panel, not the camera. wantsMouse() already covers this
-		// since it is true whenever the cursor is over a panel.
+		// docs/gui/04, "The camera hand-off" / "Scroll wheel": phase 9 resolved the
+		// "wheel over a panel with no overflow dies silently" question by giving the
+		// wheel its own, narrower query (uiWantsScroll()) instead of reusing uiWantsMouse()
+		// here -- wantsMouse() is deliberately true over ANY panel (so drags/clicks aimed
+		// at empty panel background don't fall through to the camera), which used to also
+		// swallow the wheel even over a panel with nothing to scroll. See
+		// docs/gui/04-input-and-events.md, "Scroll wheel" for the full reasoning.
 #ifdef LVG_WITH_UI
-		if (uiWantsMouse())
+		if (uiWantsScroll())
 		{
 			return;
 		}

@@ -39,14 +39,14 @@ struct InputState {
 };
 ```
 
-**Deviation added in phase 6:** `modsDown` was not in the original struct above. Phase 6's
-Shift-drag (Slider, DragValue) and Ctrl-click hooks need to know whether a modifier is
-*currently* held across many frames of an ongoing drag, which `keyQueue`'s edge-only
-events cannot answer on frames with no new key transitions. `UiPlatformGlfw::injectKey`
-now also writes `mods` into `m_pending.modsDown` (GLFW always reports the *full* current
-modifier bitmask on every key event, not just a delta for the key involved, so
-last-writer-wins is correct), and `beginFrame` copies it into `current` unconditionally —
-unlike `keyQueue`/`charQueue` it is never cleared, since it is level state, not a queue.
+`modsDown` is level state, not a queue, and is never cleared between frames the way
+`keyQueue`/`charQueue` are. It exists because Shift-drag (Slider, DragValue) and
+Ctrl-click need to know whether a modifier is *currently* held across many frames of an
+ongoing drag, which `keyQueue`'s edge-only events can't answer on a frame with no new key
+transitions. `UiPlatformGlfw::injectKey` writes `mods` into `m_pending.modsDown` on every
+key event (GLFW always reports the *full* current modifier bitmask, not just a delta for
+the key involved, so last-writer-wins is correct), and `beginFrame` copies it into
+`current` unconditionally.
 
 Level flags and edge flags are both needed. A button widget fires on release-inside
 (level plus edge); a slider drags on level; a checkbox toggles on press-edge. Deriving
@@ -201,8 +201,8 @@ every key event first, unconditionally, because that dispatch is baked into its 
 
 This matters for any widget whose Escape/Tab behaviour is more than "lose focus" —
 `TextBox` (Escape must **revert** the edit, not merely lose focus with the typed text
-still committed) is the first case, and phase 8's `DropDown` (Escape must close the
-popup) is the next. Naively comparing `ctx.focusedId() == id()` inside `update()` cannot
+still committed) is the case that forced the issue. Naively comparing
+`ctx.focusedId() == id()` inside `update()` cannot
 distinguish "I still have focus, nothing happened" from "I had focus a moment ago and
 Escape just took it away, unlocked by GuiContext before I even ran this frame" — both
 read as `ctx.focusedId() != id()` by the time the widget can look.
@@ -234,17 +234,16 @@ look identical if you only ever ask `ctx.focusedId()` in the present tense. See
 never routing its embedded `TextBox` through `ctx.focusedId()` at all (`setForcedFocus`,
 `updateEmbedded`) and inspecting the key queue directly instead.
 
-**Phase 8 resolution:** it turned out `DropDown` needs neither the entering-state pattern
-nor a plain `ctx.focusedId() == id()` check. Instead, `GuiContext`'s own Escape default
-(below) was changed to close the popup itself, before `DropDown::update()` ever runs:
-`if (isPopupOpen()) closePopup(); else m_focusedId = kInvalidWidgetId;` — i.e. "if a
-popup is open, close it; else clear focus" is now literally what this branch does, rather
-than something left to the widget. Since GuiContext is the one source of truth for "is a
+`DropDown` needs neither the entering-state pattern nor a plain `ctx.focusedId() == id()`
+check for its own Escape handling: `GuiContext`'s own Escape default (below) closes the
+popup itself, before `DropDown::update()` ever runs — `if (isPopupOpen()) closePopup();
+else m_focusedId = kInvalidWidgetId;` is literally the whole branch, rather than
+something left to the widget. Since `GuiContext` is the one source of truth for "is a
 popup open" (`ctx.popupOwner() == this`), and `DropDown::update()` just reads that fresh
 every frame, there is no second cause of the popup closing that it ever needs to
 distinguish Escape from — a click outside the popup is also handled entirely inside
-`GuiContext::update()`, before `DropDown::update()` runs. See docs/gui/05-widgets.md,
-"DropDown", for the full mechanism.
+`GuiContext::update()`, before `DropDown::update()` runs. See
+[05-widgets.md](05-widgets.md), "DropDown", for the full mechanism.
 
 ### Key codes
 
@@ -294,9 +293,31 @@ Two behaviours to get right beyond the basic guard:
    `cameraDragActive` and skip the `uiHasMouse` check while it is true. Symmetrically,
    `wantsMouse()` returning true for an active GUI drag already protects the reverse
    case.
-2. **Scroll wheel.** If the cursor is over a scrollable panel, the wheel scrolls the
-   panel; otherwise it zooms the camera. `wantsMouse()` covers this correctly since it
-   is true whenever the cursor is over a panel.
+2. **Scroll wheel.** If the cursor is over a panel that actually has something to
+   scroll, the wheel scrolls the panel; otherwise it reaches the camera. This is
+   *narrower* than `wantsMouse()`, which is deliberately true over any panel's rect
+   (including empty background) so a drag or click aimed at the panel doesn't fall
+   through to the scene. Reusing `wantsMouse()` for the wheel too would mean hovering a
+   panel with nothing to scroll — a small panel, or a tall one whose content still fits
+   — swallows the wheel for no reason: not consumed by the panel, and not reaching the
+   camera either.
+
+   `GuiContext::wantsScroll()` (surfaced to the core library as `VkApp::uiWantsScroll()`)
+   is the dedicated, narrower query, used **only** by the scroll handler — every other
+   camera mouse guard keeps using `wantsMouse()`. It's true only when something under the
+   cursor will actually consume this wheel tick:
+
+   - an open dropdown popup (it always scrolls on the wheel while hovered), or
+   - the specific hovered widget claims the wheel itself (`Widget::wantsWheel()` —
+     `SliderT`/`DropDown` override it; see "Wheel while hovered" in
+     [05-widgets.md](05-widgets.md)'s Slider section), or
+   - the hovered panel currently has overflow to scroll (`Panel::needsScrollbar()`).
+
+   Otherwise — hovering a panel's background, a non-wheel widget like a `Label`, or a
+   panel that fits its content — `wantsScroll()` is false and the wheel reaches the
+   camera exactly as if no panel were there. This keeps the wheel's behaviour matching
+   what the cursor is visibly over: if nothing on screen will move in response to the
+   tick, the camera gets it.
 
 ## Frame-boundary bookkeeping
 

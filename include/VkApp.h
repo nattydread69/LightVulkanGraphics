@@ -627,13 +627,19 @@ namespace lightGraphics
 		// this header.
 		bool uiWantsMouse() const;
 		bool uiWantsKeyboard() const;
+		// docs/gui/04-input-and-events.md, "Scroll wheel": narrower than uiWantsMouse() --
+		// true only when something under the cursor will actually consume this wheel tick
+		// (a panel with overflow to scroll, a widget that claims the wheel itself, or an
+		// open popup), so hovering a panel with nothing to scroll doesn't also blind the
+		// camera's zoom/dolly.
+		bool uiWantsScroll() const;
 
 	public:
-		// Phase 10 (docs/gui/08-implementation-plan.md) formalises this into
-		// LightVulkanGraphicsCreateInfo::enableGui / guiCreateInfo plus install rules for
-		// the bundled font; until then the GUI is always constructed with theme defaults
-		// as soon as LVG_WITH_UI is compiled in and init() has brought up a device and
-		// render pass (see initUi()).
+		// A caller-supplied GuiCreateInfo (custom font path/size, initial theme) isn't
+		// threaded through init() yet (see docs/gui/07-public-api.md, "The core library
+		// integration"); the GUI is always constructed with theme defaults as soon as
+		// LVG_WITH_UI is compiled in and init() has brought up a device and render pass
+		// (see initUi()).
 		bool hasGui() const { return guiContext_ != nullptr; }
 		ui::GuiContext& gui();   // asserts hasGui()
 

@@ -637,25 +637,13 @@ if (LVG_BUILD_EXAMPLES)
 	add_executable(rotation_glyph_example examples/rotation_glyph_example.cpp)
 	lvg_configure_build_tree_example(rotation_glyph_example)
 
-	# THROWAWAY -- phase 5 visual smoke test. Remove this target and
-	# examples/phase5_gui_smoke_demo.cpp once the GUI integration has been confirmed by
-	# eye; it is not part of the phase 5 deliverable.
-	if (LVG_BUILD_UI)
-		add_executable(phase5_gui_smoke_demo examples/phase5_gui_smoke_demo.cpp)
-		lvg_configure_build_tree_example(phase5_gui_smoke_demo)
-		# Consumer code that instantiates Panel::add<W>() for a concrete widget type is
-		# the only place those widgets' constructors/vtables get instantiated -- the core
-		# library's own object code never references them, so its PRIVATE static link of
-		# LightVulkanGraphicsUI does not re-export those symbols. Any real consumer needs
-		# both targets; docs/gui/00-overview.md's phase 0 CMake requirements anticipate
-		# this ("an external consumer doing find_package() gets both targets").
-		target_link_libraries(phase5_gui_smoke_demo PRIVATE LightVulkanGraphics::UI)
-	endif()
-
-	# The permanent, growing LVGUI demo (docs/gui/09-claude-code-prompts.md): every widget
-	# gets added here as it lands, phase by phase. Same "consumer code is what actually
-	# instantiates widget templates/vtables" reasoning as phase5_gui_smoke_demo above for
-	# why it needs LightVulkanGraphics::UI linked directly.
+	# The permanent, growing LVGUI demo: every widget in the library gets a home in here.
+	# It links LightVulkanGraphicsUI directly (not just transitively through the core
+	# library) because consumer code that instantiates Panel::add<W>() for a concrete
+	# widget type is the only place those widgets' constructors/vtables get instantiated
+	# -- the core library's own object code never references them, so its PRIVATE static
+	# link of LightVulkanGraphicsUI does not re-export those symbols. Any real consumer
+	# doing find_package() needs both targets for the same reason.
 	if (LVG_BUILD_UI)
 		add_executable(gui_demo examples/gui_demo.cpp)
 		lvg_configure_build_tree_example(gui_demo)

@@ -18,7 +18,11 @@ namespace {
 	std::atomic<WidgetId> g_nextWidgetId{ 1 };
 }
 
-Widget::Widget() : m_id(g_nextWidgetId.fetch_add(1, std::memory_order_relaxed)) {}
+WidgetId allocateWidgetId() {
+	return g_nextWidgetId.fetch_add(1, std::memory_order_relaxed);
+}
+
+Widget::Widget() : m_id(allocateWidgetId()) {}
 
 void Widget::setBoundsOverride(const Rect& panelRelative) {
 	m_boundsOverride = panelRelative;

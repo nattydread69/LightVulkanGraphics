@@ -4,7 +4,7 @@
 // state machine is exposed as individually testable named methods (insertText,
 // deleteBackward, ...) that mutate only m_text/m_caret/m_anchor/m_scrollX (plus firing
 // onChange/bind, the same contract every other value widget's internal setValueInternal
-// already follows) -- see docs/gui/10-testing.md's random-operation property test, which
+// already follows) -- see docs/gui/08-testing.md's random-operation property test, which
 // calls these directly with no GuiContext at all. update()/draw() are the only pieces
 // that need a GuiContext, and they do nothing but map input events onto these calls.
 

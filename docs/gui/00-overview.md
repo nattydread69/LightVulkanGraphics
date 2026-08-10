@@ -36,7 +36,7 @@ Stated explicitly so nobody sinks a week into them by accident:
 - **No accessibility tree / screen reader support.** This is a real gap and should be
   written down as such.
 - **No anti-aliased edges in v1.** Rectangles snapped to integer pixels look crisp
-  without it. AA is a phase-11 optional extra.
+  without it. AA is a possible future addition, not currently planned.
 - **No docking, tabs, or multi-viewport.** Panels float and can be dragged, collapsed,
   and resized. That's it.
 - **No 3D-space-anchored labels in the widget system.** That is a separate, simpler
@@ -77,10 +77,10 @@ change. Panels clip their content; dropdown popups escape by rendering in a sepa
 overlay pass at the end of the list.
 
 **D7 — The UI owns input first, and says so.**
-`GuiContext::wantsMouse()` and `wantsKeyboard()` are queried by the existing camera
-controller before it consumes anything. This must be wired in phase 4, not retrofitted.
-Your free-fly WASD camera will otherwise fly across the scene every time a user types
-into a text box.
+`GuiContext::wantsMouse()` and `wantsKeyboard()` are queried by the camera controller
+before it consumes anything. This has to be wired into the camera code directly, not
+layered on top of it afterward — a free-fly WASD camera will otherwise fly across the
+scene every time a user types into a text box.
 
 **D8 — The font ships as an asset through the existing shader-payload mechanism.**
 You already have a robust relocatable search path for `spv/` payloads

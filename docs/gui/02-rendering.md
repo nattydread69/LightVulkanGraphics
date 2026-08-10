@@ -55,13 +55,12 @@ void addTextClipped (const Font&, float pixelSize, const Rect&, Color,
                      std::string_view utf8, Align h, Align v);
 ```
 
-**Implementation note:** every non-text primitive above samples `DrawList::whitePixelUV()`
-rather than a hardcoded `{0,0}`, and `DrawList::setWhitePixelUV(Vec2)` lets the owner
-(`GuiContext`, from phase 5 onward) point it at the real atlas's white block once a
-`Font` has baked. Before that call it defaults to `{0,0}`, which is only correct for
-tests that never bind a real atlas texture. This wiring wasn't spelled out above but is
-required for solid-colour geometry to render correctly once phase 3 binds the actual
-font atlas as the single texture every draw call samples.
+Every non-text primitive above samples `DrawList::whitePixelUV()` rather than a
+hardcoded `{0,0}`, and `DrawList::setWhitePixelUV(Vec2)` lets the owner (`GuiContext`)
+point it at the real atlas's white block once a `Font` has baked. Before that call it
+defaults to `{0,0}`, which is only correct for tests that never bind a real atlas
+texture — solid-colour geometry needs this wired up for correct results once the font
+atlas is bound as the single texture every draw call samples.
 
 `addRectFilled` with `rounding == 0` is the hot path and must be exactly four vertices
 and six indices with no branching. Rounded rects build a convex fan; precompute a
@@ -91,7 +90,7 @@ visual quality that AA would, at zero cost.
 
 Circles and the slider handle are the exception — a hard-edged circle at 8px radius looks
 bad. Either draw handles as rounded rects (recommended, and it suits a technical
-aesthetic) or accept the aliasing until phase 11.
+aesthetic) or accept the aliasing.
 
 ## The Vulkan pipeline
 
@@ -278,7 +277,7 @@ must follow the Font. Hardcoding 512 silently truncates the upload on any HiDPI 
 `CLAMP_TO_EDGE` matters. With `REPEAT`, a glyph at the atlas edge bleeds a sliver of the
 opposite edge into itself, producing a faint speckle that is maddening to diagnose.
 
-## Render pass lifetime (implementation note)
+## Render pass lifetime
 
 The pipeline is **not** create-once. `VkApp::recreateSwapChain()` calls
 `createRenderPass()` on every resize, and `cleanupSwapChain()` destroys `renderPass_`
@@ -287,15 +286,15 @@ for this: the owner calls it with the new handle after each swapchain recreation
 rebuilds the pipeline. Missing this leaves the UI drawing against a destroyed render
 pass the first time the window is resized.
 
-## Target layering (implementation note)
+## Target layering
 
 The dependency runs **core -> LightVulkanGraphicsUI**, never the reverse. LVGUI is
 self-contained: layers 1-2 are pure glm+std, and `UiRenderer` receives its Vulkan
 handles through `UiRendererCreateInfo` rather than reaching into `VkApp`. Having the UI
 target link the core library instead would be a cycle, because core has to call into the
-UI to record it into the frame (and, from phase 10, to expose `gfx.gui()`) -- and CMake
-rejects cycles unless every target involved is `STATIC`, which the core library is not.
-A useful side effect: the headless UI tests link neither Vulkan, assimp nor glfw.
+UI to record it into the frame and to expose `VkApp::gui()` -- and CMake rejects cycles
+unless every target involved is `STATIC`, which the core library is not. A useful side
+effect: the headless UI tests link neither Vulkan, assimp nor glfw.
 
 `UiRenderer::clampToFramebuffer` is a public static function purely so it can be unit
 tested without a device. It is the most likely source of validation errors in this
@@ -318,12 +317,11 @@ If MSAA is enabled on the scene, the UI pipeline must be created with the same
 `rasterizationSamples`. UI geometry gets multisampled too, which is harmless (it is
 axis-aligned and produces no extra coverage) and much simpler than resolving first.
 
-## A note on world-anchored labels
+## World-anchored labels
 
-Not a widget, but the thing your users will ask for immediately after sliders: text
-pinned to a 3D position — axis annotations, a value floating beside a rotation glyph.
-
-This does not need the widget system at all. Expose:
+Not a widget: text pinned to a 3D position — axis annotations, a value floating beside a
+rotation glyph — doesn't need the widget system at all, just a straight screen-space
+projection each frame:
 
 ```cpp
 void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewProj,
@@ -331,7 +329,9 @@ void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewP
                                Vec2 pixelOffset = {0, 0});
 ```
 
-Project through `viewProj`, reject if `w <= 0` (behind camera), divide, map NDC to
-pixels, then `drawList.addText(...)`. About forty lines including a depth-sorted overlap
-cull. Put it in phase 11 but design the signature now so it doesn't get bolted on
-awkwardly.
+Projects `worldPos` through `viewProj`, rejects it if `w <= 0` (behind the camera) or the
+resulting NDC coordinates fall outside `[-1, 1]` on either axis, then divides to NDC, maps
+to screen pixels, and calls `drawList.addText(...)`. It does not attempt overlap culling
+between multiple labels — with the small number of labels a simulation typically wants
+(axis tags, a handful of value readouts), overdrawn text is not a problem in practice; add
+culling if a use case actually needs it.
