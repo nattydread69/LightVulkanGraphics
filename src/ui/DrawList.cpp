@@ -166,6 +166,83 @@ void DrawList::ensureCommand(TextureId textureId) {
 	}
 }
 
+void DrawList::addConvexFillAAFringe(std::uint32_t innerBase, std::size_t count, Color baseColor) {
+	if (count < 3) {
+		return;
+	}
+	constexpr float kAASize = 1.0f;   // logical pixels -- see docs/gui/02-rendering.md, "Anti-aliasing"
+
+	glm::vec2 wuv(m_whitePixelUV.x, m_whitePixelUV.y);
+	Color transparent = baseColor;
+	transparent.a = 0;
+	std::uint32_t transparentCol = packColor(transparent);
+
+	// Centroid of the already-emitted inner ring -- used only to disambiguate which of
+	// the two directions along a vertex's own outward axis is actually "outward" (see
+	// below); not used as a fan hub or stored as geometry.
+	glm::vec2 centroid(0.0f, 0.0f);
+	for (std::size_t i = 0; i < count; ++i) {
+		centroid += m_vertices[innerBase + i].pos;
+	}
+	centroid /= static_cast<float>(count);
+
+	std::uint32_t outerBase = static_cast<std::uint32_t>(m_vertices.size());
+	for (std::size_t i = 0; i < count; ++i) {
+		glm::vec2 prev = m_vertices[innerBase + (i + count - 1) % count].pos;
+		glm::vec2 curr = m_vertices[innerBase + i].pos;
+		glm::vec2 next = m_vertices[innerBase + (i + 1) % count].pos;
+
+		glm::vec2 e0 = curr - prev;
+		glm::vec2 e1 = next - curr;
+		float e0len = glm::length(e0);
+		float e1len = glm::length(e1);
+		if (e0len > 1.0e-5f) {
+			e0 /= e0len;
+		}
+		if (e1len > 1.0e-5f) {
+			e1 /= e1len;
+		}
+
+		// Rotate each edge direction 90 degrees to get its own perpendicular, then
+		// average the two edges meeting at this vertex for a smooth per-vertex outward
+		// axis -- exact for a circular arc (a rounded corner, a circle), an unmitred
+		// approximation at a genuinely sharp corner (a plain 4-point rect), which is the
+		// same "no mitring, 1-2px, nobody can see it" trade-off addPolyline's own segment
+		// joints already make.
+		glm::vec2 n0(e0.y, -e0.x);
+		glm::vec2 n1(e1.y, -e1.x);
+		glm::vec2 avg = n0 + n1;
+		float avgLen = glm::length(avg);
+		glm::vec2 outward = (avgLen > 1.0e-4f) ? (avg / avgLen) : n0;
+
+		// "Average of two edge normals" identifies an AXIS, not which of its two
+		// directions actually points away from the shape -- get this backwards and the
+		// fringe grows INTO the fill instead of outside it.
+		glm::vec2 toVertex = curr - centroid;
+		if (glm::dot(outward, toVertex) < 0.0f) {
+			outward = -outward;
+		}
+
+		glm::vec2 outer = curr + outward * kAASize;
+		m_vertices.push_back(UiVertex(outer, wuv, transparentCol));
+	}
+
+	for (std::size_t i = 0; i < count; ++i) {
+		std::size_t next = (i + 1) % count;
+		std::uint32_t i0 = innerBase + static_cast<std::uint32_t>(i);
+		std::uint32_t i1 = innerBase + static_cast<std::uint32_t>(next);
+		std::uint32_t o0 = outerBase + static_cast<std::uint32_t>(i);
+		std::uint32_t o1 = outerBase + static_cast<std::uint32_t>(next);
+
+		m_indices.push_back(i0);
+		m_indices.push_back(i1);
+		m_indices.push_back(o1);
+		m_indices.push_back(i0);
+		m_indices.push_back(o1);
+		m_indices.push_back(o0);
+	}
+}
+
 void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 	ensureCommand();
 	glm::vec2 wuv(m_whitePixelUV.x, m_whitePixelUV.y);
@@ -213,6 +290,8 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 			m_indices.push_back(baseIdx + i);
 			m_indices.push_back(baseIdx + i + 1);
 		}
+
+		addConvexFillAAFringe(baseIdx, perimeterCount, color);
 	}
 
 	updateCurrentCommandIndexCount();
@@ -314,6 +393,8 @@ void DrawList::addTriangleFilled(Vec2 a, Vec2 b, Vec2 c, Color color) {
 	m_indices.push_back(idx + 1);
 	m_indices.push_back(idx + 2);
 
+	addConvexFillAAFringe(idx, 3, color);
+
 	updateCurrentCommandIndexCount();
 }
 
@@ -351,6 +432,12 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 		m_indices.push_back(baseIdx + i);
 		m_indices.push_back(baseIdx + i + 1);
 	}
+
+	// `segments` here, not `segments + 1`: the perimeter loop above deliberately
+	// duplicates its first point as its last (see that loop's own comment) to close the
+	// circle, and centreIdx is a separate hub vertex, not part of the ring -- passing
+	// either would ring a degenerate or wrong loop.
+	addConvexFillAAFringe(baseIdx, static_cast<std::size_t>(segments), color);
 }
 
 void DrawList::addConvexPolyFilled(const Vec2* pts, int count, Color color) {
@@ -373,6 +460,8 @@ void DrawList::addConvexPolyFilled(const Vec2* pts, int count, Color color) {
 		m_indices.push_back(baseIdx + i + 1);
 	}
 
+	addConvexFillAAFringe(baseIdx, static_cast<std::size_t>(count), color);
+
 	updateCurrentCommandIndexCount();
 }
 
@@ -384,6 +473,16 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 
 	std::uint32_t col = packColor(color);
 	float halfThick = thickness * 0.5f;
+
+	// Pass 1: core segment quads, byte-for-byte the same geometry this function has
+	// always produced -- every existing vertex/index a caller or a test already
+	// computed keeps its exact position and index. `perpUnit` (the UNIT perpendicular,
+	// not scaled by halfThick like `perp` below) is cached per segment purely so pass 2
+	// can offset outward without recomputing direction from possibly-degenerate,
+	// already-consumed source points.
+	struct SegmentInfo { std::uint32_t baseIdx; glm::vec2 perpUnit; };
+	std::vector<SegmentInfo> segments;
+	segments.reserve(count);
 
 	for (int i = 0; i < count - 1; ++i) {
 		Vec2 a = pts[i];
@@ -416,6 +515,8 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 		m_indices.push_back(baseIdx + 0);
 		m_indices.push_back(baseIdx + 2);
 		m_indices.push_back(baseIdx + 3);
+
+		segments.push_back({ baseIdx, glm::vec2(-dir.y, dir.x) });
 	}
 
 	if (closed && count >= 3) {
@@ -448,7 +549,51 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 			m_indices.push_back(baseIdx + 0);
 			m_indices.push_back(baseIdx + 2);
 			m_indices.push_back(baseIdx + 3);
+
+			segments.push_back({ baseIdx, glm::vec2(-dir.y, dir.x) });
 		}
+	}
+
+	// Pass 2: a translucent ~1px fringe along each segment's two LONG sides only (the
+	// v1-v2 and v3-v0 edges) -- deliberately not the short end caps at v0-v1/v2-v3,
+	// matching this function's own pre-existing no-mitring-at-joints trade-off above:
+	// at 1-2px nobody sees a missing end-cap fringe either, and skipping it avoids
+	// overlapping translucent geometry piling up where two segments meet.
+	constexpr float kAASize = 1.0f;
+	Color transparent = color;
+	transparent.a = 0;
+	std::uint32_t transparentCol = packColor(transparent);
+
+	for (const SegmentInfo& seg : segments) {
+		glm::vec2 v0 = m_vertices[seg.baseIdx + 0].pos;
+		glm::vec2 v1 = m_vertices[seg.baseIdx + 1].pos;
+		glm::vec2 v2 = m_vertices[seg.baseIdx + 2].pos;
+		glm::vec2 v3 = m_vertices[seg.baseIdx + 3].pos;
+		glm::vec2 offset = seg.perpUnit * kAASize;
+
+		std::uint32_t outBase = static_cast<std::uint32_t>(m_vertices.size());
+
+		glm::vec2 o1 = v1 + offset;
+		glm::vec2 o2 = v2 + offset;
+		m_vertices.push_back(UiVertex(o1, wuv, transparentCol));
+		m_vertices.push_back(UiVertex(o2, wuv, transparentCol));
+		m_indices.push_back(seg.baseIdx + 1);
+		m_indices.push_back(seg.baseIdx + 2);
+		m_indices.push_back(outBase + 1);
+		m_indices.push_back(seg.baseIdx + 1);
+		m_indices.push_back(outBase + 1);
+		m_indices.push_back(outBase + 0);
+
+		glm::vec2 o3 = v3 - offset;
+		glm::vec2 o0 = v0 - offset;
+		m_vertices.push_back(UiVertex(o3, wuv, transparentCol));
+		m_vertices.push_back(UiVertex(o0, wuv, transparentCol));
+		m_indices.push_back(seg.baseIdx + 3);
+		m_indices.push_back(seg.baseIdx + 0);
+		m_indices.push_back(outBase + 3);
+		m_indices.push_back(seg.baseIdx + 3);
+		m_indices.push_back(outBase + 3);
+		m_indices.push_back(outBase + 2);
 	}
 
 	updateCurrentCommandIndexCount();

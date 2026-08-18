@@ -39,8 +39,6 @@ Stated explicitly so nobody sinks a week into them by accident:
 - **No bidirectional text.**
 - **No accessibility tree / screen reader support.** This is a real gap and should be
   written down as such.
-- **No anti-aliased edges in v1.** Rectangles snapped to integer pixels look crisp
-  without it. AA is a possible future addition, not currently planned.
 - **No docking, tabs, or multi-viewport.** Panels float and can be dragged, collapsed,
   and resized. That's it.
 - **No 3D-space-anchored labels in the widget system.** That is a separate, simpler

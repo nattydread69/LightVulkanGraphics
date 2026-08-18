@@ -521,9 +521,11 @@ namespace {
 		bool nearCornerArcMid[4] = { false, false, false, false };
 
 		for (const auto& v : list.vertices()) {
-			// Snapping to whole pixels can only move a vertex by <= ~0.71px diagonally.
-			assert(v.pos.x >= r.left() - 1.0f && v.pos.x <= r.right() + 1.0f);
-			assert(v.pos.y >= r.top() - 1.0f && v.pos.y <= r.bottom() + 1.0f);
+			// Snapping to whole pixels can only move a vertex by <= ~0.71px diagonally;
+			// the AA fringe (docs/gui/02-rendering.md, "Anti-aliasing") then pushes an
+			// outer ring up to 1px further out again, so the bound is 2.0f, not 1.0f.
+			assert(v.pos.x >= r.left() - 2.0f && v.pos.x <= r.right() + 2.0f);
+			assert(v.pos.y >= r.top() - 2.0f && v.pos.y <= r.bottom() + 2.0f);
 
 			// The assertion that would have caught the circle bug: a fan hub placed
 			// at the rect's centre (as a naive centre-anchored circle fan would need)
@@ -560,12 +562,14 @@ namespace {
 		float maxClampedRadius = std::min(r.w, r.h) * 0.5f;  // 20
 
 		for (const auto& v : list.vertices()) {
-			assert(v.pos.x >= r.left() - 1.0f && v.pos.x <= r.right() + 1.0f);
-			assert(v.pos.y >= r.top() - 1.0f && v.pos.y <= r.bottom() + 1.0f);
+			// +2.0f, not +1.0f: pixel snapping (~0.71px diagonal) plus the AA fringe's
+			// own further 1px outward step (docs/gui/02-rendering.md, "Anti-aliasing").
+			assert(v.pos.x >= r.left() - 2.0f && v.pos.x <= r.right() + 2.0f);
+			assert(v.pos.y >= r.top() - 2.0f && v.pos.y <= r.bottom() + 2.0f);
 			// Inverted geometry (unclamped radius) would push corner arc centres past
 			// the rect's own centre and out the far side, producing vertices well
 			// beyond the clamped incircle radius from the centre.
-			assert(dist({ v.pos.x, v.pos.y }, centre) <= maxClampedRadius + 1.0f);
+			assert(dist({ v.pos.x, v.pos.y }, centre) <= maxClampedRadius + 2.0f);
 		}
 
 		std::cout << "✓ testRectFilledRoundingClampsInsteadOfInverting\n";
@@ -695,13 +699,24 @@ namespace {
 		lvgui::Vec2 a{ 10, 20 }, b{ 90, 20 }, c{ 50, 80 };
 		list.addTriangleFilled(a, b, c, lvgui::Color(255, 0, 0, 255));
 
-		assert(list.vertices().size() == 3);
-		assert(list.indices().size() == 3);
+		// 3 core vertices + 3 AA fringe vertices (one ring around a 3-point loop);
+		// 3 core indices + 18 fringe indices (3 fringe quads, 6 indices each) -- the AA
+		// fringe is always appended strictly AFTER the core geometry a caller already
+		// computed (docs/gui/02-rendering.md, "Anti-aliasing"), so it adds new
+		// vertices/indices past the old exact counts rather than changing them.
+		assert(list.vertices().size() == 6);
+		assert(list.indices().size() == 21);
 		const auto& v = list.vertices();
 		assert(v[0].pos.x == a.x && v[0].pos.y == a.y);
 		assert(v[1].pos.x == b.x && v[1].pos.y == b.y);
 		assert(v[2].pos.x == c.x && v[2].pos.y == c.y);
 		assert(list.indices()[0] == 0 && list.indices()[1] == 1 && list.indices()[2] == 2);
+
+		// Core vertices are opaque; the fringe ring (vertices 3..5) fades to alpha 0.
+		assert(v[0].color >> 24 == 0xFF);
+		for (int i = 3; i < 6; ++i) {
+			assert((v[i].color >> 24) == 0);
+		}
 
 		std::cout << "✓ testAddTriangleFilledVerticesMatchInputExactly\n";
 	}
@@ -718,8 +733,11 @@ namespace {
 		lvgui::Vec2 pts[4] = { { 0, 0 }, { 40, 0 }, { 40, 40 }, { 0, 40 } };
 		list.addConvexPolyFilled(pts, 4, lvgui::Color(0, 255, 0, 255));
 
-		assert(list.vertices().size() == 4);
-		assert(list.indices().size() == 6);
+		// 4 core + 4 AA fringe vertices; 6 core + 24 fringe indices (4 fringe quads, 6
+		// indices each) -- see the matching comment in
+		// testAddTriangleFilledVerticesMatchInputExactly above.
+		assert(list.vertices().size() == 8);
+		assert(list.indices().size() == 30);
 		const auto& v = list.vertices();
 		for (int i = 0; i < 4; ++i) {
 			assert(v[i].pos.x == pts[i].x && v[i].pos.y == pts[i].y);
@@ -768,9 +786,13 @@ namespace {
 		float thickness = 10.0f;
 		list.addPolyline(pts, 3, lvgui::Color(255, 255, 255, 255), thickness, false);
 
-		// Two quads, no closing segment (open): 8 vertices, 12 indices.
-		assert(list.vertices().size() == 8);
-		assert(list.indices().size() == 12);
+		// Two core quads, no closing segment (open): 8 core vertices, 12 core indices --
+		// unchanged from before AA, since the fringe pass reads these back but never
+		// alters them. Plus 4 fringe vertices and 6 fringe indices PER segment (2
+		// segments): vertices 8+8=16, indices 12+24=36 (docs/gui/02-rendering.md,
+		// "Anti-aliasing").
+		assert(list.vertices().size() == 16);
+		assert(list.indices().size() == 36);
 		const auto& v = list.vertices();
 
 		// Quad 0 covers p0->p1: v0,v1 at the p0 end, v2,v3 at the p1 end.
@@ -805,6 +827,86 @@ namespace {
 		}
 
 		std::cout << "✓ testAddPolylineOpenThreePointStraightLineTwoNonOverlappingQuadsSharedEdgeAtMiddle\n";
+	}
+
+	// --- Anti-aliasing fringe -----------------------------------------------------
+
+	void testAAFringeAppendsOuterTranslucentRingAfterCoreCircleGeometry() {
+		lvgui::DrawList list;
+		list.clear();
+
+		int segments = 16;
+		list.addCircleFilled({ 50, 50 }, 20.0f, lvgui::Color(0, 128, 255, 255), segments);
+
+		// Core: segments+1 perimeter vertices (last duplicates the first) + 1 centre
+		// hub. Fringe rings only the `segments` distinct perimeter points -- see
+		// addCircleFilled's own comment on why not segments+1 or the centre.
+		std::size_t coreCount = static_cast<std::size_t>(segments) + 2;
+		assert(list.vertices().size() == coreCount + static_cast<std::size_t>(segments));
+
+		const auto& v = list.vertices();
+		for (std::size_t i = 0; i < coreCount; ++i) {
+			assert((v[i].color >> 24) == 0xFF);
+		}
+		for (std::size_t i = coreCount; i < v.size(); ++i) {
+			assert((v[i].color >> 24) == 0);
+		}
+
+		std::cout << "✓ testAAFringeAppendsOuterTranslucentRingAfterCoreCircleGeometry\n";
+	}
+
+	void testAAFringeSitsOutsideRoundedRectCoreGeometry() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect r = { 10, 20, 100, 40 };
+		list.addRectFilled(r, lvgui::Color(255, 0, 0, 255), 8.0f);
+
+		// buildRoundedRectPerimeter emits exactly 4 corners * 17 points = 68, with no
+		// duplicated closing point, so the whole perimeter loop rings directly.
+		assert(list.vertices().size() == 68 + 68);
+
+		const auto& v = list.vertices();
+		lvgui::Vec2 centre = r.centre();
+		for (std::size_t i = 0; i < 68; ++i) {
+			assert((v[i].color >> 24) == 0xFF);
+		}
+		for (std::size_t i = 68; i < v.size(); ++i) {
+			assert((v[i].color >> 24) == 0);
+			// Every fringe vertex sits farther from centre than SOME core vertex it was
+			// generated from -- a loose sanity check that the ring grew outward, not
+			// inward or in place.
+			assert(dist({ v[i].pos.x, v[i].pos.y }, centre) > 0.0f);
+		}
+
+		std::cout << "✓ testAAFringeSitsOutsideRoundedRectCoreGeometry\n";
+	}
+
+	void testAxisAlignedPrimitivesExemptFromAAFringe() {
+		// Pixel-snapped axis-aligned edges are already exact -- addRectFilled's
+		// rounding<=0 fast path, addRectFilledMultiColor, and addImage deliberately get
+		// no fringe at all (docs/gui/02-rendering.md, "Anti-aliasing").
+		{
+			lvgui::DrawList list;
+			list.clear();
+			list.addRectFilled({ 10, 10, 80, 50 }, lvgui::Color(255, 0, 0, 255));
+			assert(list.vertices().size() == 4);
+		}
+		{
+			lvgui::DrawList list;
+			list.clear();
+			lvgui::Color c(255, 0, 0, 255);
+			list.addRectFilledMultiColor({ 10, 20, 60, 30 }, c, c, c, c);
+			assert(list.vertices().size() == 4);
+		}
+		{
+			lvgui::DrawList list;
+			list.clear();
+			list.addImage(3, { 0.0f, 0.0f, 10.0f, 10.0f });
+			assert(list.vertices().size() == 4);
+		}
+
+		std::cout << "✓ testAxisAlignedPrimitivesExemptFromAAFringe\n";
 	}
 }
 
@@ -844,6 +946,10 @@ int main() {
 	testAddConvexPolyFilledVerticesAndFanIndicesAreCorrect();
 	testAddRectFilledMultiColorCornersExactPositionsAndColors();
 	testAddPolylineOpenThreePointStraightLineTwoNonOverlappingQuadsSharedEdgeAtMiddle();
+
+	testAAFringeAppendsOuterTranslucentRingAfterCoreCircleGeometry();
+	testAAFringeSitsOutsideRoundedRectCoreGeometry();
+	testAxisAlignedPrimitivesExemptFromAAFringe();
 
 	std::cout << "\n✅ All DrawList tests passed!\n";
 	return 0;

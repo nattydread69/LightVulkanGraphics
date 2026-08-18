@@ -98,6 +98,18 @@ private:
 	void updateCurrentCommandIndexCount();
 	Rect getCurrentClipRect() const;
 	std::uint32_t packColor(Color c) const;
+
+	// Appends a translucent ~1px fringe ring OUTSIDE an already-emitted, already-snapped
+	// convex vertex loop -- softens what would otherwise be a hard aliased silhouette
+	// against whatever is drawn behind it (docs/gui/02-rendering.md, "Anti-aliasing").
+	// `innerBase`/`count` name the loop's own vertices, already sitting at
+	// m_vertices[innerBase .. innerBase + count), in order around the shape; NOT closed
+	// as input (this function supplies the wraparound edge itself). The loop's existing
+	// vertices/indices are only ever READ here, never modified -- fringe geometry is
+	// strictly appended after everything the caller already emitted, so no vertex index
+	// a caller (or a test) already computed is ever invalidated by calling this.
+	// `count < 3` is a no-op (degenerate; nothing to ring).
+	void addConvexFillAAFringe(std::uint32_t innerBase, std::size_t count, Color baseColor);
 };
 
 } // namespace lightGraphics::ui

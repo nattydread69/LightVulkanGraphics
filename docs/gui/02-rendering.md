@@ -93,16 +93,41 @@ The stack must never be empty. `clear()` pushes a full-framebuffer rect as the b
 
 ### Anti-aliasing
 
-Not in v1 (decision D4 in [00-overview.md](00-overview.md)). Instead:
+**Snap to integer pixels** still does most of the work for axis-aligned geometry. Every
+rect edge coordinate passes through `std::round()` before entering the vertex buffer. A
+1px border drawn at x=100.0 is crisp; at x=100.37 it is a grey smear across two columns.
+This rule alone buys most of the visual quality AA would for axis-aligned edges, at zero
+cost — which is why `addRectFilled`'s `rounding <= 0` fast path, `addRectFilledMultiColor`,
+and `addImage` never get a fringe (below): they are already exact.
 
-**Snap to integer pixels.** Every rect edge coordinate passes through
-`std::round()` before entering the vertex buffer. A 1px border drawn at x=100.0 is crisp;
-at x=100.37 it is a grey smear across two columns. This single rule buys most of the
-visual quality that AA would, at zero cost.
+Non-axis-aligned edges — rounded corners, circles, arbitrary convex polygons, triangles,
+and `addPolyline`'s diagonal segments — still stair-step under pure pixel snapping, so
+these get a **geometric edge fringe**: a translucent ~1px ring of extra triangles just
+outside a shape's true boundary, alpha fading from the shape's own colour at the true edge
+to fully transparent 1px further out. No MSAA (would mean changing the shared scene render
+pass's sample count) and no SDF/MSDF text rendering (too large a rewrite) — this reuses the
+alpha blending the pipeline already has (see below).
 
-Circles and the slider handle are the exception — a hard-edged circle at 8px radius looks
-bad. Either draw handles as rounded rects (recommended, and it suits a technical
-aesthetic) or accept the aliasing.
+`DrawList::addConvexFillAAFringe(innerBase, count, baseColor)` is the shared helper: given
+an already-emitted, already-snapped convex vertex loop (`count` points starting at
+`innerBase`, not closed — the function supplies the wraparound edge), it computes each
+vertex's outward normal as the average of its two adjacent edge perpendiculars, corrected
+to point away from the loop's centroid (robust to winding direction, matching cull mode
+`NONE` above), and appends `count` new alpha-0 vertices plus `count` fringe quads
+connecting the inner ring to the outer one. Fringe geometry is **always appended strictly
+after** the caller's own core geometry, so no vertex or index index a caller (or a test)
+already computed is ever invalidated by calling it.
+
+Wired into the four convex-fill primitives — `addRectFilled`'s `rounding > 0` path (over
+its full 68-point rounded-rect perimeter), `addCircleFilled` (over its `segments` distinct
+perimeter points, excluding the duplicated closing point and the separate centre hub),
+`addConvexPolyFilled`, and `addTriangleFilled`. `addPolyline` gets its own two-pass variant
+instead: pass 1 emits every segment's core quad exactly as before (unchanged, so
+`addRect`'s ring and `addLine` inherit AA for free); pass 2 reads each segment's 4
+already-emitted vertices back and fringes only its two long sides, deliberately skipping
+the short end caps and skipping true mitred joints between segments — the same "at 1-2px
+thickness nobody can see the difference, and mitring is where polyline code goes to die"
+trade-off this function's core geometry already makes.
 
 ## The Vulkan pipeline
 

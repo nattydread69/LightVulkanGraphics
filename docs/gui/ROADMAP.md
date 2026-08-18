@@ -24,7 +24,8 @@ its place after that (`ListBox`, context menus, `LogView`, the `GuiContext` font
 order, and finally the modal dialog — the one item in that batch that needed a real
 change to the input hand-off, `wantsMouse()`/`wantsKeyboard()`/`wantsScroll()`, rather
 than being just a new `Widget` subclass) has shipped and moved into the numbered docs.
-What was Tier 3 is promoted below.
+Anti-aliased edges, the third item of what was this document's Tier 1, has since shipped
+too (docs/gui/02-rendering.md, "Anti-aliasing"). What was Tier 3 is promoted below.
 
 ## Tier 1 — larger, pick at most one
 
@@ -47,12 +48,6 @@ visibly jitter as values change. Fixing it means either a second atlas or multi-
 packing into the existing one — the multi-texture plumbing `Image` added (`UiRenderer`'s
 per-`DrawCmd` descriptor selection, docs/gui/02-rendering.md) means a second atlas, if
 that turns out to be the simpler of the two, is no longer a new mechanism to build.
-
-### Anti-aliased edges
-
-Listed as a deliberate v1 non-goal in [00-overview.md](00-overview.md), and rounded
-corners currently stair-step. Purely cosmetic — but screenshots are how a library gets
-adopted, so it is not worth nothing.
 
 ## Explicit non-goals
 
