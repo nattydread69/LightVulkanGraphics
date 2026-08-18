@@ -402,7 +402,7 @@ namespace {
 	}
 
 	void testFocusedTextBoxClaimsKeyboardSoWasdDoesNotReachCamera() {
-		// The scenario docs/gui/09's phase 7 prompt calls out by name: WASD over a panel
+		// The scenario docs/gui/04-input-and-events.md, "The camera hand-off", calls out by name: WASD over a panel
 		// moves the camera only when nothing has claimed the keyboard (docs/gui/04).
 		// GuiContext::wantsKeyboard() is what the real VkApp gates camera movement on
 		// (src/VkApp.cpp, updateCameraFromKeyboard) -- this test pins that contract for
@@ -448,6 +448,6 @@ int main() {
 	testPasswordModeCaretMatchesDisplayedBulletString();
 	testFocusedTextBoxClaimsKeyboardSoWasdDoesNotReachCamera();
 
-	std::cout << "\n✅ All phase 7 TextBox tests passed!\n";
+	std::cout << "\n✅ All TextBox tests passed!\n";
 	return 0;
 }

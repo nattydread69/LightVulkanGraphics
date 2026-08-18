@@ -496,10 +496,10 @@ if(LVG_BUILD_UI)
 	# toolkit: layers 1-2 (Types/DrawList/Font/Utf8) are pure glm+std, and UiRenderer
 	# takes explicit Vulkan handles rather than reaching into VkApp. Linking
 	# LightVulkanGraphics here instead would be a cycle -- core has to call into the UI
-	# to record it into the frame (and, from phase 10, to expose gfx.gui()) -- and CMake
+	# to record it into the frame (and to expose VkApp::gui()) -- and CMake
 	# rejects cycles unless every target in them is STATIC, which core is not.
 	# It also keeps the headless UI tests free of Vulkan, assimp and glfw *headers* --
-	# UiRenderer.* and (from phase 4) UiPlatformGlfw.* still need Vulkan/GLFW PRIVATE to
+	# UiRenderer.* and UiPlatformGlfw.* still need Vulkan/GLFW PRIVATE to
 	# link, but nothing in include/lightVulkanGraphics/ui/ exposes either.
 	target_link_libraries(LightVulkanGraphicsUI
 		PUBLIC
@@ -524,7 +524,7 @@ if(LVG_BUILD_UI)
 	# The core library advertises GUI availability to its consumers.
 	target_compile_definitions(${PROJECT_NAME} PUBLIC LVG_WITH_UI)
 
-	# Phase 3 needs the bundled font to build the atlas before phase 10 formalises font
+	# The atlas needs the bundled font at build time, before install rules formalise font
 	# payload installation; mirrors the LVG_BUILD_SHADER_DIR convention above.
 	target_compile_definitions(${PROJECT_NAME} PRIVATE
 		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"

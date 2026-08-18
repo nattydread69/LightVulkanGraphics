@@ -1391,7 +1391,7 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
-		// docs/gui/04, "The camera hand-off" / "Scroll wheel": phase 9 resolved the
+		// docs/gui/04, "The camera hand-off" / "Scroll wheel": resolves the
 		// "wheel over a panel with no overflow dies silently" question by giving the
 		// wheel its own, narrower query (uiWantsScroll()) instead of reusing uiWantsMouse()
 		// here -- wantsMouse() is deliberately true over ANY panel (so drags/clicks aimed

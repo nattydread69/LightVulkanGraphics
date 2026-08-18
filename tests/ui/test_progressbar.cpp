@@ -1,4 +1,4 @@
-// Phase 8, session B: ProgressBar and PlotLine widget tests. Headless.
+// ProgressBar and PlotLine widget tests. Headless.
 
 #include <lightVulkanGraphics/ui/Ui.h>
 

@@ -598,7 +598,7 @@ namespace lightGraphics
 		// unique_ptrs to incomplete types, so ~VkApp must stay out-of-line.
 		std::unique_ptr<ui::UiRenderer> uiRenderer_;
 
-		// Phase 4: raw GLFW input capture (docs/gui/04). Installed in createWindow() so
+		// Raw GLFW input capture (docs/gui/04). Installed in createWindow() so
 		// input capture starts as soon as the window exists, independent of Vulkan
 		// readiness. GuiContext.h must never see a GLFW header (docs/gui/01's layering
 		// rule), so it cannot itself be an installCallbacks() target; forwardInputToGui()
@@ -606,7 +606,7 @@ namespace lightGraphics
 		// via the same inject* calls a platform layer would use.
 		std::unique_ptr<ui::UiPlatformGlfw> uiPlatform_;
 
-		// Phase 5: the real GUI (docs/gui/01-05). Owns the theme, font, and panels, and
+		// The GUI itself (docs/gui/01-05). Owns the theme, font, and panels, and
 		// produces the DrawList uiRenderer_ plays back each frame.
 		std::unique_ptr<ui::GuiContext> guiContext_;
 

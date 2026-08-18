@@ -105,7 +105,7 @@ namespace {
 		pressKey(ctx, lvgui::Key::Escape);
 		assert(!ctx.isPopupOpen());
 		assert(dd->selectedIndex() == 0);
-		// docs/gui/04's phase 8 note: Escape closes the popup but does not also kick
+		// docs/gui/04-input-and-events.md, "Key events": Escape closes the popup but does not also kick
 		// focus off the control (every native combo box behaves this way).
 		assert(ctx.focusedId() == dd->id());
 

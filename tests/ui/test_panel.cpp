@@ -1,6 +1,7 @@
-// docs/gui/09 phase 9, "Panel polish": scrolling, resize grip, anchoring, and tooltips --
-// headless, same pattern as test_layout.cpp/test_hittest.cpp/test_dropdown.cpp: no Vulkan
-// device, no window.
+// Panel behaviour: scrolling, resize grip, anchoring, tooltips, and the two title-bar
+// buttons (collapse/close) -- headless, same pattern as
+// test_layout.cpp/test_hittest.cpp/test_dropdown.cpp: no Vulkan device, no window.
+// See docs/gui/05-widgets.md, "Panel", for the behaviour these pin down.
 
 #include <lightVulkanGraphics/ui/Ui.h>
 
@@ -255,6 +256,139 @@ namespace {
 		std::cout << "✓ testTooltipTimerResetsWhenHoveredIdChanges\n";
 	}
 
+	// Presses and releases at the same point, one frame each -- the release-inside gesture
+	// both title-bar buttons act on.
+	void clickAt(lvgui::GuiContext& ctx, lvgui::Vec2 p) {
+		ctx.injectMousePos(p);
+		ctx.injectMouseButton(lvgui::MouseButton::Left, true);
+		step(ctx);
+		ctx.injectMouseButton(lvgui::MouseButton::Left, false);
+		step(ctx);
+	}
+
+	void testCollapseButtonTogglesAndShrinksThePanelToItsTitleBar() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 100.0f, 100.0f, 220.0f, 300.0f },
+		                               lvgui::PanelFlags::Collapsible | lvgui::PanelFlags::Movable);
+		panel->add<lvgui::Spacer>(40.0f);
+		step(ctx);
+
+		assert(!panel->collapsed());
+
+		// The arrow is a titleBarHeight square at the title bar's leading edge.
+		const float titleH = ctx.theme().titleBarHeight;
+		const lvgui::Vec2 arrow{ panel->bounds().x + titleH * 0.5f, panel->bounds().y + titleH * 0.5f };
+
+		clickAt(ctx, arrow);
+		assert(panel->collapsed());
+
+		// Collapsed, the panel occupies ONLY its title bar: a point that was comfortably
+		// inside the expanded body must no longer hit it...
+		lvgui::Vec2 belowTitleBar{ panel->bounds().x + 50.0f, panel->bounds().y + titleH + 40.0f };
+		assert(!panel->hitTest(belowTitleBar));
+		// ...while the title bar itself still does, or the panel would be unreachable.
+		assert(panel->hitTest(arrow));
+
+		// m_bounds is deliberately preserved across a collapse, so expanding restores the
+		// original size rather than some remembered-height approximation of it.
+		assert(panel->bounds().h == 300.0f);
+
+		clickAt(ctx, arrow);
+		assert(!panel->collapsed());
+		assert(panel->hitTest(belowTitleBar));
+
+		std::cout << "✓ testCollapseButtonTogglesAndShrinksThePanelToItsTitleBar\n";
+	}
+
+	void testClickingCollapseArrowDoesNotAlsoDragThePanel() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 100.0f, 100.0f, 220.0f, 300.0f },
+		                               lvgui::PanelFlags::Collapsible | lvgui::PanelFlags::Movable);
+		step(ctx);
+
+		const float titleH = ctx.theme().titleBarHeight;
+		const lvgui::Vec2 arrow{ panel->bounds().x + titleH * 0.5f, panel->bounds().y + titleH * 0.5f };
+		const lvgui::Rect before = panel->bounds();
+
+		// Press on the arrow, then move well past the 4px drag threshold before releasing.
+		// The button owns the capture, so the panel must not follow the cursor.
+		ctx.injectMousePos(arrow);
+		ctx.injectMouseButton(lvgui::MouseButton::Left, true);
+		step(ctx);
+		ctx.injectMousePos({ arrow.x + 120.0f, arrow.y + 90.0f });
+		step(ctx);
+
+		assert(panel->bounds().x == before.x);
+		assert(panel->bounds().y == before.y);
+
+		// Released off the arrow, so the toggle is cancelled too (release-INSIDE only).
+		ctx.injectMouseButton(lvgui::MouseButton::Left, false);
+		step(ctx);
+		assert(!panel->collapsed());
+
+		std::cout << "✓ testClickingCollapseArrowDoesNotAlsoDragThePanel\n";
+	}
+
+	void testCloseButtonHidesThePanelAndFiresOnCloseOnce() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 100.0f, 100.0f, 220.0f, 300.0f },
+		                               lvgui::PanelFlags::Closable | lvgui::PanelFlags::Movable);
+		int closeCount = 0;
+		bool visibleInsideCallback = true;
+		panel->setOnClose([&] {
+			++closeCount;
+			// The callback documents that it fires AFTER the panel has hidden itself, so a
+			// handler can veto by setting it back -- verify that ordering holds.
+			visibleInsideCallback = panel->visible();
+		});
+		step(ctx);
+
+		const float titleH = ctx.theme().titleBarHeight;
+		const lvgui::Vec2 closeBtn{ panel->bounds().right() - titleH * 0.5f, panel->bounds().y + titleH * 0.5f };
+
+		clickAt(ctx, closeBtn);
+
+		assert(closeCount == 1);
+		assert(!visibleInsideCallback);
+		assert(!panel->visible());
+		assert(!panel->hitTest(closeBtn));
+
+		// A hidden panel gets no update()/draw(), so no further callbacks can fire.
+		step(ctx);
+		assert(closeCount == 1);
+
+		std::cout << "✓ testCloseButtonHidesThePanelAndFiresOnCloseOnce\n";
+	}
+
+	void testTitleBarButtonsAreAbsentWithoutTheirFlags() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		// PanelFlags::Default carries Collapsible but NOT Closable.
+		auto* panel = ctx.createPanel("Panel", { 100.0f, 100.0f, 220.0f, 300.0f },
+		                               lvgui::PanelFlags::Movable);
+		step(ctx);
+
+		const float titleH = ctx.theme().titleBarHeight;
+		const lvgui::Vec2 arrow{ panel->bounds().x + titleH * 0.5f, panel->bounds().y + titleH * 0.5f };
+		const lvgui::Vec2 closeBtn{ panel->bounds().right() - titleH * 0.5f, panel->bounds().y + titleH * 0.5f };
+
+		assert(!panel->hitTestCollapseButton(ctx, arrow));
+		assert(!panel->hitTestCloseButton(ctx, closeBtn));
+
+		// With neither flag, a title-bar click is a plain drag -- unchanged behaviour.
+		ctx.injectMousePos(arrow);
+		ctx.injectMouseButton(lvgui::MouseButton::Left, true);
+		step(ctx);
+		ctx.injectMousePos({ arrow.x + 60.0f, arrow.y + 30.0f });
+		step(ctx);
+		assert(panel->bounds().x > 100.0f);
+		ctx.injectMouseButton(lvgui::MouseButton::Left, false);
+		step(ctx);
+		assert(!panel->collapsed());
+		assert(panel->visible());
+
+		std::cout << "✓ testTitleBarButtonsAreAbsentWithoutTheirFlags\n";
+	}
+
 }
 
 int main() {
@@ -265,7 +399,11 @@ int main() {
 	testAnchoredPanelHoldsCornerOffsetAcrossDisplaySizeChange();
 	testPanelDraggedTowardTopEdgeStopsWithTitleBarOnScreen();
 	testTooltipTimerResetsWhenHoveredIdChanges();
+	testCollapseButtonTogglesAndShrinksThePanelToItsTitleBar();
+	testClickingCollapseArrowDoesNotAlsoDragThePanel();
+	testCloseButtonHidesThePanelAndFiresOnCloseOnce();
+	testTitleBarButtonsAreAbsentWithoutTheirFlags();
 
-	std::cout << "\n✅ All Panel (phase 9) tests passed!\n";
+	std::cout << "\n✅ All Panel tests passed!\n";
 	return 0;
 }

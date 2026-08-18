@@ -5,7 +5,7 @@
 //
 // UiPlatformGlfw owns the pending/current InputState split and the inject* family
 // described in docs/gui/04-input-and-events.md. GLFW's own callbacks feed it through
-// install Callbacks(); tests call inject* directly with no window at all. From phase 5
+// install Callbacks(); tests call inject* directly with no window at all. From the widget layer on
 // on, GuiContext owns one of these internally and forwards its own inject*/beginFrame/
 // endFrame calls to it -- the signatures here already matched the ones normative in
 // docs/gui/07-public-api.md, so that swap was mechanical.
@@ -56,7 +56,7 @@ public:
 
 	const InputState& current() const { return m_current; }
 
-	// A widget (from phase 5 on) calls this during update() to ask for a cursor shape;
+	// A widget calls this during update() to ask for a cursor shape;
 	// endFrame() resets it back to Arrow so the request must be renewed every frame.
 	void requestCursorShape(CursorShape shape) { m_requestedCursor = shape; }
 	CursorShape requestedCursorShape() const { return m_requestedCursor; }

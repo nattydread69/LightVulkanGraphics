@@ -5,10 +5,10 @@
 // per-frame contract this class implements and docs/gui/07-public-api.md for the
 // normative signatures.
 //
-// PlatformHooks lives here per docs/gui/07-public-api.md's header-layout table. Phase 4's
-// UiPlatformGlfw.h carried its own copy of this struct (it needed to exist before
-// GuiContext did); it now includes this header and reuses this definition instead of
-// duplicating it, per that doc's note on the deviation.
+// PlatformHooks lives here per docs/gui/07-public-api.md's header-layout table.
+// UiPlatformGlfw.h originally carried its own copy of the struct (it had to exist before
+// GuiContext did); it now includes this header and reuses this definition rather than
+// duplicating it.
 
 #include "Types.h"
 #include "Theme.h"
@@ -32,7 +32,10 @@ namespace lightGraphics::ui {
 class UiPlatformGlfw;
 
 struct GuiCreateInfo {
-	std::string fontPath;                  // empty = use the standard search order
+	// Required: the path to a TrueType file to bake. There is no built-in search order
+	// yet, so leaving this empty throws rather than falling back to a bundled default --
+	// see the constructor. VkApp::initUi() fills it in via findFontPath().
+	std::string fontPath;
 	float       fontSize      = 14.0f;
 	Theme       theme         = Theme::dark();
 	int         atlasWidth    = 512;
@@ -50,8 +53,7 @@ class GuiContext {
 public:
 	// Throws std::runtime_error if fontPath cannot be opened or fails to bake (see
 	// docs/gui/07-public-api.md, "Error handling policy" -- construction failures throw).
-	// fontPath being empty currently also throws: the standard search order it would
-	// otherwise use is phase 10 scope (docs/gui/07's GuiCreateInfo::fontPath comment).
+	// An empty fontPath also throws -- see GuiCreateInfo::fontPath above.
 	GuiContext(const GuiCreateInfo&, PlatformHooks);
 	~GuiContext();
 
@@ -74,7 +76,7 @@ public:
 	// ---- input hand-off ----
 	bool wantsMouse()    const;
 	bool wantsKeyboard() const;
-	// docs/gui/04-input-and-events.md, "Scroll wheel": the phase-9 resolution of "wheel
+	// docs/gui/04-input-and-events.md, "Scroll wheel": the resolution of "wheel
 	// over a panel with no overflow currently dies silently" (wantsMouse() is true over
 	// ANY panel, scrollable or not, so the wheel neither scrolled the panel nor reached
 	// the camera). True when SOMETHING under the cursor will actually consume the wheel
@@ -105,7 +107,7 @@ public:
 	// The topmost panel whose rect contains the cursor this frame, or nullptr -- what
 	// m_hoveredId/m_hoveredPanel were already resolved from in update(). Exposed so a
 	// Panel can tell "the cursor is over ME specifically" apart from "over some other
-	// panel that happens to overlap mine" (docs/gui/09 phase 9, "Scrolling": the wheel
+	// panel that happens to overlap mine" (docs/gui/05, "Panel", "Scrolling": the wheel
 	// must scroll only the panel actually under the cursor).
 	Panel* hoveredPanel() const { return m_hoveredPanel; }
 
@@ -116,11 +118,11 @@ public:
 	bool isTooltipVisible() const;
 
 	// ---- platform pass-through ----
-	// docs/gui/07-public-api.md's GuiContext table (written phase 4, before any widget
-	// needed the platform directly) does not list these; PlatformHooks lives on this
-	// class specifically so a widget deep inside a panel can reach the platform without
-	// every intermediate layer re-exposing it. Added for TextBox (phase 7): copy/cut/
-	// paste need clipboard access, and hovering a text box requests the I-beam cursor.
+	// docs/gui/07-public-api.md's GuiContext table (written before any widget needed the
+	// platform directly) does not list these; PlatformHooks lives on this class
+	// specifically so a widget deep inside a panel can reach the platform without every
+	// intermediate layer re-exposing it. TextBox is what forced the issue: copy/cut/paste
+	// need clipboard access, and hovering a text box requests the I-beam cursor.
 	std::string clipboardText() const;
 	void        setClipboardText(std::string_view text) const;
 	void        requestCursorShape(CursorShape shape) const;

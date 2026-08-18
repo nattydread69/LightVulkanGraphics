@@ -29,13 +29,13 @@ namespace lightGraphics
 	{
 		// The logical font size the GUI is baked at. Theme::fontSize matches this
 		// default; a consumer that wants a different size will get one via
-		// GuiCreateInfo::fontSize once phase 10 exposes GuiCreateInfo through
+		// GuiCreateInfo::fontSize once GuiCreateInfo is exposed through
 		// LightVulkanGraphicsCreateInfo (docs/gui/07-public-api.md).
 		constexpr float kUiFontSize = 14.0f;
 	}
 
 	// Minimal font-payload search, deliberately mirroring the order that
-	// findShaderPath() uses for spv/. Phase 10 formalises this (install rules,
+	// findShaderPath() uses for spv/. Still to be formalised (install rules,
 	// FONT_PATHS.md, and the relocated-install test); until then this is enough to
 	// resolve the bundled Inter build from a build tree or an install prefix.
 	std::string VkApp::findFontPath(const std::string& fontName)

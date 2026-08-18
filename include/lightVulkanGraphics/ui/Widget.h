@@ -18,7 +18,7 @@ class GuiContext;
 class Panel;
 
 // Allocates a fresh WidgetId from the same process-wide, never-reused id-space Widget's
-// own constructor draws from (Widget.cpp). Exists for Panel's phase-9 resize grip and
+// own constructor draws from (Widget.cpp). Exists for Panel's resize grip and
 // scrollbar grab (docs/gui/05-widgets.md, "Resize grip"/"Scrolling"): neither is a Widget
 // (Panel itself isn't one -- docs/gui/01-architecture.md, "Ownership"), but both need to
 // participate in GuiContext's activeId capture exactly like a widget does ("takes mouse
@@ -71,7 +71,7 @@ public:
 	virtual bool wantsTextInput() const { return false; }
 	// True for a widget that consumes the wheel itself while hovered (SliderT, DropDown --
 	// docs/gui/05-widgets.md, Slider's "Wheel while hovered: Step, and consume the wheel
-	// so the panel doesn't scroll"). Panel::update() (docs/gui/09 phase 9, "Scrolling")
+	// so the panel doesn't scroll"). Panel::update() (docs/gui/05, "Panel", "Scrolling")
 	// checks this on whatever GuiContext says is currently hovered before scrolling
 	// itself, so a wheel tick over a slider steps the slider exactly once instead of also
 	// moving the panel underneath it.

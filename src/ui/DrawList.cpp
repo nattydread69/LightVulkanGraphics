@@ -317,7 +317,7 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 	// any wraparound modulo. The previous version of this loop instead fanned from a
 	// fixed perimeter point (baseIdx) through unrelated other perimeter points back to
 	// the centre, which draws a self-intersecting wedge instead of a circle -- nothing
-	// called addCircleFilled until RadioButton (phase 6) made the bug visible.
+	// called addCircleFilled until RadioButton made the bug visible.
 	for (int i = 0; i < segments; ++i) {
 		m_indices.push_back(centreIdx);
 		m_indices.push_back(baseIdx + i);

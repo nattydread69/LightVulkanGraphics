@@ -768,6 +768,7 @@ public:
     void setFlags(PanelFlags);
     void setVisible(bool);
     void setCollapsed(bool);
+    void setOnClose(std::function<void()>);
     void bringToFront();
 
     // Anchoring so panels survive window resize sensibly
@@ -792,6 +793,25 @@ and offset widget layout by `-scrollY`. Wheel scrolls by 3 × `lineHeight`. Clam
 
 **Resize grip.** A `theme.resizeGripSize` triangle in the bottom-right corner, hit-tested
 before widgets. Sets the cursor to `ResizeNWSE` on hover.
+
+**Title-bar buttons.** `PanelFlags::Collapsible` puts a disclosure triangle at the title
+bar's leading edge (right-pointing when collapsed, down-pointing when open — the same
+convention `CollapsingSection` uses); `PanelFlags::Closable` puts an X at its trailing
+edge. Each occupies a `titleBarHeight` square, and the title text takes whatever they
+leave between them. Both fire on release-*inside*, like `Button`, so pressing one and
+dragging away cancels.
+
+Collapsing changes what the panel *occupies*, not its stored rect: `bounds()` keeps the
+expanded size so expanding restores it exactly, while drawing, hit-testing, and occlusion
+all go through the title-bar-only `effectiveBounds()`. The collapse arrow stays hit-
+testable while collapsed — it is the only way back out.
+
+Closing sets `visible(false)` and then fires `setOnClose()`, in that order, so a handler
+can veto by setting visibility straight back. It must not call
+`GuiContext::destroyPanel()` directly: the callback runs from inside `GuiContext`'s own
+walk over the panel list, and `destroyPanel()` erases the owning `unique_ptr` immediately.
+Defer the destroy through `postToMainThread()`, which drains at the top of the next
+`beginFrame()`.
 
 ### Implementation notes
 

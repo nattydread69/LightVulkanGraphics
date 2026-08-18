@@ -1,4 +1,4 @@
-// Phase 8, session B: CompositeWidget-derived widgets (Row, Vec3Field, CollapsingSection)
+// CompositeWidget-derived widgets (Row, Vec3Field, CollapsingSection)
 // Headless testing, same pattern as test_layout.cpp/test_slider.cpp.
 
 #include <lightVulkanGraphics/ui/Ui.h>

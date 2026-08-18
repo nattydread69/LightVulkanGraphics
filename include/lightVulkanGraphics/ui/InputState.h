@@ -38,7 +38,7 @@ struct InputState {
 
 	// Level: bitmask of Mod:: flags (KeyCodes.h) currently held. docs/gui/04's original
 	// InputState had no level view of modifiers, only the per-event KeyEvent::mods
-	// snapshot -- fine for Tab/Escape, but phase 6 needs to know "is Shift down right
+	// snapshot -- fine for Tab/Escape, but a slider drag needs to know "is Shift down right
 	// now" across many frames of an ongoing slider drag, which an edge-only queue can't
 	// answer. Maintained from the `mods` argument every injectKey() call already carries
 	// (GLFW reports the full current modifier set on every key event, including the

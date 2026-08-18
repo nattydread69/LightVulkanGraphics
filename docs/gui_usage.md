@@ -135,6 +135,9 @@ overlay panel. A few things a panel does for you without any further code:
   the title bar or make labels unreadable.
 - **Stays on screen.** Drag the title bar fully off the top edge and the panel stops with
   the title bar still grabbable — it can't be dragged somewhere permanently unreachable.
+- **Collapses.** With `PanelFlags::Collapsible` (on by default), the title bar carries a
+  disclosure triangle that folds the panel down to just its title bar and back. The
+  panel's size is preserved across the fold, so expanding restores it exactly.
 - **Anchors to a corner across window resizes:**
 
   ```cpp
@@ -145,8 +148,24 @@ overlay panel. A few things a panel does for you without any further code:
   window after a resize. `Anchor::{TopLeft, TopRight, BottomLeft, BottomRight}` — pick
   whichever corner the panel should hug.
 
-Other panel-level calls: `setTitle`, `setVisible`, `setCollapsed` (collapses to just the
-title bar), `bringToFront`, `remove(Widget*)`, `clear()`.
+Add `PanelFlags::Closable` (not in `Default`) and the title bar grows an X at its
+trailing edge. Clicking it hides the panel, then calls your handler:
+
+```cpp
+auto* p = gui.createPanel("Filters", bounds, PanelFlags::Default | PanelFlags::Closable);
+p->setOnClose([&]{ std::cout << "closed\n"; });     // p->setVisible(true) here vetoes it
+```
+
+To destroy the panel rather than hide it, defer by one frame — the callback runs from
+inside the GUI's own walk over its panel list, so destroying it there would pull the rug
+out from under the caller:
+
+```cpp
+p->setOnClose([&gui, p]{ gui.postToMainThread([&gui, p]{ gui.destroyPanel(p); }); });
+```
+
+Other panel-level calls: `setTitle`, `setVisible`, `setCollapsed` (the same fold the
+triangle performs, from code), `bringToFront`, `remove(Widget*)`, `clear()`.
 
 ## Widget tour
 
@@ -244,6 +263,8 @@ frame's widgets are updated.
 - `GuiCreateInfo` (custom font path/size, initial theme) isn't yet exposed through
   `VkApp::init()` — every app currently gets the bundled Inter font at 14px, dark theme
   by default. Switch themes at runtime with `gui.theme() = ...` in the meantime.
+- No colour picker, list box, image widget, or modal dialog yet. See
+  [`gui/ROADMAP.md`](gui/ROADMAP.md) for what's planned and in what order.
 
 ## Reference
 

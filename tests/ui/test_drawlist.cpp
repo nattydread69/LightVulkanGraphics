@@ -450,7 +450,7 @@ namespace {
 		}
 
 		// rounding > 0: the outline must actually follow the rounded corners --
-		// fixed here because phase 6's slider handles and phase 7's text box both
+		// fixed here because slider handles and the text box caret both
 		// draw a rounded outline over a rounded fill, and a square outline over a
 		// rounded fill reads as broken.
 		{
@@ -506,10 +506,10 @@ namespace {
 	}
 
 	// --- Never-called-in-src/ui primitives -----------------------------------------
-	// addCircleFilled sat broken from phase 1 until RadioButton (phase 6) became its
+	// addCircleFilled sat broken from the start until RadioButton became its
 	// first real caller and made the wedge-shaped fan visible. These primitives have no
 	// caller in src/ui/ today either, so nothing would surface a similar bug by eye until
-	// phase 8 (addTriangleFilled, addPolyline-as-a-line) wires them up -- these tests are
+	// addTriangleFilled and addPolyline-as-a-line wire them up -- these tests are
 	// what stand in for that eyeball check now.
 
 	void testAddTriangleFilledVerticesMatchInputExactly() {

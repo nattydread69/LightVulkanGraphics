@@ -4,27 +4,26 @@
 // per-widget spec.
 //
 // Currently demonstrates:
-//   Phase 5 -- Label, Separator, Spacer, Button, Panel (drag, z-order)
-//   Phase 6 -- Checkbox (incl. tri-state), RadioGroup/RadioButton, Slider (incl. int and
-//              logarithmic), DragValue
-//   Phase 7 -- TextBox (placeholder, binding, filters, maxLength, password mode, a
-//              string long enough to force horizontal scrolling), plus Ctrl-click on
-//              Gravity/Mass above for the Slider/DragValue inline text-entry hook
-//   Phase 8 (session A) -- DropDown: a short-list combo, a 20-item one to exercise
-//              popup scrolling, and a third in its own panel pinned near the bottom
-//              edge of the window to exercise the upward flip. CompositeWidget itself
-//              has no standalone widget yet.
-//   Phase 8 (session B) -- Row (horizontal layout by weight), Vec3Field (X/Y/Z with
-//              coloured borders), CollapsingSection (header + collapsible children),
-//              ProgressBar (fraction + indeterminate animation), PlotLine (sparkline with
-//              auto-scale hysteresis).
-//   Phase 9   -- Panel scrolling (the main panel is now deliberately shorter than its
-//              accumulated content, so it needs the scrollbar to show everything below
-//              the fold -- try the wheel and the scrollbar grab), the resize grip
-//              (bottom-right corner of any panel), an anchored panel (top-right "Theme"
-//              panel, which also hosts the light/dark/high-contrast theme switcher --
-//              resize the window to see it hold its corner offset), and a tooltip
-//              (hover "Gravity").
+//   Basics      -- Label, Separator, Spacer, Button
+//   Value       -- Checkbox (incl. tri-state), RadioGroup/RadioButton, Slider (incl. int
+//                  and logarithmic), DragValue. Ctrl-click Gravity or Mass for the
+//                  inline text-entry hook.
+//   Text        -- TextBox (placeholder, binding, filters, maxLength, password mode, and
+//                  a string long enough to force horizontal scrolling)
+//   DropDown    -- a short-list combo, a 20-item one to exercise popup scrolling, and a
+//                  third in its own panel pinned near the bottom edge of the window to
+//                  exercise the upward popup flip
+//   Composites  -- Row (horizontal layout by weight), Vec3Field (X/Y/Z with coloured
+//                  borders), CollapsingSection (header + collapsible children),
+//                  ProgressBar (fraction + indeterminate animation), PlotLine (sparkline
+//                  with auto-scale hysteresis)
+//   Panels      -- dragging and z-order; scrolling (the main panel is deliberately
+//                  shorter than its content, so try the wheel and the scrollbar grab);
+//                  the resize grip in any panel's bottom-right corner; the title-bar
+//                  collapse arrow and close button; an anchored panel (top-right
+//                  "Theme", which also hosts the light/dark/high-contrast switcher --
+//                  resize the window to watch it hold its corner offset); and a tooltip
+//                  (hover "Gravity")
 
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -64,14 +63,14 @@ int main()
 		// z-order raising it to the front (docs/gui/05, "Panel").
 		gui.createPanel("Back Panel", { 700.0f, 400.0f, 220.0f, 120.0f });
 
-		// Phase 9: deliberately shorter than the content phases 5-8 have accumulated into
+		// Deliberately shorter than the content below has accumulated into
 		// it, so the panel needs its own scrollbar to show everything below the fold --
 		// try the wheel over the panel, or drag the scrollbar grab in the right-hand
 		// gutter. The bottom-right corner is also a resize grip (Resizable is on by
 		// default, PanelFlags::Default); drag it to see the minimum-size clamp.
 		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 700.0f });
 
-		panel->add<lvgui::Label>("Phase 5 -- Label, Separator, Spacer, Button");
+		panel->add<lvgui::Label>("Basics -- Label, Separator, Spacer, Button");
 		panel->add<lvgui::Label>("Drag this title bar around")->setColor({ 0x9A, 0xA3, 0xAF, 0xFF });
 		panel->add<lvgui::Spacer>(4.0f);
 
@@ -82,7 +81,7 @@ int main()
 		auto* toggleButton = panel->add<lvgui::Button>("Toggle");
 		toggleButton->setToggle(true);
 
-		panel->add<lvgui::Separator>("Phase 6 -- value widgets");
+		panel->add<lvgui::Separator>("Value widgets");
 
 		// Checkbox: whole-row click target, box in the control column (docs/gui/05,
 		// "Checkbox", convention decision).
@@ -106,7 +105,7 @@ int main()
 		// reset, drag past the panel edge to confirm capture keeps tracking.
 		auto* gravity = panel->add<lvgui::Slider>("Gravity", 0.0f, 30.0f, 9.81f);
 		gravity->setUnitSuffix(" m/s^2");
-		// Phase 9: hover for theme.tooltipDelay seconds to see it appear below-right of
+		// Hover for theme.tooltipDelay seconds to see it appear below-right of
 		// the cursor (docs/gui/06, "Tooltips").
 		gravity->setTooltip("Acceleration due to gravity, applied every simulation step.");
 		gravity->setOnChange([](float v) { std::cout << "[gui-demo] gravity (live) = " << v << std::endl; });
@@ -131,7 +130,7 @@ int main()
 		auto* offsetX = panel->add<lvgui::DragValueT<int>>("Offset X", 0, 1.0f);
 		offsetX->setSoftRange(-100, 100);
 
-		panel->add<lvgui::Separator>("Phase 7 -- TextBox");
+		panel->add<lvgui::Separator>("TextBox");
 
 		// Plain TextBox: bound to a std::string, placeholder shown while empty, both
 		// callbacks wired so keystroke-by-keystroke vs. commit-on-Enter/blur is visible
@@ -145,7 +144,7 @@ int main()
 
 		// Deliberately longer than the control column is wide, so the box starts already
 		// scrolled and clicking/arrowing through it exercises horizontal scroll -- "text
-		// scrolls when it exceeds the box" from the phase 7 acceptance check.
+		// scrolls when it exceeds the box" from the TextBox spec.
 		panel->add<lvgui::TextBox>("Notes",
 			"This sentence is long enough that it will not fit inside the text box, so "
 			"the caret drags the view sideways as you move through it.");
@@ -162,7 +161,7 @@ int main()
 		auto* tokenBox = panel->add<lvgui::TextBox>("API token", "s3cr3t-key");
 		tokenBox->setPasswordMode(true);
 
-		panel->add<lvgui::Separator>("Phase 8 -- DropDown");
+		panel->add<lvgui::Separator>("DropDown");
 
 		// A short list: exercises open/close, arrow-key highlight vs. selection, and
 		// the default open-below placement (docs/gui/05, "DropDown").
@@ -190,8 +189,8 @@ int main()
 		auto* bottomPanel = gui.createPanel("Near bottom edge", { 420.0f, 700.0f, 280.0f, 80.0f });
 		bottomPanel->add<lvgui::DropDown>("Flips upward", qualityPresets, 0);
 
-		// Phase 8 session B: CompositeWidget-derived and simple value widgets
-		panel->add<lvgui::Separator>("Phase 8 (session B) -- Row, Vec3Field, CollapsingSection");
+		// CompositeWidget-derived and simple value widgets
+		panel->add<lvgui::Separator>("Row, Vec3Field, CollapsingSection");
 
 		// Row: horizontal layout by weight (1:2:1)
 		auto* row = panel->add<lvgui::Row>();
@@ -229,12 +228,26 @@ int main()
 			plotLine->push(std::sin(angle) * 0.5f + 0.5f);
 		}
 
-		// Phase 9: an anchored panel (docs/gui/09, "Anchoring") pinned to the top-right
+		// A Closable panel: the title bar grows an X at its trailing edge, and clicking it
+		// hides the panel and fires setOnClose(). The handler here just logs -- to remove
+		// the panel for good instead, defer the destroy by a frame (see Panel::setOnClose).
+		// PanelFlags::Default has no Closable bit, so it has to be asked for explicitly.
+		auto* closablePanel = gui.createPanel("Closable (try the X)",
+			{ 700.0f, 560.0f, 240.0f, 100.0f },
+			lvgui::PanelFlags::Default | lvgui::PanelFlags::Closable);
+		closablePanel->add<lvgui::Label>("Click the X in my title bar.");
+		closablePanel->add<lvgui::Label>("Collapse me with the arrow first.");
+		closablePanel->setOnClose([] {
+			std::cout << "[gui-demo] closable panel closed -- restart the demo to get it back"
+			          << std::endl;
+		});
+
+		// An anchored panel (docs/gui/05-widgets.md, "Panel") pinned to the top-right
 		// corner -- resize the window and it holds its offset from that corner instead of
 		// floating wherever it happened to start. Doubles as the theme switcher, since a
-		// DropDown was already built (docs/gui/09: "Add a way for the demo to switch
-		// between them at runtime -- a DropDown is the obvious choice and you already have
-		// one").
+		// DropDown was already built (docs/gui/06-layout-and-theme.md, "Theme": "a way to
+		// switch between them at runtime -- a DropDown is the obvious choice and you
+		// already have one").
 		auto* themePanel = gui.createPanel("Theme", { 1280.0f - 220.0f, 20.0f, 200.0f, 60.0f });
 		themePanel->setAnchor(lvgui::Panel::Anchor::TopRight);
 		static std::vector<std::string> themeNames = { "Dark", "Light", "High Contrast" };
@@ -247,9 +260,9 @@ int main()
 			}
 		});
 
-		// Phase 9: the "Near bottom edge" panel anchored to the bottom-left corner --
+		// The "Near bottom edge" panel anchored to the bottom-left corner --
 		// thematically fitting, since it already exists to sit near an edge (its
-		// DropDown's upward popup flip, phase 8).
+		// DropDown's upward popup flip).
 		bottomPanel->setAnchor(lvgui::Panel::Anchor::BottomLeft);
 
 		app.run();

@@ -25,6 +25,9 @@ anyone extending or maintaining LVGUI itself.
 | 07 | [Public API](07-public-api.md) | Header layout and the public surface |
 | 08 | [Testing](08-testing.md) | Headless test strategy, what to test and what not to |
 
+[ROADMAP.md](ROADMAP.md) is separate from the numbered set: it tracks what is worth
+building next and why, rather than describing what exists.
+
 ## The one-paragraph summary
 
 LVGUI builds a flat list of textured, coloured triangles on the CPU each frame

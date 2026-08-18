@@ -10,6 +10,7 @@
 #include "widgets/CompositeWidget.h"
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -64,10 +65,24 @@ public:
 	bool visible() const { return m_visible; }
 	void setCollapsed(bool collapsed) { m_collapsed = collapsed; }
 	bool collapsed() const { return m_collapsed; }
+	// Fired by the title bar's close button (PanelFlags::Closable) immediately AFTER the
+	// panel has already hidden itself, so a handler that wants to VETO the close can
+	// simply call setVisible(true) again. Not fired by setVisible(false): this is a "the
+	// user clicked the X" notification, not a visibility observer.
+	//
+	// Do NOT call GuiContext::destroyPanel(this) from inside this callback: it runs from
+	// within Panel::update(), i.e. from inside GuiContext::update()'s own walk over
+	// m_panels, and destroyPanel() erases the owning unique_ptr immediately (it is not
+	// deferred) -- that is both a use-after-free of `this` and an invalidated iterator.
+	// To actually destroy the panel, defer it by one frame:
+	//     panel->setOnClose([&gui, panel]{ gui.postToMainThread([&gui, panel]{ gui.destroyPanel(panel); }); });
+	// postToMainThread() drains at the top of the next beginFrame(), before anything
+	// touches the panel list.
+	void setOnClose(std::function<void()> onClose) { m_onClose = std::move(onClose); }
 	void bringToFront();
 
-	// Anchoring (docs/gui/05, "Panel"; docs/gui/09 phase 9, "Anchoring and on-screen
-	// clamping"). Stores only the corner enum here; the pixel offset from that corner is
+	// Anchoring (docs/gui/05, "Panel", "Anchoring and on-screen clamping").
+	// Stores only the corner enum here; the pixel offset from that corner is
 	// (re)computed every frame in update() from whatever m_bounds/displaySize currently
 	// are, so it always reflects the panel's latest position -- including a position that
 	// just changed this same frame via a drag, a resize, or a fresh setAnchor() call --
@@ -85,9 +100,15 @@ public:
 	void draw(DrawList& drawList, const GuiContext& ctx) const;
 	bool hitTest(Vec2 p) const;
 	Rect titleBarRect(const GuiContext& ctx) const;
+	// What the panel actually occupies on screen right now: m_bounds normally, but only
+	// the title-bar strip while collapsed. A collapsed panel must not keep painting (or
+	// hit-testing, or occluding the panel behind it with) a full-size empty box just
+	// because m_bounds still remembers its expanded height -- m_bounds is deliberately
+	// left untouched by collapsing so expanding restores the previous size exactly.
+	Rect effectiveBounds(const GuiContext& ctx) const;
 	float contentHeight() const { return m_contentHeight; }
 
-	// ---- scrolling (docs/gui/09 phase 9, "Scrolling") ----
+	// ---- scrolling (docs/gui/05, "Panel", "Scrolling") ----
 	float scrollY() const { return m_scrollY; }
 	// True iff content overflows the view AND PanelFlags::Scrollable is set -- recomputed
 	// every layout() pass (twice a frame, same as everything else GuiContext::endFrame()
@@ -122,6 +143,21 @@ public:
 	void beginResizeDrag(Vec2 mouse);
 	void beginScrollbarDrag(const GuiContext&, Vec2 mouse);
 
+	// The two title-bar buttons (PanelFlags::Collapsible / PanelFlags::Closable). Same
+	// arrangement as the grip and scrollbar grab above: not Widgets, hit-tested by
+	// GuiContext::update() directly, and claiming capture through the same m_activeId via
+	// a synthetic id from allocateWidgetId(). Capture matters here for the same reason it
+	// does for a Button -- these fire on release-INSIDE, so pressing the X and dragging
+	// off it before letting go must cancel the close rather than complete it.
+	//
+	// They also have to be hit-tested before the title-bar DRAG starts, or every click on
+	// a button would also begin dragging the panel; Panel::update()'s drag block checks
+	// ctx.activeId() against these two ids for exactly that reason.
+	bool hitTestCollapseButton(const GuiContext&, Vec2 p) const;
+	bool hitTestCloseButton(const GuiContext&, Vec2 p) const;
+	WidgetId collapseButtonId() const { return m_collapseButtonId; }
+	WidgetId closeButtonId() const { return m_closeButtonId; }
+
 private:
 	bool hasTitleBar() const { return !hasFlag(m_flags, PanelFlags::NoTitleBar); }
 	// Full vertical span below the title bar (padding included) -- what m_contentHeight is
@@ -130,6 +166,17 @@ private:
 	// disagree about it.
 	float scrollableSpan(const GuiContext&) const;
 	float maxScrollY(const GuiContext&) const;
+	// Square, titleBarHeight on a side, inset slightly: the collapse arrow sits at the
+	// title bar's leading edge and the close button at its trailing edge. Both return an
+	// empty Rect when the corresponding flag is unset, so the title TEXT rect can be
+	// derived by simply subtracting their widths without branching on the flags again.
+	Rect collapseButtonRect(const GuiContext&) const;
+	Rect closeButtonRect(const GuiContext&) const;
+	// Takes the two rects draw() has already computed for the title-text split rather
+	// than recomputing them, so the glyphs can never drift out of the space reserved
+	// for them.
+	void drawTitleButtons(DrawList&, const GuiContext&, const Rect& collapseRect,
+	                       const Rect& closeRect) const;
 	Rect resizeGripRect(const GuiContext&) const;
 	Rect scrollbarTrackRect(const GuiContext&) const;
 	Rect scrollbarThumbRect(const GuiContext&) const;
@@ -140,7 +187,7 @@ private:
 	// than something computed once inside setAnchor() itself.
 	void updateAnchoring(const GuiContext&);
 	Vec2 anchorOffsetFor(Anchor, const Rect& bounds, Vec2 displaySize) const;
-	// docs/gui/09 phase 9, "Anchoring and on-screen clamping": "a panel dragged fully off
+	// docs/gui/05, "Panel", "Anchoring and on-screen clamping": "a panel dragged fully off
 	// the top edge becomes permanently unreachable." Clamps so at least the full title bar
 	// height stays vertically on screen, and at least a minimal grabbable width of it
 	// stays horizontally on screen.
@@ -161,6 +208,10 @@ private:
 
 	WidgetId m_resizeGripId = allocateWidgetId();
 	WidgetId m_scrollbarGrabId = allocateWidgetId();
+	WidgetId m_collapseButtonId = allocateWidgetId();
+	WidgetId m_closeButtonId = allocateWidgetId();
+
+	std::function<void()> m_onClose;
 
 	// Drag-start snapshots; the drag is IN PROGRESS iff ctx.activeId() == m_resizeGripId /
 	// m_scrollbarGrabId respectively -- GuiContext::update() is the single source of truth

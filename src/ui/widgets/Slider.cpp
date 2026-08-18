@@ -320,7 +320,7 @@ void SliderT<T>::update(GuiContext& ctx) {
 	}
 
 	// Wheel while hovered steps the value and is meant to keep the panel from also
-	// scrolling (docs/gui/05, "Wheel while hovered"). Panel scrolling itself is phase 9
+	// scrolling (docs/gui/05, "Wheel while hovered"). Panel scrolling itself is
 	// scope, so there is nothing to consume from yet -- this just reacts to the wheel.
 	if (ctx.hoveredId() == id() && in.wheelDelta != 0.0f) {
 		stepBy(in.wheelDelta > 0.0f ? 1.0f : -1.0f, shiftHeld);

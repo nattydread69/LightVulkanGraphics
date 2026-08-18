@@ -381,6 +381,6 @@ int main() {
 
 	testDragValueDragBeyondPanelBoundsKeepsTrackingAndShiftScales();
 
-	std::cout << "\n✅ All phase 6 value-widget tests passed!\n";
+	std::cout << "\n✅ All value-widget tests passed!\n";
 	return 0;
 }

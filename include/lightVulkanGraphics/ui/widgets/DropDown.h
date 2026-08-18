@@ -16,7 +16,7 @@
 // where following falls out for free from Panel::layout() already recomputing every
 // widget's bounds unconditionally every frame).
 //
-// Escape ordering (docs/gui/04-input-and-events.md's phase 8 note): unlike TextBox,
+// Escape ordering (docs/gui/04-input-and-events.md, "Key events"): unlike TextBox,
 // DropDown needs NO m_wasFocused-style entering-state comparison. GuiContext's own
 // Escape default (docs/gui/04, "Keyboard") now closes the popup itself, before
 // DropDown's update() ever runs -- DropDown only ever reads the CURRENT
@@ -51,7 +51,7 @@ public:
 
 	bool acceptsFocus() const override { return true; }
 	// docs/gui/05: the popup scrolls on the wheel while hovered; the owning Panel must not
-	// also scroll underneath it (docs/gui/09 phase 9, "Scrolling").
+	// also scroll underneath it (docs/gui/05, "Panel", "Scrolling").
 	bool wantsWheel() const override { return true; }
 
 private:

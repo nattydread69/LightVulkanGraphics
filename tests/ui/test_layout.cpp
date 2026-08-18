@@ -9,8 +9,8 @@ namespace lvgui = lightGraphics::ui;
 namespace {
 
 	// A minimal concrete CompositeWidget (docs/gui/05, "CompositeWidget") for exercising
-	// the base class ahead of session B's Row/Vec3Field/CollapsingSection: one Label
-	// child, stretched to the composite's full bounds every layout() call.
+	// the base class independently of Row/Vec3Field/CollapsingSection: one Label child,
+	// stretched to the composite's full bounds every layout() call.
 	class OneLabelComposite : public lvgui::CompositeWidget {
 	public:
 		lvgui::Label* label = add<lvgui::Label>("Hi");

@@ -56,7 +56,7 @@ target_compile_features(lvgui_input_tests PRIVATE cxx_std_17)
 
 add_test(NAME lvgui_input_tests COMMAND lvgui_input_tests)
 
-# Phase 5: GuiContext/Panel/Widget layout and interaction, headless -- no Vulkan device,
+# GuiContext/Panel/Widget layout and interaction, headless -- no Vulkan device,
 # no window, no GLFW. Constructs a real Font from the bundled test font.
 add_executable(lvgui_layout_tests
 	test_layout.cpp
@@ -80,7 +80,7 @@ target_compile_definitions(lvgui_hittest_tests PRIVATE
 
 add_test(NAME lvgui_hittest_tests COMMAND lvgui_hittest_tests)
 
-# Phase 6: Checkbox, RadioGroup/RadioButton, SliderT<float|int>, DragValueT -- headless,
+# Checkbox, RadioGroup/RadioButton, SliderT<float|int>, DragValueT -- headless,
 # same pattern as test_layout.cpp/test_hittest.cpp.
 add_executable(lvgui_slider_tests
 	test_slider.cpp
@@ -107,7 +107,7 @@ target_compile_definitions(lvgui_textedit_tests PRIVATE
 
 add_test(NAME lvgui_textedit_tests COMMAND lvgui_textedit_tests)
 
-# Phase 8, session A: CompositeWidget (covered inline in test_layout.cpp, since it's a
+# CompositeWidget (covered inline in test_layout.cpp, since it's a
 # layout-mechanics concern) and DropDown's popup, headless -- same pattern as the tests
 # above.
 add_executable(lvgui_dropdown_tests
@@ -121,7 +121,7 @@ target_compile_definitions(lvgui_dropdown_tests PRIVATE
 
 add_test(NAME lvgui_dropdown_tests COMMAND lvgui_dropdown_tests)
 
-# Phase 8, session B: CompositeWidget-derived widgets (Row, Vec3Field, CollapsingSection)
+# CompositeWidget-derived widgets (Row, Vec3Field, CollapsingSection)
 # and simple value widgets (ProgressBar, PlotLine), headless -- same pattern as tests above.
 add_executable(lvgui_composites_tests
 	test_composites.cpp
@@ -145,7 +145,7 @@ target_compile_definitions(lvgui_progressbar_tests PRIVATE
 
 add_test(NAME lvgui_progressbar_tests COMMAND lvgui_progressbar_tests)
 
-# Phase 9: Panel scrolling, resize grip, anchoring, and tooltips -- headless, same
+# Panel scrolling, resize grip, anchoring, tooltips, and title-bar buttons -- headless, same
 # pattern as tests above.
 add_executable(lvgui_panel_tests
 	test_panel.cpp

@@ -219,7 +219,7 @@ void UiPlatformGlfw::setCursorShape(GLFWwindow* window, CursorShape shape) {
 void UiPlatformGlfw::beginFrame(Vec2 displaySize, float contentScale, float deltaTime) {
 	// Step 1 of docs/gui/04's beginFrame list -- draining a cross-thread callback
 	// queue -- belongs to GuiContext::postToMainThread, which does not exist until
-	// phase 5. Steps 2-6 are this class's responsibility.
+	// the GUI layer. Steps 2-6 are this class's responsibility.
 
 	// Step 2: move pending input into current.
 	m_current.mousePos     = m_pending.mousePos;

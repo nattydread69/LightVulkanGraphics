@@ -59,8 +59,10 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 	, m_platform(std::make_unique<UiPlatformGlfw>()) {
 	if (info.fontPath.empty()) {
 		throw std::runtime_error(
-			"GuiContext: GuiCreateInfo::fontPath is required until phase 10 adds the "
-			"standard font search order (see docs/gui/07-public-api.md, GuiCreateInfo)");
+			"GuiContext: GuiCreateInfo::fontPath must name a TrueType file; there is no "
+			"built-in font search order yet (see docs/gui/07-public-api.md, GuiCreateInfo). "
+			"VkApp::initUi() resolves the bundled Inter font via findFontPath() and can be "
+			"used as a model.");
 	}
 
 	std::ifstream file(info.fontPath, std::ios::binary | std::ios::ate);
@@ -299,13 +301,16 @@ void GuiContext::update() {
 	// (b)/(c) capture pins the hovered widget regardless of cursor position.
 	//
 	// docs/gui/05-widgets.md, "Resize grip": the grip and the scrollbar grab are
-	// hit-tested BEFORE widgets, so an overlapping corner (docs/gui/09 phase 9 geometry:
+	// hit-tested BEFORE widgets, so an overlapping corner (docs/gui/05-widgets.md "Panel" geometry:
 	// resizeGripSize can exceed windowPadding, putting the grip's hit box a few pixels
 	// into the content clip rect's own bottom-right corner) always resolves to the grip
 	// over the scrollbar over whatever widget might also be there. Neither is a Widget
 	// (Panel itself isn't one -- docs/gui/01-architecture.md, "Ownership"), so they are
 	// asked for directly rather than falling out of hitTestWidgets()'s per-widget walk.
-	enum class PanelGrab { None, ResizeGrip, ScrollbarGrab };
+	// The title-bar buttons join the same list for the same reason, and go FIRST: they sit
+	// inside the title bar, which Panel::update() would otherwise read as the start of a
+	// drag (see Panel::hitTestCollapseButton()'s header comment).
+	enum class PanelGrab { None, ResizeGrip, ScrollbarGrab, CollapseButton, CloseButton };
 	PanelGrab grab = PanelGrab::None;
 
 	Widget* hoveredWidget = nullptr;
@@ -314,7 +319,11 @@ void GuiContext::update() {
 	} else if (m_activeId != kInvalidWidgetId) {
 		hoveredWidget = findWidget(m_activeId);
 	} else if (hoveredPanel) {
-		if (hoveredPanel->hitTestResizeGrip(*this, mouse)) {
+		if (hoveredPanel->hitTestCollapseButton(*this, mouse)) {
+			grab = PanelGrab::CollapseButton;
+		} else if (hoveredPanel->hitTestCloseButton(*this, mouse)) {
+			grab = PanelGrab::CloseButton;
+		} else if (hoveredPanel->hitTestResizeGrip(*this, mouse)) {
 			grab = PanelGrab::ResizeGrip;
 		} else if (hoveredPanel->hitTestScrollbarGrab(*this, mouse)) {
 			grab = PanelGrab::ScrollbarGrab;
@@ -341,11 +350,17 @@ void GuiContext::update() {
 		if (hoveredPanel) {
 			bringPanelToFront(hoveredPanel);
 		}
-		// "Takes mouse capture like any other widget" (docs/gui/09 phase 9, "Scrolling")
+		// "Takes mouse capture like any other widget" (docs/gui/05, "Panel", "Scrolling")
 		// -- the grip/scrollbar branches claim m_activeId exactly like the widget branch
 		// below does, via the SAME field, which is what makes wantsMouse() stay true and
 		// the drag keep tracking once the cursor leaves the panel.
-		if (m_activeId == kInvalidWidgetId && grab == PanelGrab::ResizeGrip) {
+		if (m_activeId == kInvalidWidgetId && grab == PanelGrab::CollapseButton) {
+			// Claims capture but does nothing else: both title-bar buttons act on
+			// release-inside, which Panel::update() checks (mirroring Button).
+			m_activeId = hoveredPanel->collapseButtonId();
+		} else if (m_activeId == kInvalidWidgetId && grab == PanelGrab::CloseButton) {
+			m_activeId = hoveredPanel->closeButtonId();
+		} else if (m_activeId == kInvalidWidgetId && grab == PanelGrab::ResizeGrip) {
 			m_activeId = hoveredPanel->resizeGripId();
 			hoveredPanel->beginResizeDrag(mouse);
 		} else if (m_activeId == kInvalidWidgetId && grab == PanelGrab::ScrollbarGrab) {
@@ -417,7 +432,7 @@ void GuiContext::endFrame() {
 	}
 
 	// m_overlayList is deliberately NOT cleared at the top of this function: content
-	// (world labels now; tooltips/popups from phases 8-9) may be added any time between
+	// (world labels, tooltips, popups) may be added any time between
 	// the previous endFrame() and this one, including during update() above, so clearing
 	// it first would discard that frame's additions before they are ever drawn. It is
 	// appended here and cleared afterwards instead, ready for the next frame's additions.
@@ -433,7 +448,7 @@ bool GuiContext::wantsMouse() const {
 }
 
 bool GuiContext::wantsScroll() const {
-	// docs/gui/04-input-and-events.md, "Scroll wheel": the phase-9 decision. Unlike
+	// docs/gui/04-input-and-events.md, "Scroll wheel". Unlike
 	// wantsMouse() (deliberately true over any panel, to swallow drags/clicks aimed at the
 	// panel's own background), this asks the narrower question "will something actually
 	// react to a wheel tick right now" so a non-overflowing panel doesn't blind the camera
