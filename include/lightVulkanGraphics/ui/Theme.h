@@ -31,8 +31,19 @@ struct Theme {
 	Color scrollbarGrab     { 0x4A, 0x52, 0x5E, 0xFF };
 	Color error              { 0xE0, 0x5A, 0x5A, 0xFF };
 	Color plotLine           { 0x5A, 0xD0, 0x9A, 0xFF };
+	// Fullscreen dimming behind a Modal panel (docs/gui/05-widgets.md, "Panel", "Modal
+	// panels") -- deliberately theme-neutral (translucent black) rather than derived from
+	// windowBg or similar, since its job is to read as "everything behind this is
+	// inactive" against whatever happens to be drawn under it, dark theme or light.
+	Color modalBackdrop      { 0x00, 0x00, 0x00, 0x99 };
 
 	// ---- metrics, all in logical pixels ----
+	// GuiCreateInfo::fontSize (GuiContext.h) is authoritative at construction time and
+	// overwrites this field, but only once, in the constructor -- assigning a whole new
+	// Theme afterwards (e.g. a runtime theme switcher doing `ctx.theme() = Theme::light()`)
+	// replaces this back to whatever that Theme's own fontSize is (its 14.0f default,
+	// for every theme in this header). If the GUI was built at a non-default font size,
+	// re-apply it after such an assignment: `ctx.theme().fontSize = mySize;`.
 	float fontSize           = 14.0f;
 	float rounding            = 3.0f;
 	float borderWidth         = 1.0f;
@@ -45,6 +56,8 @@ struct Theme {
 	float resizeGripSize      = 14.0f;
 	float sliderTrackHeight   = 6.0f;
 	float sliderHandleWidth   = 10.0f;
+	float colorSquareSize     = 140.0f;  // ColorEdit popup: side length of the SV square
+	float colorStripWidth     = 16.0f;   // ColorEdit popup: hue strip width, alpha strip height
 	float labelWidthRatio     = 0.42f;
 	float tooltipDelay        = 0.6f;    // seconds
 

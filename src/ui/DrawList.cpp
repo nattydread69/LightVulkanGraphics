@@ -124,13 +124,13 @@ void DrawList::updateCurrentCommandIndexCount() {
 	}
 }
 
-void DrawList::ensureCommand() {
+void DrawList::ensureCommand(TextureId textureId) {
 	if (m_commands.empty()) {
 		DrawCmd cmd{};
 		cmd.indexOffset = m_indices.size();
 		cmd.indexCount = 0;
 		cmd.clipRect = getCurrentClipRect();
-		cmd.textureId = 0;
+		cmd.textureId = textureId;
 		m_commands.push_back(cmd);
 		return;
 	}
@@ -143,7 +143,7 @@ void DrawList::ensureCommand() {
 		  cmd.clipRect.w == currentClip.w && cmd.clipRect.h == currentClip.h)) {
 		needsNewCommand = true;
 	}
-	if (cmd.textureId != 0) {
+	if (cmd.textureId != textureId) {
 		needsNewCommand = true;
 	}
 
@@ -154,10 +154,14 @@ void DrawList::ensureCommand() {
 			newCmd.indexOffset = m_indices.size();
 			newCmd.indexCount = 0;
 			newCmd.clipRect = currentClip;
-			newCmd.textureId = 0;
+			newCmd.textureId = textureId;
 			m_commands.push_back(newCmd);
 		} else {
+			// The current command is still empty (nothing has been drawn into it yet) --
+			// repurpose it in place rather than pushing a second empty command, same as
+			// before this method took a textureId at all.
 			cmd.clipRect = currentClip;
+			cmd.textureId = textureId;
 		}
 	}
 }
@@ -252,6 +256,30 @@ void DrawList::addRectFilledMultiColor(const Rect& rect, Color tl, Color tr, Col
 	m_vertices.push_back(UiVertex(glm::vec2(max.x, min.y), wuv, tr_col));
 	m_vertices.push_back(UiVertex(glm::vec2(max.x, max.y), wuv, br_col));
 	m_vertices.push_back(UiVertex(glm::vec2(min.x, max.y), wuv, bl_col));
+
+	m_indices.push_back(idx + 0);
+	m_indices.push_back(idx + 1);
+	m_indices.push_back(idx + 2);
+	m_indices.push_back(idx + 0);
+	m_indices.push_back(idx + 2);
+	m_indices.push_back(idx + 3);
+
+	updateCurrentCommandIndexCount();
+}
+
+void DrawList::addImage(TextureId textureId, const Rect& rect, Vec2 uv0, Vec2 uv1, Color tint) {
+	ensureCommand(textureId);
+
+	std::uint32_t col = packColor(tint);
+	std::uint32_t idx = m_vertices.size();
+
+	Vec2 tl = snapToPixel(rect.min());
+	Vec2 br = snapToPixel({ rect.right(), rect.bottom() });
+
+	m_vertices.push_back(UiVertex(glm::vec2(tl.x, tl.y), glm::vec2(uv0.x, uv0.y), col));
+	m_vertices.push_back(UiVertex(glm::vec2(br.x, tl.y), glm::vec2(uv1.x, uv0.y), col));
+	m_vertices.push_back(UiVertex(glm::vec2(br.x, br.y), glm::vec2(uv1.x, uv1.y), col));
+	m_vertices.push_back(UiVertex(glm::vec2(tl.x, br.y), glm::vec2(uv0.x, uv1.y), col));
 
 	m_indices.push_back(idx + 0);
 	m_indices.push_back(idx + 1);

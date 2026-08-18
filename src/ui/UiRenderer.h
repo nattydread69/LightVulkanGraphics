@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lightGraphics::ui {
@@ -82,6 +83,23 @@ public:
 	void record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t frameIndex,
 	            VkExtent2D framebufferExtent, Vec2 logicalSize = {});
 
+	// ---- consumer-supplied textures (docs/gui/05-widgets.md, "Image") ----
+	// Uploads an RGBA8 pixel buffer (row-major, no padding between rows -- `width *
+	// height * 4` bytes) as a new sampled image and returns a TextureId a DrawList can
+	// pass to addImage(). Synchronous, like createAtlas(): safe to call at any point
+	// between frames (not mid-record()), same restriction as rebuildAtlas(). Throws
+	// std::runtime_error if more than kMaxRegisteredTextures are currently registered --
+	// see that constant's comment for why this backend caps it rather than growing the
+	// descriptor pool on demand.
+	TextureId registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height);
+	// Waits for the device to go idle before destroying anything -- the same safety
+	// requirement rebuildAtlas() already documents: a descriptor set pointing at this
+	// texture's VkImageView may still be referenced by a command buffer a previous
+	// frame submitted, and destroying the image out from under that is a use-after-free
+	// on the GPU. Safe to call with an id that is already unregistered (a no-op) or was
+	// never valid (also a no-op) -- not every caller tracks registration state itself.
+	void unregisterTexture(TextureId id);
+
 	// Maps a DrawList clip rect (logical pixels) onto a Vulkan scissor (physical
 	// pixels), clamped to the framebuffer. Public and static purely so it can be tested
 	// headlessly: it is pure arithmetic, it needs no device, and it is the single most
@@ -109,11 +127,33 @@ private:
 	};
 	static_assert(sizeof(PushConstants) == 16, "UI push constants must be 16 bytes");
 
+	// A consumer-registered texture (registerTexture()/unregisterTexture()) -- deliberately
+	// its own small struct rather than sharing the atlas's m_atlasImage/m_atlasMemory/
+	// m_atlasView members: the atlas is exactly one image with its own rebuild lifecycle
+	// (rebuildAtlas(), tied to DPI changes), while these are added and removed
+	// individually and arbitrarily by a consumer, so giving them separate identity here
+	// avoids the atlas's own code ever needing to reason about "or maybe N of these".
+	struct RegisteredTexture {
+		VkImage image = VK_NULL_HANDLE;
+		VkDeviceMemory memory = VK_NULL_HANDLE;
+		VkImageView view = VK_NULL_HANDLE;
+		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+	};
+
+	// Sized into the descriptor pool up front (createDescriptorSet()) rather than grown
+	// on demand: this backend targets a modest number of static UI images (legends,
+	// icons, thumbnails) registered once near startup, not a dynamic, high-churn texture
+	// stream -- growing the pool at runtime would mean either over-allocating "just in
+	// case" or a pool-recreation path this feature doesn't otherwise need. Raise this if
+	// a real use case needs more; nothing else here assumes this exact value.
+	static constexpr std::uint32_t kMaxRegisteredTextures = 64;
+
 	void createPipeline();
 	void destroyPipeline();
 	void createAtlas(const Font& font);
 	void destroyAtlas();
 	void createDescriptorSet();
+	void destroyRegisteredTexture(RegisteredTexture&);
 	void ensureCapacity(FrameBuffers& buffers, std::size_t vertexCount, std::size_t indexCount);
 	void destroyFrameBuffers(FrameBuffers& buffers);
 
@@ -144,7 +184,14 @@ private:
 	VkImage m_atlasImage = VK_NULL_HANDLE;
 	VkDeviceMemory m_atlasMemory = VK_NULL_HANDLE;
 	VkImageView m_atlasView = VK_NULL_HANDLE;
+	// Shared by the atlas AND every registered texture (registerTexture()) -- filtering/
+	// addressing are not format-specific, and CLAMP_TO_EDGE + LINEAR is exactly what a
+	// legend/icon/thumbnail wants too, so a second sampler per texture would be pure
+	// duplication.
 	VkSampler m_atlasSampler = VK_NULL_HANDLE;
+
+	std::unordered_map<TextureId, RegisteredTexture> m_textures;
+	TextureId m_nextTextureId = 1;   // 0 is kAtlasTextureId (Types.h) -- never handed out
 
 	std::vector<FrameBuffers> m_frames;
 };

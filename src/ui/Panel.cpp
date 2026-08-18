@@ -44,6 +44,18 @@ void Panel::bringToFront() {
 	m_context.bringPanelToFront(this);
 }
 
+void Panel::requestClose() {
+	if (!hasFlag(m_flags, PanelFlags::Closable)) {
+		return;
+	}
+	m_visible = false;
+	if (m_onClose) {
+		// Fired AFTER m_visible is already false so a handler can veto by setting it
+		// straight back to true (see setOnClose()'s comment in Panel.h).
+		m_onClose();
+	}
+}
+
 bool Panel::hitTest(Vec2 p) const {
 	if (!m_visible) {
 		return false;
@@ -160,12 +172,7 @@ void Panel::update(GuiContext& ctx) {
 
 	if (ctx.activeId() == m_closeButtonId && leftReleased &&
 	    hitTestCloseButton(ctx, in.mousePos)) {
-		m_visible = false;
-		if (m_onClose) {
-			// Fired AFTER m_visible is already false so a handler can veto by setting it
-			// straight back to true (see setOnClose()'s comment in Panel.h).
-			m_onClose();
-		}
+		requestClose();
 	}
 
 	// A press that landed on either button must not ALSO start a title-bar drag -- both

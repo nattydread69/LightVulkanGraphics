@@ -17,7 +17,11 @@ a live readout of a scalar quantity.
 1. **Zero external GUI dependency.** `stb_truetype.h` goes into the existing
    `external/stb/` directory. Nothing else is added.
 2. **One pipeline, one descriptor set, few draw calls.** A typical frame with four
-   panels should cost fewer than a dozen `vkCmdDrawIndexed` calls.
+   panels should cost fewer than a dozen `vkCmdDrawIndexed` calls. Still true for
+   everything that isn't an `Image` widget: glyphs and solid fills always share the one
+   font-atlas descriptor set. A consumer-registered texture (docs/gui/05-widgets.md,
+   "Image") adds one descriptor bind of its own, opt-in per widget that actually uses
+   one — the pipeline itself stays singular either way.
 3. **Headless-testable above the backend.** Layout, hit-testing, text measurement,
    text-editing state and draw-list geometry must all be testable without a Vulkan
    device — matching the approach already taken for the rotation-glyph mesh API.
@@ -65,7 +69,9 @@ once, at the projection and font-baking level.
 **D4 — One R8 atlas holds both glyph coverage and a white block.**
 The fragment shader multiplies vertex colour by the atlas red channel used as alpha.
 Solid fills sample the white block and come out as pure vertex colour. One texture, one
-descriptor set, one pipeline for everything.
+descriptor set, one pipeline for everything the library itself draws. Consumer-registered
+textures (`Image`, docs/gui/05-widgets.md) are the one deliberate exception — their own
+descriptor set, sharing the same pipeline and the same sampler settings.
 
 **D5 — 32-bit indices.**
 Dear ImGui's 16-bit default causes an overflow class of bug that you do not need to

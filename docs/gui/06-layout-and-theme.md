@@ -149,6 +149,7 @@ struct Theme {
     Color scrollbarGrab     { 0x4A, 0x52, 0x5E, 0xFF };
     Color error             { 0xE0, 0x5A, 0x5A, 0xFF };
     Color plotLine          { 0x5A, 0xD0, 0x9A, 0xFF };
+    Color modalBackdrop     { 0x00, 0x00, 0x00, 0x99 };  // fullscreen dim behind a Modal panel
 
     // ---- metrics, all in logical pixels ----
     float fontSize           = 14.0f;
@@ -163,6 +164,8 @@ struct Theme {
     float resizeGripSize     = 14.0f;
     float sliderTrackHeight  = 6.0f;
     float sliderHandleWidth  = 10.0f;
+    float colorSquareSize    = 140.0f;  // ColorEdit popup: SV square side length
+    float colorStripWidth    = 16.0f;   // ColorEdit popup: hue strip width, alpha strip height
     float labelWidthRatio    = 0.42f;
     float tooltipDelay       = 0.6f;    // seconds
 

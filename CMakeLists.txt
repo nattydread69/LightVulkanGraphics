@@ -453,6 +453,7 @@ if(LVG_BUILD_UI)
 		src/ui/Font.cpp
 		src/ui/FontImpl.cpp
 		src/ui/Utf8.cpp
+		src/ui/TextWrap.cpp
 		src/ui/UiRenderer.cpp
 		src/ui/UiPlatformGlfw.cpp
 		src/ui/Theme.cpp
@@ -474,6 +475,12 @@ if(LVG_BUILD_UI)
 		src/ui/widgets/CollapsingSection.cpp
 		src/ui/widgets/ProgressBar.cpp
 		src/ui/widgets/PlotLine.cpp
+		src/ui/widgets/ColorEdit.cpp
+		src/ui/widgets/Image.cpp
+		src/ui/widgets/TabBar.cpp
+		src/ui/widgets/ListBox.cpp
+		src/ui/widgets/ContextMenu.cpp
+		src/ui/widgets/LogView.cpp
 	)
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
@@ -490,6 +497,16 @@ if(LVG_BUILD_UI)
 	)
 	target_include_directories(LightVulkanGraphicsUI PRIVATE
 		${PROJECT_SOURCE_DIR}/external
+	)
+
+	# GuiContext's own bundled-font fallback search (GuiContext.cpp,
+	# findBundledFontPath() -- used only when a caller constructs a bare GuiContext
+	# directly, without VkApp) needs this too, not just the core target's identical
+	# definition below: the UI library cannot call into VkApp::findFontPath() (the
+	# dependency runs core -> UI, never the reverse), so its search is a self-contained
+	# duplicate that needs its own copy of this same build-tree path.
+	target_compile_definitions(LightVulkanGraphicsUI PRIVATE
+		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
 	)
 
 	# The dependency runs core -> UI, never the reverse. LVGUI is a self-contained
@@ -526,6 +543,9 @@ if(LVG_BUILD_UI)
 
 	# The atlas needs the bundled font at build time, before install rules formalise font
 	# payload installation; mirrors the LVG_BUILD_SHADER_DIR convention above.
+	# LightVulkanGraphicsUI gets the identical definition too, for its OWN, separate
+	# fallback search (see the comment there) -- this one is what VkApp::findFontPath()
+	# (VkAppUi.cpp) reads for every VkApp-based consumer.
 	target_compile_definitions(${PROJECT_NAME} PRIVATE
 		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
 	)

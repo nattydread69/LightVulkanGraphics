@@ -84,6 +84,11 @@ public:
 - Long non-wrapping text is truncated with an ellipsis: measure, and if it exceeds the
   region, binary-search the byte index that fits `width - measureText("…")`.
 
+The greedy word-wrap itself lives in `src/ui/TextWrap.h`'s `wrapText()`, not as a private
+method on this class — extracted once `LogView` (below) became a second caller needing
+the identical algorithm. Internal-only, like `Utf8.h`'s helpers; not part of the public
+GUI API.
+
 ## Separator
 
 A 1px horizontal rule with `theme.itemSpacing` above and below.
@@ -685,6 +690,330 @@ arrow-key-scrolled, not drag-to-scroll) scrollbar using `theme.scrollbarBg`/
 While a popup is open, `GuiContext::wantsMouse()` returns true regardless of cursor
 position, and hit testing checks the popup before any panel.
 
+## ListBox
+
+```cpp
+class ListBox : public Widget {
+public:
+    ListBox(std::string label, std::vector<std::string> items, int initialIndex = -1);
+    int  selectedIndex() const;
+    std::string_view selectedText() const;
+    void setItems(std::vector<std::string>);
+    void setSelectedIndex(int, bool fireCallback = false);   // < 0 clears the selection
+    void setOnChange(std::function<void(int)>);
+    void setVisibleRows(int);   // default 6
+};
+```
+
+What `DropDown`'s popup draws — the row list, the wheel/keyboard-only scrollbar, the
+hover-vs-selected highlight — never collapsed behind a control row. Same shape question
+as `Vec3Field` vs. a raw triple of `DragValue`s: when the selection itself is the point
+(a timestep, a dataset, a light), rather than a setting tucked one click away, an
+always-visible list is the right widget, not a combo box someone has to open first.
+
+**Selection is immediate, not preview-then-commit.** `DropDown`'s popup separates
+`m_highlightIndex` (what arrow keys move, previewed) from `m_selectedIndex` (what Enter
+commits) because the popup needs something to show while it's still deciding whether to
+close. `ListBox` never closes, so there's nothing to commit against — Up/Down changes
+`selectedIndex` directly and fires immediately, the same convention `RadioGroup`'s
+arrow-key handling already uses. Wrapping at both ends matches `DropDown`'s highlight
+and `RadioGroup`'s selection too. From "nothing selected" (`initialIndex < 0`), either
+arrow direction lands on the first item — simpler than picking a direction-dependent
+wrap target for a base that doesn't have a well-defined predecessor/successor yet.
+
+**`initialIndex < 0` is a real, distinct state**, unlike `DropDown`, whose control face
+must always display something and so is never indexless. "No dataset chosen yet" is a
+legitimate thing for a consumer to represent; `setSelectedIndex()` accepts a negative
+index to clear back to it at any time, not just at construction.
+
+**Scrolling** reuses `DropDown`'s popup formula exactly: `itemAtY()`'s row math, the
+wheel scrolling 3 rows per tick (`Panel`'s own scrollbar convention, restated in row
+units), and a visual-only scrollbar (no drag) using the same `theme.scrollbarBg`/
+`scrollbarGrab`/`scrollbarWidth` tokens. The one addition is auto-scroll: Up/Down calls
+`scrollToShowSelected()` after moving the selection, so keyboard navigation never leaves
+the current pick scrolled out of view — the minimum scroll needed to bring it back onto
+the top or bottom row of the visible window, not necessarily centred.
+
+**Programmatic `setSelectedIndex()` does NOT auto-scroll**, matching
+`DropDown::setSelectedIndex()`'s identical silence about its own popup's scroll
+position. Auto-scroll is specifically an interactive-navigation courtesy, not a general
+"keep the selection visible" invariant — a consumer setting the selection from
+application code is assumed to know what it's doing to its own scroll position, the same
+assumption `DropDown` already makes.
+
+## ContextMenu
+
+```cpp
+class ContextMenu : public Widget {
+public:
+    void addItem(std::string label, std::function<void()> onSelect);
+    void addSeparator();
+    void open(Vec2 screenPos);
+    bool isOpen(const GuiContext&) const;
+};
+```
+
+A right-click popup with no control row of its own — nothing about it is on screen at
+all until `open()` is called. Reuses `GuiContext::openPopup()`/`drawPopup()` exactly as
+`DropDown`'s popup already works (see "DropDown" above); the only thing genuinely new is
+that the "owner" widget has zero visible presence outside of when its own popup happens
+to be open (`preferredSize()` returns `{0,0}`, `draw()` does nothing).
+
+**`GuiContext` has no built-in right-click gesture**, and this class doesn't give it
+one. `MouseButton::Right` isn't read anywhere in the capture/focus resolution that drives
+every other widget in this library — only `Left` is. Detecting "was there a right-click,
+and where" is left entirely to the caller, via the already-public
+`ctx.input().mouseReleased[MouseButton::Right]`:
+
+```cpp
+// From application code, anywhere (a right-click over bare 3D scene works the same way):
+if (gui.input().mouseReleased[static_cast<int>(lvgui::MouseButton::Right)]) {
+    menu->open(gui.input().mousePos);
+}
+
+// Or from inside another widget's own update(), scoped to that widget's own hitTest():
+if (hitTest(ctx.input().mousePos) && ctx.input().mouseReleased[MouseButton::Right]) {
+    m_contextMenu.open(ctx.input().mousePos);
+}
+```
+
+Both calls are the exact same `open(Vec2)`; nothing distinguishes "global" from
+"per-widget" context menus beyond where the caller happens to check for the click.
+
+**Clamped to stay fully on screen in both axes**, unlike `DropDown`'s popup, which only
+ever needs to flip vertically — its horizontal position is anchored to a control that is
+already guaranteed on-screen. A context menu opens at an arbitrary click point that could
+be anywhere, including a screen corner, so both axes need the same treatment `DropDown`
+only needed for one.
+
+**Mouse-only in this version.** No keyboard navigation (no highlight-then-Enter the way
+`DropDown`'s popup has one) — right-clicking is inherently a mouse gesture, and a menu
+this small doesn't obviously need an alternate keyboard path yet. `Escape` still closes
+it, for free, via `GuiContext`'s own generic "if a popup is open, close it" default — the
+same one every other popup in this library already gets without asking for it.
+
+**Clicking anywhere inside the menu closes it**, even a separator row (not selectable,
+but still a "you clicked inside, so we're done here" gesture) — ordinary context-menu
+behaviour, not a bug. Item selection fires `onSelect` once, on release-inside, the same
+convention every clickable surface in this library uses; a press that starts inside the
+menu and drags outside before releasing cancels without selecting, matching `Button`.
+
+## LogView
+
+```cpp
+class LogView : public Widget {
+public:
+    explicit LogView(std::string label);
+    void push(std::string line);
+    void clear();
+    void setHeight(float px);           // default 160 (roughly 8 rows)
+    void setMaxLines(std::size_t n);    // ring-buffer cap, 0 = unbounded. Default 500.
+    void setWordWrap(bool);             // default true
+    std::size_t lineCount() const;
+    bool isFollowingBottom() const;
+};
+```
+
+A read-only, appendable, word-wrapping, internally scrollable text region for solver
+output — what `Label`'s word-wrap and `Panel`'s own draggable scrollbar already do,
+combined into one widget that owns its own scroll state instead of depending on an
+owning `Panel`'s. `Label`'s wrap algorithm itself is shared, not duplicated: it moved to
+an internal `wrapText()` free function (`src/ui/TextWrap.h`, alongside `Utf8.h`'s own
+internal-only helpers) once this became a second caller needing the identical
+greedy-break-at-the-last-space logic.
+
+**Auto-follow, the way a terminal or a chat log behaves.** New content pushed via
+`push()` keeps the view pinned to the newest line, for as long as nothing has scrolled it
+away. The moment a user scrolls up (wheel, dragging the scrollbar thumb, `PageUp`,
+`Home`) `isFollowingBottom()` goes false and stays false — new lines keep arriving in the
+background without yanking their view out from under them — until they explicitly
+return to the bottom (`End`, or scrolling/dragging all the way back down themselves),
+at which point it resumes automatically. `isFollowingBottom()` is public specifically so
+a consumer can draw their own "new output ↓" affordance when it's false; `LogView` itself
+draws no such indicator.
+
+**`setMaxLines()`'s cap is enforced lazily, not on every `push()`.** Eviction of the
+oldest lines only ever happens while `isFollowingBottom()` — i.e. only when nothing is
+currently depending on the content about to be evicted staying put. While scrolled away
+reading history, `push()` keeps appending past the cap rather than trimming the very
+content the user is looking at out from under them; `lineCount()` can legitimately exceed
+`setMaxLines()`'s value during that window. Memory is therefore not strictly bounded
+while scrolled away — it snaps back to the cap the moment the view returns to the bottom.
+This was a deliberate choice over the alternative (evict immediately and shift the
+scroll position to compensate): the alternative needs `Font` access to know exactly how
+many *visual* (wrapped) lines the evicted *raw* line represented, which `push()` doesn't
+have — application code can call it from anywhere, not only from inside a frame — so
+deferring eviction to whenever the widget is next both updated *and* not being actively
+read sidesteps the problem entirely rather than approximating it.
+
+**Scrollbar dragging** works, unlike `DropDown`'s and `ListBox`'s popup-style scrollbars,
+which are deliberately visual-only. The mechanism is `ColorEdit`'s single-`WidgetId`-plus-
+internal-drag-target pattern (see "ColorEdit", above), not `Panel`'s synthetic-second-id
+one: `LogView` has no child widgets whose own hit-testing the scrollbar's pixel region
+could ever compete with, so its own `bounds()` already resolves the whole widget —
+scrollbar included — through the ordinary per-panel hit-test walk, and an internal
+`DragTarget` enum (mirroring `ColorEdit`'s own) is all that's needed to tell "dragging the
+thumb" apart from "nothing currently held."
+
+**The wrap-width-vs-scrollbar-gutter self-reference is sidestepped, not solved.**
+Whether a scrollbar is needed depends on total wrapped-line count, which depends on wrap
+width, which would otherwise depend on whether a scrollbar is needed — the same shape as
+`Panel`'s own scrollbar ordering trap (see "Panel", below), but without a `layout()`
+override for a cross-pass cache to live in (`LogView` is a leaf widget; nothing about its
+own internal scrollbar ever round-trips back through a `Panel::layout()` decision the way
+a wrapping `Label`'s height does). Rather than replicate `Panel`'s cross-pass-cache
+solution for a leaf widget that has no natural second pass to read from, wrap width
+unconditionally reserves the scrollbar gutter's width whether or not a scrollbar ends up
+being drawn — a few pixels of unused width in the common case costs less than solving the
+self-reference properly would be worth here.
+
+**Keyboard**: `Home` jumps to the oldest line (and stops following); `End` jumps to the
+newest (and resumes following); `PageUp`/`PageDown` move by `visibleRows - 1`, clamped —
+none of this needs the highlight-vs-selection split `DropDown`'s popup has, since
+`LogView` has nothing to select, only somewhere to be scrolled to.
+
+## ColorEdit
+
+```cpp
+class ColorEdit : public Widget {
+public:
+    Color value() const;
+    void setValue(Color, bool fireCallback = false);
+    void bind(Color* target);
+    void setOnChange(std::function<void(Color)>);
+protected:
+    ColorEdit(std::string label, Color initial, bool hasAlpha);
+};
+
+class ColorEdit3 : public ColorEdit {   // RGB
+public:
+    ColorEdit3(std::string label, Color initial);
+};
+
+class ColorEdit4 : public ColorEdit {   // RGBA
+public:
+    ColorEdit4(std::string label, Color initial);
+};
+```
+
+A swatch button in the control row opens a saturation/value square + hue strip popup
+(`ColorEdit4` adds a third, alpha strip) using the same `GuiContext::openPopup()`
+machinery `DropDown` established — same follow-the-owner-every-frame mechanism, same
+`drawPopup()` override point, same generic Escape-closes-popup default. Like `DropDown`,
+`ColorEdit` does not derive from `CompositeWidget`: the picker controls exist only inside
+the popup, not as always-visible panel-space children, so there is no inline child tree
+to manage.
+
+`ColorEdit3`/`ColorEdit4` are thin subclasses that fix the base class's `hasAlpha`
+constructor argument, rather than a template — the two differ only in whether the alpha
+strip exists, which doesn't warrant `SliderT<T>`-style templating on a value type.
+
+**Layout.** `theme.colorSquareSize` (default 140px) and `theme.colorStripWidth` (16px)
+size the square and both strips. The hue strip sits to the square's right, same height;
+the alpha strip (when present) sits below both, spanning their combined width. The popup
+opens below the control and flips above if it would run off the bottom of the
+framebuffer — identical rule to `DropDown`'s popup.
+
+**Interaction.** Dragging anywhere in the square sets saturation (horizontal) and value
+(vertical, full brightness at the top); dragging the hue strip sets hue (top = 0°, bottom
+= 360°, wrapping to the same red); dragging the alpha strip sets alpha (left =
+transparent, right = opaque). Every drag clamps to its own region rather than stopping if
+the cursor leaves it mid-gesture — the same "capture spans the whole press, not just
+while hovering the target" contract `SliderT`'s track drag and `Panel`'s resize
+grip/scrollbar grab already use. Unlike `DropDown`, the popup does not close on release —
+color pickers conventionally stay open until the control is clicked again or
+`GuiContext`'s generic outside-click rule closes it, since a picking session is usually
+several drags across the square, the strip, and back.
+
+**The HSV cache, and why hue survives a trip through grey.** `Color` (RGB, the public
+value type) has no saturation/hue of its own to drag, so `ColorEdit` keeps a parallel
+`m_hue`/`m_sat`/`m_val` cache that every square/strip drag reads and writes directly, only
+converting back to RGB (`Color::fromHSV`) to `commit()`. The cache is never blindly
+re-derived from `m_value` every frame — `Color::toHSV` canonically returns hue 0 for any
+grey (`s == 0`) or black (`v == 0`) pixel, since hue is genuinely undefined there, and a
+naive "re-derive HSV from RGB on every frame" would therefore silently discard whatever
+hue was selected the moment saturation or value hit zero: drag hue to blue, drag
+saturation to 0 (white), drag saturation back up, and the hue slider would have already
+snapped to red without the user touching it. The fix is `pullBoundValue()`: it only
+resyncs the cache from a bound pointer's value when that value no longer matches what the
+cache already predicts (`Color::fromHSV(m_hue, m_sat, m_val, ...) != *m_bindTarget`) —
+which is false for every commit `ColorEdit` made itself (it wrote the bound pointer to
+exactly that prediction), so the cache survives its own round trip through the bound
+pointer untouched. An external, out-of-band write to the bound value (from application
+code, not from the picker) *does* trigger a resync, same as `setValue()` always does —
+this is specifically about not treating your own writes as external ones.
+
+**Alpha preview without a checkerboard.** The alpha strip and the swatch button both
+render translucency by blending the current colour against whatever the popup/panel
+already painted underneath (`addRectFilledMultiColor` interpolating alpha linearly across
+the strip, from the widget's current RGB at `a=0` to the same RGB at `a=255`), rather than
+against a tiled checkerboard. This is a deliberate scope cut, not an oversight — enough
+feedback for "getting less opaque" without the extra tile-drawing machinery a true
+checkerboard needs, tracked as a possible follow-up in [ROADMAP.md](ROADMAP.md) if it
+turns out to matter in practice.
+
+**Not yet included** (see [ROADMAP.md](ROADMAP.md)): numeric RGB or hex text entry for
+exact values. The square/strip drag is precise enough for visual tuning but not for
+typing in a known hex code.
+
+## Image
+
+```cpp
+class Image : public Widget {
+public:
+    Image(std::string label, TextureId textureId, Vec2 size);
+    void setTextureId(TextureId);
+    TextureId textureId() const;
+    void setSize(Vec2);
+    Vec2 size() const;
+    void setUVRect(Vec2 uv0, Vec2 uv1);   // defaults to the whole image, [0,0]-[1,1]
+    void setTint(Color);                   // defaults to opaque white -- no tint
+};
+```
+
+Draws a texture registered with `VkApp::registerUiTexture()` (below) at exactly `size`,
+left-aligned in the control column — unlike almost every other widget here, it does NOT
+stretch to fill the row. A colormap legend or an icon has a meaningful aspect ratio;
+stretching it to whatever width the panel happens to be would distort it. Non-interactive
+(`acceptsCapture()` is false): there is nothing to press or drag.
+
+**Registering a texture.**
+
+```cpp
+ui::TextureId id = app.registerUiTexture(rgbaPixels, width, height);   // RGBA8, row-major
+app.unregisterUiTexture(id);   // when you're done with it
+```
+
+Lives on `VkApp`, not `GuiContext` — `GuiContext.h` must never see a Vulkan header
+(docs/gui/01-architecture.md's layering rule), and uploading a texture is unavoidably a
+Vulkan operation. `registerTexture()` is synchronous, like `Font`'s own bake: safe to
+call at any point between frames, not mid-`record()`. `unregisterTexture()` waits for the
+device to go idle before destroying anything — a descriptor set pointing at the texture
+may still be referenced by a command buffer a previous frame already submitted, the same
+hazard `rebuildAtlas()` already has to account for on every DPI change, solved the same
+way.
+
+**Deliberately scoped to CPU-uploaded pixel buffers, not arbitrary render targets.**
+Colormap legends and icons — decoded once into an RGBA buffer — are fully served by this.
+Sampling an *existing* scene render target (a thumbnail of the 3D view, a volume slice
+still living on the GPU) would mean synchronizing against the scene's own render pass and
+image layout transitions, which is a meaningfully bigger and riskier feature than
+uploading a static buffer once. Tracked as a follow-up in [ROADMAP.md](ROADMAP.md), not
+attempted here.
+
+**How this fits the draw list.** `DrawList::addImage(textureId, rect, uv0, uv1, tint)` is
+the only primitive that can start a new `DrawCmd` for a reason other than a clip-rect
+change (docs/gui/02-rendering.md) — each texture needs its own descriptor set bound at
+record time. `UiRenderer` reuses the font atlas's own sampler (`CLAMP_TO_EDGE` + `LINEAR`)
+for every registered texture rather than creating one per texture; filtering and
+addressing aren't format-specific, and that sampler already does exactly what a
+legend/icon/thumbnail wants.
+
+Its descriptor pool is sized once, at `init()`, for the atlas plus up to
+`UiRenderer::kMaxRegisteredTextures` (64) additional textures — a fixed cap chosen for
+the expected use case (a modest number of static images registered near startup), not a
+dynamic, high-churn texture stream. `registerTexture()` throws once that cap is reached.
+
 ## ProgressBar
 
 ```cpp
@@ -736,7 +1065,60 @@ Owns children. `preferredSize` returns just the header height when closed, heade
 laid-out children when open. Header draws a triangle glyph (built from
 `addTriangleFilled`, not a font character) plus the title, and toggles on click.
 
-This is how a panel with forty parameters stays usable.
+This is how a panel with forty parameters stays usable. (`findDescendant()`/
+`collectFocusable()` are not overridden, so a closed section's child can still be
+reached by id or land in Tab-key focus order despite being invisible and unclickable --
+a known, accepted gap; see `TabBar`'s own note on the identical limitation, below.)
+
+## TabBar
+
+```cpp
+class TabBar : public Widget {
+public:
+    class Tab {
+    public:
+        template <typename W, typename... Args> W* add(Args&&...);
+    };
+
+    Tab addTab(std::string title);
+    void setActiveTab(int index);
+    int  activeTab() const;
+    int  tabCount() const;
+};
+```
+
+The other way a panel with too many parameters stays usable — grouping instead of
+collapsing. A row of tab buttons across the top; below it, only the ACTIVE tab's
+children exist as far as `update()`, `draw()`, `hitTestDeep()`, and `layout()` are
+concerned. An inactive tab's children are never positioned, never see this frame's
+input, and are not hit-testable — the same "closed means nothing happens to the
+children" contract `CollapsingSection` already established for its closed state,
+generalized from all-or-nothing to per-child (`m_childTabIndex`, a parallel array to
+`CompositeWidget::m_children`, records which tab each one belongs to).
+
+```cpp
+auto general = tabBar->addTab("General");
+general.add<Checkbox>("Enable X", true);
+```
+
+`addTab()` returns a `Tab` — a small, copyable handle, not a widget itself — whose own
+`add<W>()` mirrors `Panel::add<W>()`/`CompositeWidget::add<W>()`'s shape so populating a
+tab reads like populating anywhere else in this library. Tabs cannot be removed once
+added; add every tab you need up front.
+
+Click a tab button to switch (evenly divided across the header width — no per-tab
+custom widths in this version); Left/Right switch tabs while the bar is focused,
+wrapping at both ends, the same convention `DropDown`'s highlight and `RadioGroup`'s
+selection already use. The active tab gets a thin accent underline rather than relying
+on background-colour contrast alone, so it still reads clearly under the high-contrast
+theme.
+
+**A known, accepted gap, not a new one.** Like `CollapsingSection`, `TabBar` does not
+override `findDescendant()`/`collectFocusable()` — an inactive tab's child can still be
+reached by id (`ctx.findWidget()`) or land in Tab-key focus order, even though it is
+never drawn or hit-testable by mouse. Fixing this for both widgets at once is a
+reasonable future cleanup, not attempted here because it isn't a regression either
+widget introduces on its own.
 
 ---
 
@@ -752,6 +1134,7 @@ enum class PanelFlags : uint32_t {
     Scrollable  = 1 << 4,
     NoTitleBar  = 1 << 5,
     NoBackground= 1 << 6,
+    Modal       = 1 << 7,
     Default     = Movable | Resizable | Collapsible | Scrollable,
 };
 
@@ -769,11 +1152,16 @@ public:
     void setVisible(bool);
     void setCollapsed(bool);
     void setOnClose(std::function<void()>);
+    void requestClose();             // fires setOnClose() if Closable is set; else a no-op
     void bringToFront();
 
     // Anchoring so panels survive window resize sensibly
     enum class Anchor { TopLeft, TopRight, BottomLeft, BottomRight };
     void setAnchor(Anchor);
+
+    // Layout persistence -- opt-in, see "Layout persistence" below.
+    void setPersistenceId(std::string);
+    const std::string& persistenceId() const;
 };
 ```
 
@@ -812,6 +1200,96 @@ can veto by setting visibility straight back. It must not call
 walk over the panel list, and `destroyPanel()` erases the owning `unique_ptr` immediately.
 Defer the destroy through `postToMainThread()`, which drains at the top of the next
 `beginFrame()`.
+
+**Layout persistence.** Opt-in: a panel with no `persistenceId()` set (the default,
+empty string) is invisible to both halves of the mechanism below. Persistence is
+deliberately keyed off an explicit id rather than the display `title` — titles are
+neither stable (a consumer can retitle a panel freely) nor unique (nothing stops two
+panels sharing one), so an id that means "this is the same panel across runs" has to be
+something the consumer commits to on purpose.
+
+```cpp
+class GuiContext {
+public:
+    std::string saveLayout() const;
+    void        loadLayout(std::string_view);
+};
+```
+
+`saveLayout()` walks every current panel with a non-empty `persistenceId()` and emits one
+`[id]` section per panel, each holding `x`/`y`/`w`/`h`/`collapsed`/`scrollY` as plain
+`key=value` lines — a small hand-rolled text format, not JSON or INI through a library,
+matching [00-overview.md](00-overview.md)'s "zero external GUI dependency" goal (there is
+nothing here complex enough to need one). Anchor is deliberately not persisted: unlike
+position/size/collapse/scroll, which change through user interaction the save is meant to
+survive, anchor is a structural property the consumer sets once at construction via
+`setAnchor()`, not something a user's drag or resize ever touches.
+
+`loadLayout(data)` applies each section to whichever CURRENTLY EXISTING panel has a
+matching `persistenceId()` — a panel created after the call, or an id with no current
+match, is simply not touched. Malformed lines are skipped rather than thrown: this is a
+best-effort restore of a previous session, governed by [07-public-api.md](07-public-api.md)'s
+"per-frame operations never throw" rule, not "construction failures throw" (it can run at
+any point after panels exist, not only at startup).
+
+**The scrollY ordering trap.** `loadLayout()` may run before the panel it's restoring has
+ever had a `layout()` pass — nothing requires a consumer to `beginFrame()`/`endFrame()`
+between creating panels and loading a saved layout. At that point `m_contentHeight` is
+still its construction-time `0.0f`, so `maxScrollY()` would answer `0` — clamping a
+restored `scrollY` against it immediately would silently discard whatever was saved back
+to `0`. `Panel::setScrollY()` (the internal setter `loadLayout()` uses) deliberately does
+NOT clamp; it takes the value as-is and relies on `Panel::layout()`'s own
+`m_scrollY = std::clamp(...)`, which already runs unconditionally at the end of every
+pass, to settle it to a valid value the moment real content height is known — the exact
+same self-correcting trick `m_needsScrollbar`'s own ordering trap (below) already relies
+on, reused rather than re-solved.
+
+**Modal panels.** `PanelFlags::Modal` is an ordinary panel flag, combinable freely with
+every other one (`Movable`, `Resizable`, `Closable`, ...) — a modal dialog is still just
+a `Panel`, with the same widgets, the same layout, the same title bar. What the flag
+changes lives entirely in `GuiContext`, not `Panel` itself:
+
+- **Only the frontmost visible `Modal` panel is interactive.** `GuiContext::
+  activeModalPanel()` walks `m_panels` (already stored front-to-back) and returns the
+  first `Modal` match. While it's non-null, the hover/hit-test walk in
+  `GuiContext::update()` and the Tab-focus collection in `updateFocusNavigation()` both
+  skip every OTHER panel outright — not "let the click through and have it do nothing",
+  genuinely never resolved, so a background panel's widgets can't be reached by mouse
+  or by keyboard while a modal is open. A popup belonging to a widget INSIDE the modal
+  is unaffected (popup hit-testing runs before this and doesn't consult it).
+- **`wantsMouse()`/`wantsKeyboard()`/`wantsScroll()` all report true unconditionally**
+  while a modal is open, regardless of cursor position or focus state. This is the part
+  a per-panel hover check alone can't give you: the camera hand-off has to be swallowed
+  even when the cursor is nowhere near the dialog, not just when it's hovering the
+  dialog's own rect — otherwise a click on the 3D scene behind a "Discard changes?"
+  prompt would still reach the camera.
+- **The backdrop and the modal panel itself draw through the overlay list** — the same
+  mechanism `DropDown`'s popup already uses to escape its owner's clip rect and z-order
+  (see "DropDown", above) — rather than in the modal's own raw position in the normal
+  per-panel draw pass. A modal created early and shown later via `setVisible(true)`,
+  rather than freshly `createPanel()`'d, keeps whatever z-order slot it already had;
+  without this it could end up drawn BEHIND a panel raised afterward even though it's
+  the only thing actually receiving input, which would look broken. `theme.modalBackdrop`
+  (a translucent black, independent of the active theme) fills the screen behind it.
+- **Nested modals resolve without an explicit stack.** If a second `Modal` panel is
+  opened from inside a first one (a confirmation from within a confirmation),
+  `createPanel()` inserts it frontmost as usual, so `activeModalPanel()` simply starts
+  returning the newer one — which now blocks the older modal too, the same way a native
+  nested dialog blocks its parent, for free.
+- **`Escape` closes a `Closable` modal**, via the same `Panel::requestClose()` the
+  title-bar X button calls (extracted into its own method specifically so both call
+  sites stay identical) — checked in `updateFocusNavigation()` with priority just below
+  "close an open popup" and just above the generic "clear focus" default. A modal
+  without `Closable` is left alone: that flag is the panel's own opt-in signal that it
+  may be dismissed this way at all, so a modal that deliberately omits it (forcing an
+  explicit in-dialog choice, e.g. "Save" vs. "Discard" with no implicit cancel) can't be
+  bypassed via Escape either.
+- **Passive, time-driven widget state is NOT frozen** by a modal — a background
+  `ProgressBar`'s indeterminate sweep keeps animating, a background `LogView` keeps
+  accepting `push()`ed lines. Only INTERACTION is blocked (nothing can claim
+  `activeId`/`hoveredId`/`focusedId` outside the modal), which is a narrower thing than
+  "pause everything behind the dialog" — matching how a real application's background
+  work keeps running while a confirmation prompt is up.
 
 ### Implementation notes
 

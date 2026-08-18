@@ -140,15 +140,18 @@ namespace lightGraphics::detail
 }
 
 #ifdef LVG_WITH_UI
-#include <lightVulkanGraphics/ui/Types.h>
+// Full GuiContext.h (not just Types.h + forward decls) because VkApp now stores a
+// ui::GuiCreateInfo by value (setGuiCreateInfo(), below) -- GuiCreateInfo has no
+// forward-declarable form. This stays cheap to include: GuiContext.h and everything it
+// pulls in (Panel.h, Widget.h, Font.h, Theme.h, DrawList.h, InputState.h) is deliberately
+// free of Vulkan and GLFW headers (docs/gui/01-architecture.md's layering rule), so this
+// does not drag windowing or graphics-API types into every VkApp.h consumer.
+#include <lightVulkanGraphics/ui/GuiContext.h>
 
 namespace lightGraphics::ui
 {
-	class DrawList;
-	class Font;
 	class UiRenderer;
 	class UiPlatformGlfw;
-	class GuiContext;
 }
 #endif
 
@@ -622,9 +625,9 @@ namespace lightGraphics
 		std::string findFontPath(const std::string& fontName);
 
 		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). Defined
-		// out-of-line in VkAppUi.cpp -- ui::GuiContext is only forward-declared here, and
-		// an inline body would need it complete in every translation unit that includes
-		// this header.
+		// out-of-line in VkAppUi.cpp -- inline bodies here would give every translation
+		// unit that includes VkApp.h a reason to recompile whenever GuiContext's own
+		// implementation (not just its interface) changes.
 		bool uiWantsMouse() const;
 		bool uiWantsKeyboard() const;
 		// docs/gui/04-input-and-events.md, "Scroll wheel": narrower than uiWantsMouse() --
@@ -635,15 +638,45 @@ namespace lightGraphics
 		bool uiWantsScroll() const;
 
 	public:
-		// A caller-supplied GuiCreateInfo (custom font path/size, initial theme) isn't
-		// threaded through init() yet (see docs/gui/07-public-api.md, "The core library
-		// integration"); the GUI is always constructed with theme defaults as soon as
-		// LVG_WITH_UI is compiled in and init() has brought up a device and render pass
-		// (see initUi()).
+		// Configure the GUI before init() brings it up -- same "must be called before
+		// init(); has no effect afterward" convention as setMaxTextureCount(). Fields left
+		// at GuiCreateInfo's own defaults keep VkApp's current behaviour: an empty
+		// fontPath still resolves through findFontPath("Inter-Regular.ttf") rather than
+		// being passed through to throw (see initUi()), and fontSize/theme/atlas size
+		// keep GuiCreateInfo's normal defaults (14px, Theme::dark(), 512x512).
+		//
+		// GuiCreateInfo::fontSize is authoritative over GuiCreateInfo::theme.fontSize --
+		// GuiContext's constructor overwrites the latter from the former, so setting only
+		// fontSize (leaving theme at its default) is enough to resize both the baked
+		// atlas and every widget's layout metrics consistently; there is no need to also
+		// touch theme.fontSize by hand (see GuiCreateInfo::fontSize's own comment).
+		void setGuiCreateInfo(const ui::GuiCreateInfo& info) { guiCreateInfo_ = info; }
+
 		bool hasGui() const { return guiContext_ != nullptr; }
 		ui::GuiContext& gui();   // asserts hasGui()
 
+		// Uploads an RGBA8 pixel buffer (row-major, `width * height * 4` bytes, no
+		// padding between rows) for use with the ui::Image widget (docs/gui/05-widgets.md,
+		// "Image") -- returns a ui::TextureId to pass to Image's constructor or
+		// setTextureId(). Requires hasGui(); throws if called before init() has brought
+		// up the GUI, same as every other GUI-dependent call here.
+		//
+		// This is deliberately independent of the scene's own texture system
+		// (createTextureFromPixels()/createSolidColorTexture(), textureDescriptorPool_,
+		// above) rather than sharing it -- the UI backend's descriptor set is already its
+		// own isolated pipeline (docs/gui/02-rendering.md's "one pipeline, one descriptor
+		// set" goal), and coupling it to the scene's texture lifetime would mean a UI
+		// image could be silently invalidated by whatever the scene-texture system is
+		// doing with its own cache and descriptor pool, for no benefit an Image widget
+		// actually needs. Interop with an existing scene render target (rather than a
+		// fresh CPU-uploaded buffer) is tracked as a follow-up in docs/gui/ROADMAP.md, not
+		// attempted here.
+		ui::TextureId registerUiTexture(const std::uint8_t* rgbaPixels, uint32_t width, uint32_t height);
+		// Safe to call with an id that is already unregistered, or that was never valid.
+		void unregisterUiTexture(ui::TextureId id);
+
 	private:
+		ui::GuiCreateInfo guiCreateInfo_{};
 #endif
 
 		// Sync

@@ -16,9 +16,10 @@ struct DrawCmd {
     uint32_t indexOffset;  // into the index buffer
     uint32_t indexCount;
     Rect     clipRect;     // in framebuffer pixels
-    uint32_t textureId;    // 0 = font atlas. Reserved for a future second texture (e.g.
-                            // an addImage primitive); always 0 today -- v1 has no such
-                            // primitive, and everything routes through the one atlas.
+    uint32_t textureId;    // kAtlasTextureId (0) = font atlas -- what every primitive
+                            // below except addImage() draws with. A nonzero id names a
+                            // texture registered via VkApp::registerUiTexture()
+                            // (docs/gui/05-widgets.md, "Image").
 };
 
 class DrawList {
@@ -53,6 +54,8 @@ void addPolyline    (const Vec2* pts, int count, Color, float thickness, bool cl
 void addText        (const Font&, float pixelSize, Vec2 topLeft, Color, std::string_view utf8);
 void addTextClipped (const Font&, float pixelSize, const Rect&, Color,
                      std::string_view utf8, Align h, Align v);
+void addImage        (TextureId, const Rect&, Vec2 uv0 = {0,0}, Vec2 uv1 = {1,1},
+                      Color tint = white);
 ```
 
 Every non-text primitive above samples `DrawList::whitePixelUV()` rather than a
@@ -69,6 +72,15 @@ unit-circle table of 16 points per quadrant at static-init time and scale it.
 `addPolyline` is what draws the sparkline widget and the checkbox tick. Implement it as
 a quad per segment with mitred joins skipped — at 1–2px thickness nobody can see the
 difference, and mitring is where polyline code goes to die.
+
+`addImage` is the one primitive that can open a new `DrawCmd` for a reason other than a
+clip-rect change: it samples `[uv0, uv1]` of a *different* texture (a consumer-registered
+one, not the atlas), and each texture needs its own descriptor bound at record time.
+Consecutive `addImage` calls for the SAME `textureId` still batch into one command, same
+as any other run of same-clip-rect primitives — only an actual texture switch (or a
+switch back to the atlas) forces a split. `UiRenderer` (below) looks up which descriptor
+set a nonzero `textureId` maps to once per `DrawCmd`, at record time; `DrawList` itself
+stays Vulkan-agnostic and never resolves the id to anything.
 
 ### Clip stack semantics
 

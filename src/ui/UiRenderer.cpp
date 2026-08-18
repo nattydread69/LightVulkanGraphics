@@ -121,6 +121,14 @@ void UiRenderer::destroy() {
 
 	destroyPipeline();
 
+	// Before the pool itself: each entry's image/view/memory is NOT owned by the pool
+	// (only its descriptor set is), so those need their own explicit destruction
+	// regardless of what happens to the pool below.
+	for (auto& [id, tex] : m_textures) {
+		destroyRegisteredTexture(tex);
+	}
+	m_textures.clear();
+
 	if (m_descriptorPool != VK_NULL_HANDLE) {
 		vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
 		m_descriptorPool = VK_NULL_HANDLE;
@@ -401,14 +409,21 @@ void UiRenderer::createDescriptorSet() {
 	check(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout),
 	      "vkCreateDescriptorSetLayout");
 
+	// Sized for the atlas's own set PLUS every slot registerTexture() might ever hand
+	// out (kMaxRegisteredTextures, UiRenderer.h) -- allocating additional sets from this
+	// same pool well after creation (inside registerTexture(), not here) is ordinary
+	// Vulkan usage as long as the pool was sized with enough headroom up front, which
+	// this is. FREE_DESCRIPTOR_SET_BIT lets unregisterTexture() give its slot back
+	// individually rather than every registration permanently consuming pool capacity.
 	VkDescriptorPoolSize poolSize{};
 	poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	poolSize.descriptorCount = 1;
+	poolSize.descriptorCount = 1 + kMaxRegisteredTextures;
 
 	VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 	poolInfo.poolSizeCount = 1;
 	poolInfo.pPoolSizes = &poolSize;
-	poolInfo.maxSets = 1;
+	poolInfo.maxSets = 1 + kMaxRegisteredTextures;
 	check(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool), "vkCreateDescriptorPool");
 
 	VkDescriptorSetAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -429,6 +444,173 @@ void UiRenderer::createDescriptorSet() {
 	write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 	write.pImageInfo = &imageInfo;
 	vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+}
+
+void UiRenderer::destroyRegisteredTexture(RegisteredTexture& tex) {
+	if (m_device == VK_NULL_HANDLE) {
+		return;
+	}
+	// FREE_DESCRIPTOR_SET_BIT (createDescriptorSet()) is what makes this legal --
+	// without it, individual sets can only ever be reclaimed by resetting the whole pool.
+	if (tex.descriptorSet != VK_NULL_HANDLE) {
+		vkFreeDescriptorSets(m_device, m_descriptorPool, 1, &tex.descriptorSet);
+		tex.descriptorSet = VK_NULL_HANDLE;
+	}
+	if (tex.view != VK_NULL_HANDLE) {
+		vkDestroyImageView(m_device, tex.view, nullptr);
+		tex.view = VK_NULL_HANDLE;
+	}
+	if (tex.image != VK_NULL_HANDLE) {
+		vkDestroyImage(m_device, tex.image, nullptr);
+		tex.image = VK_NULL_HANDLE;
+	}
+	if (tex.memory != VK_NULL_HANDLE) {
+		vkFreeMemory(m_device, tex.memory, nullptr);
+		tex.memory = VK_NULL_HANDLE;
+	}
+}
+
+TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height) {
+	if (m_device == VK_NULL_HANDLE) {
+		throw std::runtime_error("UiRenderer::registerTexture: not initialised");
+	}
+	if (rgbaPixels == nullptr || width == 0 || height == 0) {
+		throw std::runtime_error("UiRenderer::registerTexture: empty pixel buffer");
+	}
+	if (m_textures.size() >= kMaxRegisteredTextures) {
+		throw std::runtime_error("UiRenderer::registerTexture: kMaxRegisteredTextures (" +
+		                          std::to_string(kMaxRegisteredTextures) +
+		                          ") are already registered -- see UiRenderer.h's comment "
+		                          "on that constant");
+	}
+
+	// Same staging-buffer-then-copy-then-barrier shape as createAtlas() (this file,
+	// above), duplicated rather than shared -- see RegisteredTexture's header comment on
+	// why this and the atlas are kept structurally separate. RGBA8 here vs. the atlas's
+	// R8 is the only format difference.
+	const VkDeviceSize imageSize = static_cast<VkDeviceSize>(width) * height * 4;
+
+	VkBuffer staging = VK_NULL_HANDLE;
+	VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+	createBuffer(imageSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+	             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+	             staging, stagingMemory);
+
+	void* mapped = nullptr;
+	check(vkMapMemory(m_device, stagingMemory, 0, imageSize, 0, &mapped), "vkMapMemory");
+	std::memcpy(mapped, rgbaPixels, static_cast<std::size_t>(imageSize));
+	vkUnmapMemory(m_device, stagingMemory);
+
+	RegisteredTexture tex;
+	try {
+		VkImageCreateInfo imageInfo{ VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
+		imageInfo.imageType = VK_IMAGE_TYPE_2D;
+		imageInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		imageInfo.extent = { width, height, 1 };
+		imageInfo.mipLevels = 1;
+		imageInfo.arrayLayers = 1;
+		imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+		imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		check(vkCreateImage(m_device, &imageInfo, nullptr, &tex.image), "vkCreateImage");
+
+		VkMemoryRequirements requirements{};
+		vkGetImageMemoryRequirements(m_device, tex.image, &requirements);
+		VkMemoryAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO };
+		allocInfo.allocationSize = requirements.size;
+		allocInfo.memoryTypeIndex =
+			findMemoryType(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		check(vkAllocateMemory(m_device, &allocInfo, nullptr, &tex.memory), "vkAllocateMemory");
+		check(vkBindImageMemory(m_device, tex.image, tex.memory, 0), "vkBindImageMemory");
+
+		VkCommandBuffer cmd = beginSingleTimeCommands();
+
+		VkImageMemoryBarrier barrier{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+		barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		barrier.image = tex.image;
+		barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		barrier.subresourceRange.levelCount = 1;
+		barrier.subresourceRange.layerCount = 1;
+		barrier.srcAccessMask = 0;
+		barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		                     0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+		VkBufferImageCopy region{};
+		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		region.imageSubresource.layerCount = 1;
+		region.imageExtent = { width, height, 1 };
+		vkCmdCopyBufferToImage(cmd, staging, tex.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+		barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+		                     0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+		endSingleTimeCommands(cmd);
+
+		VkImageViewCreateInfo viewInfo{ VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
+		viewInfo.image = tex.image;
+		viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+		viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		viewInfo.subresourceRange.levelCount = 1;
+		viewInfo.subresourceRange.layerCount = 1;
+		check(vkCreateImageView(m_device, &viewInfo, nullptr, &tex.view), "vkCreateImageView");
+
+		VkDescriptorSetAllocateInfo dsAllocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+		dsAllocInfo.descriptorPool = m_descriptorPool;
+		dsAllocInfo.descriptorSetCount = 1;
+		dsAllocInfo.pSetLayouts = &m_descriptorSetLayout;
+		check(vkAllocateDescriptorSets(m_device, &dsAllocInfo, &tex.descriptorSet), "vkAllocateDescriptorSets");
+
+		// Reuses m_atlasSampler -- see its own comment (UiRenderer.h) on why one sampler
+		// serves the atlas and every registered texture.
+		VkDescriptorImageInfo descImageInfo{};
+		descImageInfo.sampler = m_atlasSampler;
+		descImageInfo.imageView = tex.view;
+		descImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+		VkWriteDescriptorSet write{ VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+		write.dstSet = tex.descriptorSet;
+		write.dstBinding = 0;
+		write.descriptorCount = 1;
+		write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		write.pImageInfo = &descImageInfo;
+		vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
+	} catch (...) {
+		vkDestroyBuffer(m_device, staging, nullptr);
+		vkFreeMemory(m_device, stagingMemory, nullptr);
+		destroyRegisteredTexture(tex);
+		throw;
+	}
+
+	vkDestroyBuffer(m_device, staging, nullptr);
+	vkFreeMemory(m_device, stagingMemory, nullptr);
+
+	TextureId id = m_nextTextureId++;
+	m_textures.emplace(id, tex);
+	return id;
+}
+
+void UiRenderer::unregisterTexture(TextureId id) {
+	auto it = m_textures.find(id);
+	if (it == m_textures.end()) {
+		return;   // already gone, or never valid -- see this method's header comment
+	}
+	// See this method's header comment (UiRenderer.h): a previous frame's already-
+	// submitted command buffer may still be reading the descriptor set this texture
+	// backs, same reason rebuildAtlas() waits before touching the atlas image.
+	vkDeviceWaitIdle(m_device);
+	destroyRegisteredTexture(it->second);
+	m_textures.erase(it);
 }
 
 void UiRenderer::createPipeline() {
@@ -673,8 +855,6 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 	std::memcpy(frame.indexMapped, list.indices().data(), list.indices().size() * sizeof(std::uint32_t));
 
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipeline);
-	vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
-	                        0, 1, &m_descriptorSet, 0, nullptr);
 
 	VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(cmd, 0, 1, &frame.vertexBuffer, &offset);
@@ -697,6 +877,13 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 	viewport.maxDepth = 1.0f;
 	vkCmdSetViewport(cmd, 0, 1, &viewport);
 
+	// Bound once before the loop when there is nothing registered (the overwhelmingly
+	// common case: every DrawCmd::textureId is kAtlasTextureId, so every iteration below
+	// would just rebind the identical set) would be a premature optimisation for a
+	// backend whose whole per-frame draw-call count is already in the dozens -- binding
+	// per command, unconditionally, keeps this loop the single place that decides which
+	// image a draw call samples, rather than splitting that decision between here and a
+	// bind call above it.
 	for (const DrawCmd& drawCmd : list.commands()) {
 		if (drawCmd.indexCount == 0) {
 			continue;
@@ -705,6 +892,22 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 		if (scissor.extent.width == 0 || scissor.extent.height == 0) {
 			continue;
 		}
+
+		VkDescriptorSet set = m_descriptorSet;   // kAtlasTextureId, or an unrecognised id
+		if (drawCmd.textureId != kAtlasTextureId) {
+			auto it = m_textures.find(drawCmd.textureId);
+			if (it != m_textures.end()) {
+				set = it->second.descriptorSet;
+			}
+			// else: falls back to the atlas set rather than binding VK_NULL_HANDLE (a
+			// validation error) for a stale or unregistered id -- the draw samples the
+			// wrong image instead of crashing, matching this backend's "a widget must
+			// never be able to take down a running simulation" policy
+			// (docs/gui/07-public-api.md, "Error handling policy").
+		}
+		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
+		                        0, 1, &set, 0, nullptr);
+
 		vkCmdSetScissor(cmd, 0, 1, &scissor);
 		vkCmdDrawIndexed(cmd, drawCmd.indexCount, 1, drawCmd.indexOffset, 0, 0);
 	}

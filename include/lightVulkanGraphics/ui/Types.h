@@ -8,6 +8,16 @@ namespace lightGraphics::ui {
 using WidgetId = std::uint64_t;
 inline constexpr WidgetId kInvalidWidgetId = 0;
 
+// Identifies a texture registered with the UI backend (VkApp::registerUiTexture(),
+// docs/gui/05-widgets.md, "Image"). 0 is reserved for the UI's own font atlas -- every
+// DrawCmd already carries a textureId, and 0 is what it has always meant, from before any
+// consumer could register a texture at all (DrawList.cpp hardcoded it on every command).
+// A real texture is never assigned 0 (UiRenderer's id counter starts at 1), so `textureId
+// == kAtlasTextureId` unambiguously means "sample the atlas / white pixel", not "no
+// texture set yet".
+using TextureId = std::uint32_t;
+inline constexpr TextureId kAtlasTextureId = 0;
+
 struct Vec2 {
 	float x = 0.0f, y = 0.0f;
 
@@ -52,6 +62,19 @@ struct Color {
 	constexpr std::uint32_t packed() const;
 	Color withAlpha(float multiplier) const;
 	static Color lerp(Color a, Color b, float t);
+
+	// `h` in degrees, wrapped to [0,360) internally (so -30 and 750 both mean the same
+	// as 330); `s`/`v` clamped to [0,1]. `a` is passed straight through, byte-for-byte --
+	// alpha has no HSV analogue to round-trip through.
+	static Color fromHSV(float h, float s, float v, std::uint8_t a = 255);
+	// Inverse of fromHSV, used by ColorEdit (docs/gui/05-widgets.md, "ColorEdit") to seed
+	// its hue/saturation/value drag state from an externally-set RGB value. Degenerate
+	// case: when r==g==b (grey, s==0), hue is mathematically undefined; this returns 0
+	// rather than leaving it uninitialised, matching the canonical convention. Callers
+	// that care about not clobbering a previously-chosen hue on desaturation (dragging a
+	// colour to grey and back should restore the hue it started at, not silently reset to
+	// red) must guard the call themselves -- see ColorEdit's pullBoundValue().
+	void toHSV(float& h, float& s, float& v) const;
 };
 
 inline constexpr Color Color::fromFloats(float r, float g, float b, float a) {
@@ -92,6 +115,14 @@ enum class PanelFlags : std::uint32_t {
 	Scrollable   = 1 << 4,
 	NoTitleBar   = 1 << 5,
 	NoBackground = 1 << 6,
+	// docs/gui/05-widgets.md, "Panel", "Modal panels": while any Modal panel is visible,
+	// GuiContext restricts hover/hit-testing and Tab-focus collection to the frontmost
+	// one, and wantsMouse()/wantsKeyboard()/wantsScroll() all report true unconditionally
+	// -- swallowing the camera hand-off outright, not just over the panel's own rect.
+	// Deliberately not in Default: opting a panel into blocking every other panel and the
+	// 3D scene behind it is exactly the kind of thing that should never happen by
+	// accident.
+	Modal        = 1 << 7,
 	// operator| below isn't declared yet at this point in the enum body, so Default is
 	// built from the raw bit values rather than the sibling enumerators directly.
 	Default      = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4),  // Movable | Resizable | Collapsible | Scrollable

@@ -26,7 +26,9 @@ struct DrawCmd {
 	std::uint32_t indexOffset;
 	std::uint32_t indexCount;
 	Rect clipRect;
-	std::uint32_t textureId;
+	// kAtlasTextureId (0) for everything drawn so far in this library (glyphs, solid
+	// fills -- see Types.h's comment); a registered id from addImage() otherwise.
+	TextureId textureId;
 };
 
 class DrawList {
@@ -52,6 +54,17 @@ public:
 	void addTextClipped(const Font& font, float pixelSize, const Rect& rect, Color color,
 	                     std::string_view utf8, Align h, Align v);
 
+	// Draws a registered texture (VkApp::registerUiTexture(), docs/gui/05-widgets.md,
+	// "Image") over `rect`, sampling the sub-rectangle [uv0, uv1] of it (defaults to the
+	// whole image) and multiplying by `tint` (defaults to opaque white, i.e. no tint).
+	// Unlike every other add*() here, this can start a genuinely NEW draw command even
+	// when the clip rect hasn't changed -- see ensureCommand()'s comment -- because each
+	// texture needs its own descriptor set bound at record() time (docs/gui/02-
+	// rendering.md's "one pipeline, one descriptor set" goal is about the common case;
+	// a widget that actually needs a second image is exactly what earns a second bind).
+	void addImage(TextureId textureId, const Rect& rect, Vec2 uv0 = { 0.0f, 0.0f },
+	              Vec2 uv1 = { 1.0f, 1.0f }, Color tint = Color(0xFF, 0xFF, 0xFF, 0xFF));
+
 	// Appends another DrawList's geometry onto this one: vertices are copied verbatim,
 	// indices are offset to stay valid, and non-empty commands are copied with their
 	// indexOffset adjusted. Used by GuiContext::endFrame() to merge the overlay list
@@ -76,7 +89,12 @@ private:
 	std::vector<Rect> m_clipStack;
 	Vec2 m_whitePixelUV;
 
-	void ensureCommand();
+	// Closes out the current command if it can't absorb the next primitive: a clip-rect
+	// change (as before) OR a textureId change (addImage() only -- every other add*()
+	// call passes the default kAtlasTextureId, so their own behaviour is unchanged:
+	// splitting on clip rect alone). Consecutive addImage() calls for the SAME texture
+	// still batch into one command, same as any other same-clip-rect run of primitives.
+	void ensureCommand(TextureId textureId = kAtlasTextureId);
 	void updateCurrentCommandIndexCount();
 	Rect getCurrentClipRect() const;
 	std::uint32_t packColor(Color c) const;

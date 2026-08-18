@@ -7,7 +7,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace lightGraphics::ui {
 
@@ -30,8 +29,6 @@ public:
 	bool acceptsFocus()   const override { return false; }
 
 private:
-	std::vector<std::string_view> wrapLines(const Font&, float pixelSize, float width) const;
-
 	std::string m_text;
 	Align m_align = Align::Start;
 	bool  m_wordWrap = false;

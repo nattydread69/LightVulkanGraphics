@@ -319,6 +319,16 @@ Two behaviours to get right beyond the basic guard:
    what the cursor is visibly over: if nothing on screen will move in response to the
    tick, the camera gets it.
 
+3. **A modal panel overrides all three outright.** While `GuiContext::
+   activeModalPanel()` is non-null (docs/gui/05-widgets.md, "Panel", "Modal panels"),
+   `wantsMouse()`, `wantsKeyboard()`, and `wantsScroll()` all return true unconditionally
+   — not "true while hovering the dialog", true regardless of where the cursor is or
+   what (if anything) is focused. This is a deliberately different shape from every
+   other case above, which all narrow based on what's actually under the cursor: a modal
+   has to swallow the camera hand-off *everywhere*, including a click on the bare 3D
+   scene nowhere near the dialog, or "modal" would only mean "modal while your mouse
+   happens to be over it".
+
 ## Frame-boundary bookkeeping
 
 `beginFrame` must, in order:

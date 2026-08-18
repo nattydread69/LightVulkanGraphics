@@ -26,6 +26,25 @@ theme, the bundled Inter font at 14px) as soon as the Vulkan device and render p
 exist. Check `app.hasGui()` before touching it — it's `false` if the GUI layer wasn't
 built in, or if `init()` hasn't gotten far enough yet:
 
+To customize the font, size, initial theme, or atlas size, call `setGuiCreateInfo()`
+*before* `init()` — same "before init(); no effect after" rule as `setMaxTextureCount()`:
+
+```cpp
+lightGraphics::VkApp app;
+
+lightGraphics::ui::GuiCreateInfo guiInfo;
+guiInfo.fontPath = "assets/fonts/RobotoMono-Regular.ttf";  // empty = bundled Inter
+guiInfo.fontSize = 18.0f;
+guiInfo.theme    = lightGraphics::ui::Theme::light();
+app.setGuiCreateInfo(guiInfo);
+
+app.init(1280, 800, "My App");   // constructs GuiContext from guiInfo here
+```
+
+Leave any field at its `GuiCreateInfo` default to keep the current behaviour for it —
+an empty `fontPath` still resolves through the bundled-font search, so you only need to
+set the fields you actually want to change.
+
 ```cpp
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -167,6 +186,30 @@ p->setOnClose([&gui, p]{ gui.postToMainThread([&gui, p]{ gui.destroyPanel(p); })
 Other panel-level calls: `setTitle`, `setVisible`, `setCollapsed` (the same fold the
 triangle performs, from code), `bringToFront`, `remove(Widget*)`, `clear()`.
 
+**Remembering where panels were left.** Give a panel a `setPersistenceId("...")` and it
+becomes eligible for save/restore across runs — position, size, collapsed state, and
+scroll offset. A panel with no id is untouched by either call, so this is opt-in per
+panel, not automatic:
+
+```cpp
+panel->setPersistenceId("main-panel");   // pick something stable -- not the title
+
+// On exit (or whenever you want a checkpoint):
+std::ofstream out("layout.txt");
+out << gui.saveLayout();
+
+// On startup, AFTER creating every panel that has a persistence id:
+if (std::ifstream in("layout.txt"); in) {
+    std::stringstream buf;
+    buf << in.rdbuf();
+    gui.loadLayout(buf.str());
+}
+```
+
+`loadLayout()` only touches panels that already exist and whose id appears in the saved
+data — create your panels first, then load. It's safe to call before the panel's first
+frame has ever run.
+
 ## Widget tour
 
 Every widget's constructor takes a label as its first argument (pass `""` for a control
@@ -184,6 +227,8 @@ never hit-testable) and `setEnabled(false)` (greys it out and blocks input).
 | `Spacer(height)` | Fixed vertical gap. |
 | `ProgressBar(label)` | `setFraction(0..1)` or `setIndeterminate(true)` for a busy sweep. |
 | `PlotLine(label, historySize)` | Sparkline. `push(sample)` each frame; auto-scales. |
+| `LogView(label)` | Read-only, word-wrapping, scrollable text. `push(line)` to append; auto-follows new output until you scroll away. `setMaxLines(n)`. |
+| `Image(label, textureId, size)` | A registered texture (see below) at a fixed size — a colormap legend, an icon, a thumbnail. |
 
 **Values:**
 
@@ -193,9 +238,11 @@ never hit-testable) and `setEnabled(false)` (greys it out and blocks input).
 | `RadioButton(label, RadioGroup*, value)` | Exclusive selection; group is a separate object you own (see below). |
 | `Slider` / `SliderInt` (`SliderT<float>`/`SliderT<int>`) | A value with a physically meaningful range. `setStep`, `setScale(Logarithmic)` for values spanning orders of magnitude, `setUnitSuffix` (put units here, not in the label). |
 | `DragValueT<float>` / `DragValueT<int>` | An unbounded scrubber for a quantity where a min/max would be a lie (mass, position). `setSoftRange` clamps without changing the drag mapping. |
-| `Vec3Field(label, glm::vec3)` | Three `DragValue`s in a row for a position/direction/color. |
+| `Vec3Field(label, glm::vec3)` | Three `DragValue`s in a row for a position or direction. |
 | `TextBox(label, initial)` | Free text. `setFilter(Integer/Decimal/Identifier)`, `setPlaceholder`, `setMaxLength`, `setPasswordMode`, `setValidator` (red border when it returns false). |
 | `DropDown(label, items, initialIndex)` | A combo box; scrolls its own popup past 12 items. |
+| `ListBox(label, items, initialIndex)` | Same list, always visible instead of behind a popup — for when the selection itself is the point. `setVisibleRows(n)`, `initialIndex = -1` for "nothing selected yet". |
+| `ColorEdit3(label, Color)` / `ColorEdit4(label, Color)` | A swatch that opens a saturation/value + hue (+ alpha, `ColorEdit4`) picker popup. |
 
 **Grouping / layout:**
 
@@ -203,6 +250,15 @@ never hit-testable) and `setEnabled(false)` (greys it out and blocks input).
 |---|---|
 | `Row()` | Horizontal grouping, e.g. `[Reset] [Apply]`. `add<W>()` children, `setWeights({...})` for relative widths (default equal). |
 | `CollapsingSection(title, openInitially)` | Collapsible group — `add<W>()` children. This is how a 40-parameter panel stays usable. |
+| `TabBar()` | Named tabs instead of stacking — `addTab(title)` returns a handle to `add<W>()` children into. Only the active tab's children exist for input/layout purposes. |
+
+```cpp
+auto* tabs = panel->add<lvgui::TabBar>();
+auto physics = tabs->addTab("Physics");
+auto render  = tabs->addTab("Render");
+physics.add<lvgui::Slider>("Damping", 0.0f, 1.0f, 0.1f);
+render.add<lvgui::Checkbox>("Wireframe", false);
+```
 
 `RadioGroup` is not a widget — it's shared selection state you own alongside (or ahead
 of) the buttons that reference it, and it must outlive them:
@@ -229,6 +285,88 @@ cheap like updating a uniform; use `onCommit` for anything expensive, like rebui
 mesh. Wire both if you need a live number on screen but only want to act once the user
 settles on a value.
 
+## Images
+
+`Image` draws a texture you've uploaded — a colour-map legend, an icon, a thumbnail. The
+upload itself lives on `VkApp` (not the GUI object), since it's unavoidably a Vulkan
+operation:
+
+```cpp
+// rgba is width * height * 4 bytes, row-major, no padding between rows.
+lvgui::TextureId legend = app.registerUiTexture(rgba.data(), width, height);
+
+panel->add<lvgui::Image>("Colormap", legend, lvgui::Vec2{ 200.0f, 20.0f });
+```
+
+Call `registerUiTexture` any time after `init()`, not while a frame is mid-record (the
+same rule `Font`'s own bake follows). The texture is drawn at exactly the `size` you give
+`Image` — it does not stretch to fill the row the way most widgets do, so a legend's
+aspect ratio stays intact regardless of panel width. `app.unregisterUiTexture(legend)`
+frees it when you're done; every still-registered texture is cleaned up automatically
+when the GUI shuts down, so this is only needed for a texture you want to replace or
+drop before then.
+
+This covers CPU-generated or CPU-decoded pixel data. Sampling an existing scene render
+target (a 3D-view thumbnail, a volume slice already on the GPU) isn't supported yet — see
+[`gui/ROADMAP.md`](gui/ROADMAP.md).
+
+## Context menus
+
+`ContextMenu` is invisible until you open it — there's no control row to click, because
+a right-click can happen anywhere: over a widget, over bare panel background, over your
+3D scene. You detect the right-click yourself and tell the menu where to appear:
+
+```cpp
+auto* menu = panel->add<lvgui::ContextMenu>();
+menu->addItem("Reset", [&]{ gravity->setValue(9.81f, true); });
+menu->addItem("Toggle grid", []{ showGrid = !showGrid; });
+menu->addSeparator();
+menu->addItem("Delete", [&]{ /* ... */ });
+
+app.setUpdateCallback([&](float) {
+    if (gui.input().mouseReleased[static_cast<int>(lvgui::MouseButton::Right)]) {
+        menu->open(gui.input().mousePos);
+    }
+});
+```
+
+The same `open(Vec2)` call works from inside any widget's own `update()` too, scoped to
+that widget's `hitTest()`, for a context menu specific to one control rather than the
+whole window. `Escape` and clicking anywhere else both close it, same as every other
+popup in this library.
+
+## Modal dialogs
+
+A modal is an ordinary `Panel` — `PanelFlags::Modal` is what makes it block everything
+else while visible:
+
+```cpp
+auto* confirm = gui.createPanel("Clear log?", { 460.0f, 260.0f, 300.0f, 140.0f },
+    lvgui::PanelFlags::Modal | lvgui::PanelFlags::Closable);
+confirm->setVisible(false);   // hidden until needed
+confirm->add<lvgui::Label>("This clears every line currently in the log.")->setWordWrap(true);
+
+auto* row = confirm->add<lvgui::Row>();
+row->add<lvgui::Button>("Cancel")->setOnClick([confirm]{ confirm->setVisible(false); });
+row->add<lvgui::Button>("Clear it")->setOnClick([confirm, log]{
+    log->clear();
+    confirm->setVisible(false);
+});
+
+showDialogButton->setOnClick([confirm]{ confirm->setVisible(true); });
+```
+
+While `confirm` is visible: every other panel stops receiving mouse and keyboard input
+(clicks pass through, Tab can't reach their controls), and the camera hand-off is
+swallowed outright — a click or WASD press anywhere, including on the bare 3D scene, does
+nothing until the dialog closes. You don't need to call `bringToFront()` when showing
+it: the active modal always draws on top regardless of its position in panel z-order.
+
+`PanelFlags::Closable` adds the title-bar X and makes `Escape` close it too (via the same
+path as clicking the X — a handler passed to `setOnClose()` still fires either way).
+Leave `Closable` off for a dialog the user must resolve with an explicit choice, with no
+implicit "never mind" available.
+
 ## Themes
 
 ```cpp
@@ -240,6 +378,12 @@ fields (`gui.theme().accent = lvgui::Color::fromHex(0xff8800);`) for a one-off b
 color. Changes apply on the next frame; no rebuild step. `highContrast()` is the closest
 thing to an accessibility affordance currently available (pure black/white, thicker
 borders) — there's no screen-reader support.
+
+If you set a non-default `fontSize` via `setGuiCreateInfo()`, assigning a whole preset
+here (`gui.theme() = lvgui::Theme::light()`) resets it back to that preset's own
+default — re-apply it afterward: `gui.theme().fontSize = 18.0f;`. Tweaking individual
+fields, as in the brand-color example above, doesn't touch `fontSize` and needs no such
+fix-up.
 
 ## Threading
 
@@ -260,11 +404,8 @@ frame's widgets are updated.
 - No accessibility tree / screen reader support.
 - No docking, tabs, or multi-viewport — panels float, drag, collapse, and resize; that's
   the whole layout model.
-- `GuiCreateInfo` (custom font path/size, initial theme) isn't yet exposed through
-  `VkApp::init()` — every app currently gets the bundled Inter font at 14px, dark theme
-  by default. Switch themes at runtime with `gui.theme() = ...` in the meantime.
-- No colour picker, list box, image widget, or modal dialog yet. See
-  [`gui/ROADMAP.md`](gui/ROADMAP.md) for what's planned and in what order.
+- No list box or modal dialog yet. See [`gui/ROADMAP.md`](gui/ROADMAP.md)
+  for what's planned and in what order.
 
 ## Reference
 

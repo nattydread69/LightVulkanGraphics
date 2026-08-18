@@ -25,15 +25,6 @@
 
 namespace lightGraphics
 {
-	namespace
-	{
-		// The logical font size the GUI is baked at. Theme::fontSize matches this
-		// default; a consumer that wants a different size will get one via
-		// GuiCreateInfo::fontSize once GuiCreateInfo is exposed through
-		// LightVulkanGraphicsCreateInfo (docs/gui/07-public-api.md).
-		constexpr float kUiFontSize = 14.0f;
-	}
-
 	// Minimal font-payload search, deliberately mirroring the order that
 	// findShaderPath() uses for spv/. Still to be formalised (install rules,
 	// FONT_PATHS.md, and the relocated-install test); until then this is enough to
@@ -92,7 +83,20 @@ namespace lightGraphics
 			return;
 		}
 
-		const std::string fontPath = findFontPath("Inter-Regular.ttf");
+		// guiCreateInfo_ (setGuiCreateInfo(), VkApp.h) carries whatever the consumer
+		// configured before calling init(), defaulted to GuiCreateInfo{} otherwise --
+		// which already matches what this function used to hardcode here (14px,
+		// Theme::dark(), 512x512). The one field it can never usefully default is
+		// fontPath: GuiCreateInfo requires a real path (an empty one throws, since
+		// GuiContext itself has no built-in font search order -- see its comment), so an
+		// empty fontPath here specifically means "use the bundled font" and gets resolved
+		// through the same findFontPath() search every other asset uses, rather than
+		// being passed through to throw.
+		ui::GuiCreateInfo guiInfo = guiCreateInfo_;
+		if (guiInfo.fontPath.empty())
+		{
+			guiInfo.fontPath = findFontPath("Inter-Regular.ttf");
+		}
 
 		// uiPlatform_ (installed in createWindow(), independent of Vulkan readiness) is
 		// the sole GLFW-facing input receiver; GuiContext.h must never see a GLFW header,
@@ -100,13 +104,6 @@ namespace lightGraphics
 		// are still built from the real window here, and forwardInputToGui() (called
 		// once per frame from mainLoop()) replays uiPlatform_'s resolved InputState into
 		// guiContext_ via the same inject* calls a platform layer would use.
-		ui::GuiCreateInfo guiInfo{};
-		guiInfo.fontPath = fontPath;
-		guiInfo.fontSize = kUiFontSize;
-		guiInfo.theme = ui::Theme::dark();
-		guiInfo.atlasWidth = 512;
-		guiInfo.atlasHeight = 512;
-
 		guiContext_ = std::make_unique<ui::GuiContext>(guiInfo, uiPlatform_->makeHooks(window_));
 
 		ui::UiRendererCreateInfo rendererInfo{};
@@ -130,7 +127,7 @@ namespace lightGraphics
 		{
 			std::ostringstream message;
 			message << "LVGUI initialised: atlas " << guiContext_->font().atlasWidth() << 'x'
-			        << guiContext_->font().atlasHeight() << ", font " << fontPath;
+			        << guiContext_->font().atlasHeight() << ", font " << guiInfo.fontPath;
 			logMessage(LogLevel::Debug, message.str());
 		}
 	}
@@ -230,6 +227,21 @@ namespace lightGraphics
 	{
 		assert(guiContext_ && "VkApp::gui() called before the GUI was initialised -- check hasGui() first");
 		return *guiContext_;
+	}
+
+	ui::TextureId VkApp::registerUiTexture(const std::uint8_t* rgbaPixels, uint32_t width, uint32_t height)
+	{
+		assert(uiRenderer_ &&
+		       "VkApp::registerUiTexture() called before the GUI was initialised -- check hasGui() first");
+		return uiRenderer_->registerTexture(rgbaPixels, width, height);
+	}
+
+	void VkApp::unregisterUiTexture(ui::TextureId id)
+	{
+		if (uiRenderer_)
+		{
+			uiRenderer_->unregisterTexture(id);
+		}
 	}
 
 } // namespace lightGraphics

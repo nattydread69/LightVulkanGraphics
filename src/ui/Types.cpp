@@ -45,4 +45,55 @@ Color Color::lerp(Color a, Color b, float t) {
 	};
 }
 
+Color Color::fromHSV(float h, float s, float v, std::uint8_t a) {
+	h = std::fmod(h, 360.0f);
+	if (h < 0.0f) {
+		h += 360.0f;
+	}
+	s = std::clamp(s, 0.0f, 1.0f);
+	v = std::clamp(v, 0.0f, 1.0f);
+
+	float c = v * s;
+	float x = c * (1.0f - std::fabs(std::fmod(h / 60.0f, 2.0f) - 1.0f));
+	float m = v - c;
+	float r = 0.0f, g = 0.0f, b = 0.0f;
+	if      (h < 60.0f)  { r = c; g = x; b = 0.0f; }
+	else if (h < 120.0f) { r = x; g = c; b = 0.0f; }
+	else if (h < 180.0f) { r = 0.0f; g = c; b = x; }
+	else if (h < 240.0f) { r = 0.0f; g = x; b = c; }
+	else if (h < 300.0f) { r = x; g = 0.0f; b = c; }
+	else                 { r = c; g = 0.0f; b = x; }
+
+	Color result = Color::fromFloats(r + m, g + m, b + m);
+	result.a = a;
+	return result;
+}
+
+void Color::toHSV(float& h, float& s, float& v) const {
+	float rf = static_cast<float>(r) / 255.0f;
+	float gf = static_cast<float>(g) / 255.0f;
+	float bf = static_cast<float>(b) / 255.0f;
+	float maxc = std::max({ rf, gf, bf });
+	float minc = std::min({ rf, gf, bf });
+	float delta = maxc - minc;
+
+	v = maxc;
+	s = maxc <= 0.0f ? 0.0f : delta / maxc;
+
+	if (delta <= 1.0e-6f) {
+		h = 0.0f;   // grey: hue undefined, canonical 0 -- see the header comment
+		return;
+	}
+	if (maxc == rf) {
+		h = 60.0f * std::fmod((gf - bf) / delta, 6.0f);
+	} else if (maxc == gf) {
+		h = 60.0f * (((bf - rf) / delta) + 2.0f);
+	} else {
+		h = 60.0f * (((rf - gf) / delta) + 4.0f);
+	}
+	if (h < 0.0f) {
+		h += 360.0f;
+	}
+}
+
 } // namespace lightGraphics::ui

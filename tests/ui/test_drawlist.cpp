@@ -122,6 +122,109 @@ namespace {
 		std::cout << "✓ testDifferentClipRectsTwoCommands\n";
 	}
 
+	void testAddImageEmitsCorrectPositionsUVsAndTint() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect r = { 10.0f, 20.0f, 100.0f, 50.0f };
+		lvgui::Color tint(0x11, 0x22, 0x33, 0x44);
+		list.addImage(7, r, { 0.25f, 0.0f }, { 1.0f, 0.75f }, tint);
+
+		assert(list.vertices().size() == 4);
+		const auto& v = list.vertices();
+
+		assert(v[0].pos.x == r.left()  && v[0].pos.y == r.top());
+		assert(v[1].pos.x == r.right() && v[1].pos.y == r.top());
+		assert(v[2].pos.x == r.right() && v[2].pos.y == r.bottom());
+		assert(v[3].pos.x == r.left()  && v[3].pos.y == r.bottom());
+
+		// UVs follow the same tl/tr/br/bl winding as positions, sampling [uv0,uv1]
+		// rather than the atlas's white-pixel UV every other primitive uses.
+		assert(v[0].uv.x == 0.25f && v[0].uv.y == 0.0f);
+		assert(v[1].uv.x == 1.0f  && v[1].uv.y == 0.0f);
+		assert(v[2].uv.x == 1.0f  && v[2].uv.y == 0.75f);
+		assert(v[3].uv.x == 0.25f && v[3].uv.y == 0.75f);
+
+		for (const auto& vert : v) {
+			assert(vert.color == tint.packed());
+		}
+
+		assert(list.commands().size() == 1);
+		assert(list.commands()[0].textureId == 7);
+
+		std::cout << "✓ testAddImageEmitsCorrectPositionsUVsAndTint\n";
+	}
+
+	void testAddImageDefaultsToFullUVAndOpaqueWhiteTint() {
+		lvgui::DrawList list;
+		list.clear();
+
+		list.addImage(3, { 0.0f, 0.0f, 10.0f, 10.0f });
+		const auto& v = list.vertices();
+
+		assert(v[0].uv.x == 0.0f && v[0].uv.y == 0.0f);
+		assert(v[2].uv.x == 1.0f && v[2].uv.y == 1.0f);
+		for (const auto& vert : v) {
+			assert(vert.color == lvgui::Color(0xFF, 0xFF, 0xFF, 0xFF).packed());
+		}
+
+		std::cout << "✓ testAddImageDefaultsToFullUVAndOpaqueWhiteTint\n";
+	}
+
+	void testConsecutiveAddImageSameTextureBatchesIntoOneCommand() {
+		lvgui::DrawList list;
+		list.clear();
+
+		list.addImage(5, { 0.0f, 0.0f, 10.0f, 10.0f });
+		list.addImage(5, { 20.0f, 0.0f, 10.0f, 10.0f });
+
+		// Same texture, same (default full-screen) clip rect -- batches into one draw
+		// command, exactly like two same-clip-rect addRectFilled calls do
+		// (testSameClipRectOneCommand above).
+		assert(list.commands().size() == 1);
+		assert(list.commands()[0].textureId == 5);
+		assert(list.commands()[0].indexCount == 12);   // two quads, 6 indices each
+
+		std::cout << "✓ testConsecutiveAddImageSameTextureBatchesIntoOneCommand\n";
+	}
+
+	void testSwitchingTextureIdStartsANewCommand() {
+		lvgui::DrawList list;
+		list.clear();
+
+		list.addImage(1, { 0.0f, 0.0f, 10.0f, 10.0f });
+		list.addImage(2, { 20.0f, 0.0f, 10.0f, 10.0f });
+		list.addRectFilled({ 40.0f, 0.0f, 10.0f, 10.0f }, lvgui::Color(255, 0, 0));   // back to the atlas
+
+		assert(list.commands().size() == 3);
+		assert(list.commands()[0].textureId == 1);
+		assert(list.commands()[1].textureId == 2);
+		assert(list.commands()[2].textureId == lvgui::kAtlasTextureId);
+
+		std::cout << "✓ testSwitchingTextureIdStartsANewCommand\n";
+	}
+
+	void testAddImageInsideAClipRectAlsoSplitsOnClipChange() {
+		lvgui::DrawList list;
+		list.clear();
+
+		list.pushClipRect({ 0.0f, 0.0f, 100.0f, 100.0f });
+		list.addImage(9, { 10.0f, 10.0f, 10.0f, 10.0f });
+
+		list.pushClipRect({ 0.0f, 0.0f, 50.0f, 50.0f });
+		list.addImage(9, { 10.0f, 10.0f, 10.0f, 10.0f });   // same texture, narrower clip
+
+		// A clip-rect change still splits even when the texture stays the same -- the
+		// two concerns are independent, and addImage() must not accidentally suppress
+		// the pre-existing clip-rect-driven splitting testDifferentClipRectsTwoCommands
+		// already pins down for every other primitive.
+		assert(list.commands().size() == 2);
+		assert(list.commands()[0].textureId == 9);
+		assert(list.commands()[1].textureId == 9);
+
+		std::cout << "✓ testAddImageInsideAClipRectAlsoSplitsOnClipChange\n";
+	}
+
 	void testClipIntersection() {
 		lvgui::DrawList list;
 		list.clear();
@@ -286,6 +389,79 @@ namespace {
 		assert(lerped.b > 100);
 
 		std::cout << "✓ testColorOperations\n";
+	}
+
+	// Pure primary/secondary hues at full saturation/value -- the six corners of the
+	// hue hexagon ColorEdit's popup draws as six gradient bands (docs/gui/05,
+	// "ColorEdit"). Exact-byte assertions, not tolerance-based, because these six
+	// points are exactly where fromHSV()'s six-branch piecewise formula switches
+	// branches; an off-by-one in the branch boundary constants (0/60/120/180/240/300)
+	// would show up as a wrong RESULT here, not a rounding wobble.
+	void testColorFromHSVPrimaryAndSecondaryHues() {
+		auto eq = [](lvgui::Color c, std::uint8_t r, std::uint8_t g, std::uint8_t b) {
+			return c.r == r && c.g == g && c.b == b;
+		};
+		assert(eq(lvgui::Color::fromHSV(0.0f,   1.0f, 1.0f), 255,   0,   0));  // red
+		assert(eq(lvgui::Color::fromHSV(60.0f,  1.0f, 1.0f), 255, 255,   0));  // yellow
+		assert(eq(lvgui::Color::fromHSV(120.0f, 1.0f, 1.0f),   0, 255,   0));  // green
+		assert(eq(lvgui::Color::fromHSV(180.0f, 1.0f, 1.0f),   0, 255, 255));  // cyan
+		assert(eq(lvgui::Color::fromHSV(240.0f, 1.0f, 1.0f),   0,   0, 255));  // blue
+		assert(eq(lvgui::Color::fromHSV(300.0f, 1.0f, 1.0f), 255,   0, 255));  // magenta
+		assert(eq(lvgui::Color::fromHSV(360.0f, 1.0f, 1.0f), 255,   0,   0));  // wraps to red
+
+		std::cout << "✓ testColorFromHSVPrimaryAndSecondaryHues\n";
+	}
+
+	void testColorFromHSVSaturationAndValueExtremes() {
+		// s=0 is grey at every hue -- the hue argument must have no effect.
+		assert(lvgui::Color::fromHSV(0.0f, 0.0f, 1.0f).r == 255);
+		assert(lvgui::Color::fromHSV(0.0f, 0.0f, 1.0f).g == 255);
+		assert(lvgui::Color::fromHSV(200.0f, 0.0f, 1.0f).r == 255);
+		assert(lvgui::Color::fromHSV(200.0f, 0.0f, 1.0f).g == 255);
+		// v=0 is black regardless of hue or saturation.
+		lvgui::Color black = lvgui::Color::fromHSV(240.0f, 1.0f, 0.0f);
+		assert(black.r == 0 && black.g == 0 && black.b == 0);
+		// Alpha passes through untouched -- it has no HSV analogue.
+		assert(lvgui::Color::fromHSV(0.0f, 1.0f, 1.0f, 128).a == 128);
+
+		std::cout << "✓ testColorFromHSVSaturationAndValueExtremes\n";
+	}
+
+	void testColorToHSVRoundTripsThroughFromHSV() {
+		// Not every (h,s,v) round-trips to the SAME (h,s,v) -- h is undefined at s=0
+		// (toHSV canonically returns 0, see its header comment) and at v=0. Restricted
+		// to saturated, non-black colours, where the round trip is exact modulo uint8
+		// quantisation.
+		float testHues[] = { 0.0f, 45.0f, 90.0f, 150.0f, 210.0f, 275.0f, 330.0f };
+		for (float h : testHues) {
+			lvgui::Color c = lvgui::Color::fromHSV(h, 1.0f, 1.0f);
+			float rh, rs, rv;
+			c.toHSV(rh, rs, rv);
+			// A few degrees of slack: fromHSV quantises to uint8 before toHSV inverts,
+			// so the round trip is not bit-exact.
+			float diff = std::fabs(rh - h);
+			if (diff > 180.0f) {
+				diff = 360.0f - diff;   // wrap distance, for the h=0 vs. h=360 case
+			}
+			assert(diff < 2.0f);
+			assert(rs > 0.98f);
+			assert(rv > 0.98f);
+		}
+
+		std::cout << "✓ testColorToHSVRoundTripsThroughFromHSV\n";
+	}
+
+	void testColorToHSVGreyHasCanonicalZeroHue() {
+		float h, s, v;
+		lvgui::Color(128, 128, 128, 255).toHSV(h, s, v);
+		assert(h == 0.0f);
+		assert(s == 0.0f);
+
+		lvgui::Color(0, 0, 0, 255).toHSV(h, s, v);
+		assert(h == 0.0f);
+		assert(v == 0.0f);
+
+		std::cout << "✓ testColorToHSVGreyHasCanonicalZeroHue\n";
 	}
 
 	// --- Geometry-position tests -------------------------------------------------
@@ -636,6 +812,11 @@ int main() {
 	testRectFilledBasic();
 	testSameClipRectOneCommand();
 	testDifferentClipRectsTwoCommands();
+	testAddImageEmitsCorrectPositionsUVsAndTint();
+	testAddImageDefaultsToFullUVAndOpaqueWhiteTint();
+	testConsecutiveAddImageSameTextureBatchesIntoOneCommand();
+	testSwitchingTextureIdStartsANewCommand();
+	testAddImageInsideAClipRectAlsoSplitsOnClipChange();
 	testClipIntersection();
 	testPopClipRectNoUnderflow();
 	testCoordinatesSnappedToIntegers();
@@ -645,6 +826,10 @@ int main() {
 	testRect();
 	testVec2();
 	testColorOperations();
+	testColorFromHSVPrimaryAndSecondaryHues();
+	testColorFromHSVSaturationAndValueExtremes();
+	testColorToHSVRoundTripsThroughFromHSV();
+	testColorToHSVGreyHasCanonicalZeroHue();
 	testAddTextEmitsOneQuadPerVisibleGlyph();
 	testAddTextSkipsWhitespaceQuads();
 	testAddTextClippedTruncatesAndClips();

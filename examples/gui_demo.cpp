@@ -13,10 +13,15 @@
 //   DropDown    -- a short-list combo, a 20-item one to exercise popup scrolling, and a
 //                  third in its own panel pinned near the bottom edge of the window to
 //                  exercise the upward popup flip
+//   ListBox     -- always-visible selectable list (unlike DropDown, never collapses
+//                  behind a control row); click a row, or Tab-focus + Up/Down
 //   Composites  -- Row (horizontal layout by weight), Vec3Field (X/Y/Z with coloured
 //                  borders), CollapsingSection (header + collapsible children),
 //                  ProgressBar (fraction + indeterminate animation), PlotLine (sparkline
-//                  with auto-scale hysteresis)
+//                  with auto-scale hysteresis), TabBar (named tabs, only the active
+//                  one's children are live -- click a tab, or Tab-focus + Left/Right)
+//   ColorEdit   -- ColorEdit3 (RGB) and ColorEdit4 (RGBA); click the swatch to open the
+//                  SV square + hue strip (+ alpha strip for the RGBA one)
 //   Panels      -- dragging and z-order; scrolling (the main panel is deliberately
 //                  shorter than its content, so try the wheel and the scrollbar grab);
 //                  the resize grip in any panel's bottom-right corner; the title-bar
@@ -24,6 +29,23 @@
 //                  "Theme", which also hosts the light/dark/high-contrast switcher --
 //                  resize the window to watch it hold its corner offset); and a tooltip
 //                  (hover "Gravity")
+//   Setup       -- VkApp::setGuiCreateInfo(), called before init(), to bake the font at
+//                  15px instead of the 14px default
+//   Persistence -- GuiContext::saveLayout()/loadLayout(): the main and Theme panels
+//                  remember their position/size/collapsed/scroll across runs via
+//                  gui_demo_layout.txt next to the executable
+//   Image       -- a CPU-generated colormap legend, uploaded via
+//                  VkApp::registerUiTexture()
+//   ContextMenu -- right-click anywhere in the window: reset gravity, toggle the grid,
+//                  or log a message. Detected via app.setUpdateCallback() polling
+//                  ctx.input().mouseReleased[Right] -- GuiContext has no built-in
+//                  right-click gesture of its own (docs/gui/05, "ContextMenu")
+//   LogView     -- a fake solver feeds it a line every half second; wheel or drag its
+//                  scrollbar thumb to read history, End to jump back and resume
+//                  following new output (docs/gui/05, "LogView")
+//   Modal       -- "Clear log..." opens a confirmation dialog that blocks every other
+//                  panel and the camera entirely until dismissed (Cancel, Clear it,
+//                  the title-bar X, or Escape) -- docs/gui/05, "Panel", "Modal panels"
 
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -32,8 +54,12 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
+#include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
+#include <sstream>
+#include <vector>
 
 namespace lvgui = lightGraphics::ui;
 
@@ -42,6 +68,15 @@ int main()
 	try
 	{
 		lightGraphics::VkApp app;
+
+		// setGuiCreateInfo() must be called before init() -- it configures the GuiContext
+		// init() constructs. A slightly larger font than the 14px default, set once here:
+		// GuiCreateInfo::fontSize is authoritative over theme.fontSize (docs/gui/07-public-
+		// api.md), so this is the only place that needs to know the chosen size.
+		lvgui::GuiCreateInfo guiInfo;
+		guiInfo.fontSize = 15.0f;
+		app.setGuiCreateInfo(guiInfo);
+
 		app.init(1280, 800, "LVGUI Demo");
 
 		app.setCameraLookAt({ 4.0f, 2.5f, 6.0f }, { 0.0f, 0.0f, 0.0f });
@@ -69,6 +104,10 @@ int main()
 		// gutter. The bottom-right corner is also a resize grip (Resizable is on by
 		// default, PanelFlags::Default); drag it to see the minimum-size clamp.
 		auto* panel = gui.createPanel("LVGUI Demo", { 40.0f, 40.0f, 340.0f, 700.0f });
+		// Opts this panel into GuiContext::saveLayout()/loadLayout() (docs/gui/05,
+		// "Panel", "Layout persistence") -- see the loadLayout()/saveLayout() calls
+		// bracketing app.run() below.
+		panel->setPersistenceId("main");
 
 		panel->add<lvgui::Label>("Basics -- Label, Separator, Spacer, Button");
 		panel->add<lvgui::Label>("Drag this title bar around")->setColor({ 0x9A, 0xA3, 0xAF, 0xFF });
@@ -189,6 +228,24 @@ int main()
 		auto* bottomPanel = gui.createPanel("Near bottom edge", { 420.0f, 700.0f, 280.0f, 80.0f });
 		bottomPanel->add<lvgui::DropDown>("Flips upward", qualityPresets, 0);
 
+		panel->add<lvgui::Separator>("ListBox");
+
+		// Unlike DropDown, always visible -- the right shape when the selection itself
+		// is the point, not a setting tucked behind a control row (docs/gui/05,
+		// "ListBox"). Click a row, or Tab-focus it and use Up/Down.
+		static std::vector<std::string> timesteps = [] {
+			std::vector<std::string> items;
+			for (int i = 0; i < 12; ++i) {
+				items.push_back("t = " + std::to_string(i) + ".0s");
+			}
+			return items;
+		}();
+		auto* timestepList = panel->add<lvgui::ListBox>("Timestep", timesteps, 0);
+		timestepList->setVisibleRows(4);
+		timestepList->setOnChange([](int idx) {
+			std::cout << "[gui-demo] timestep -> " << idx << std::endl;
+		});
+
 		// CompositeWidget-derived and simple value widgets
 		panel->add<lvgui::Separator>("Row, Vec3Field, CollapsingSection");
 
@@ -213,6 +270,34 @@ int main()
 		section->add<lvgui::Checkbox>("Enable optimization");
 		section->add<lvgui::Checkbox>("Use caching");
 
+		// ColorEdit3/ColorEdit4: click the swatch to open the picker (SV square + hue
+		// strip, plus an alpha strip for the RGBA variant).
+		auto* tint = panel->add<lvgui::ColorEdit3>("Tint", lvgui::Color::fromHex(0x3D8BFD));
+		tint->setOnChange([](lvgui::Color c) {
+			std::cout << "[gui-demo] tint -> (" << static_cast<int>(c.r) << ", " << static_cast<int>(c.g)
+			          << ", " << static_cast<int>(c.b) << ")" << std::endl;
+		});
+		panel->add<lvgui::ColorEdit4>("Glow (RGBA)", lvgui::Color{ 0x5A, 0xD0, 0x9A, 0x80 });
+
+		// Image: a colormap legend, generated on the CPU as a 64x1 RGBA strip and
+		// uploaded once via VkApp::registerUiTexture() (docs/gui/05-widgets.md, "Image").
+		// A 1px-tall source stretched to 20px draws a smooth gradient, not a blocky one --
+		// the atlas sampler (shared with every registered texture, UiRenderer.h) filters
+		// linearly. This is the exact "colormap legend" use case docs/gui/ROADMAP.md
+		// named when texture support was still on the roadmap instead of built.
+		constexpr int kLegendWidth = 64;
+		std::vector<std::uint8_t> legendPixels(static_cast<std::size_t>(kLegendWidth) * 4);
+		for (int x = 0; x < kLegendWidth; ++x) {
+			float t = static_cast<float>(x) / static_cast<float>(kLegendWidth - 1);
+			lvgui::Color c = lvgui::Color::fromHSV(240.0f * (1.0f - t), 1.0f, 1.0f);   // blue -> red
+			legendPixels[static_cast<std::size_t>(x) * 4 + 0] = c.r;
+			legendPixels[static_cast<std::size_t>(x) * 4 + 1] = c.g;
+			legendPixels[static_cast<std::size_t>(x) * 4 + 2] = c.b;
+			legendPixels[static_cast<std::size_t>(x) * 4 + 3] = 0xFF;
+		}
+		lvgui::TextureId legendTexture = app.registerUiTexture(legendPixels.data(), kLegendWidth, 1);
+		panel->add<lvgui::Image>("Colormap", legendTexture, lvgui::Vec2{ 200.0f, 20.0f });
+
 		// ProgressBar with indeterminate animation
 		auto* progressBar = panel->add<lvgui::ProgressBar>("Loading");
 		progressBar->setIndeterminate(true);
@@ -227,6 +312,19 @@ int main()
 			float angle = (i / 50.0f) * 6.28f;  // 0 to 2π
 			plotLine->push(std::sin(angle) * 0.5f + 0.5f);
 		}
+
+		panel->add<lvgui::Separator>("TabBar");
+
+		// TabBar: groups content under named tabs instead of vertical stacking -- only
+		// the active tab's children exist as far as update/draw/hit-test/layout are
+		// concerned. Click a tab, or Tab-focus the bar and use Left/Right.
+		auto* tabs = panel->add<lvgui::TabBar>();
+		auto physicsTab = tabs->addTab("Physics");
+		auto renderTab = tabs->addTab("Render");
+		physicsTab.add<lvgui::Checkbox>("Enable collisions", true);
+		physicsTab.add<lvgui::Slider>("Damping", 0.0f, 1.0f, 0.1f);
+		renderTab.add<lvgui::Checkbox>("Wireframe", false);
+		renderTab.add<lvgui::Checkbox>("Show normals", false);
 
 		// A Closable panel: the title bar grows an X at its trailing edge, and clicking it
 		// hides the panel and fires setOnClose(). The handler here just logs -- to remove
@@ -250,6 +348,7 @@ int main()
 		// already have one").
 		auto* themePanel = gui.createPanel("Theme", { 1280.0f - 220.0f, 20.0f, 200.0f, 60.0f });
 		themePanel->setAnchor(lvgui::Panel::Anchor::TopRight);
+		themePanel->setPersistenceId("theme");
 		static std::vector<std::string> themeNames = { "Dark", "Light", "High Contrast" };
 		auto* themeDropdown = themePanel->add<lvgui::DropDown>("Theme", themeNames, 0);
 		themeDropdown->setOnChange([&gui](int idx) {
@@ -265,7 +364,97 @@ int main()
 		// DropDown's upward popup flip).
 		bottomPanel->setAnchor(lvgui::Panel::Anchor::BottomLeft);
 
+		panel->add<lvgui::Separator>("LogView");
+
+		// Read-only, word-wrapping, internally scrollable (docs/gui/05, "LogView") --
+		// unlike ListBox, this owns its OWN scroll state rather than a Panel's, and
+		// auto-follows new content until you scroll away to read history (try the wheel,
+		// or drag the scrollbar thumb -- unlike DropDown/ListBox's popup scrollbars,
+		// this one IS draggable).
+		auto* solverLog = panel->add<lvgui::LogView>("Solver output");
+		solverLog->setHeight(120.0f);
+		solverLog->setMaxLines(200);
+		solverLog->push("[gui-demo] log view ready -- watch this fill as the demo runs");
+
+		panel->add<lvgui::Separator>("Modal");
+
+		// A confirmation dialog -- created once, hidden until needed. It's an ordinary
+		// Panel; PanelFlags::Modal is what makes GuiContext block every other panel
+		// (and the camera hand-off entirely) while it's visible (docs/gui/05, "Panel",
+		// "Modal panels"). PanelFlags::Closable adds the title-bar X and lets Escape
+		// dismiss it, same as Cancel.
+		auto* confirmModal = gui.createPanel("Clear log?", { 460.0f, 260.0f, 300.0f, 140.0f },
+			lvgui::PanelFlags::Modal | lvgui::PanelFlags::Closable);
+		confirmModal->setVisible(false);
+		confirmModal->add<lvgui::Label>("This clears every line currently in the solver log.")
+			->setWordWrap(true);
+		auto* confirmRow = confirmModal->add<lvgui::Row>();
+		auto* cancelButton = confirmRow->add<lvgui::Button>("Cancel");
+		auto* confirmButton = confirmRow->add<lvgui::Button>("Clear it");
+		cancelButton->setOnClick([confirmModal] { confirmModal->setVisible(false); });
+		confirmButton->setOnClick([confirmModal, solverLog] {
+			solverLog->clear();
+			confirmModal->setVisible(false);
+		});
+
+		auto* clearLogButton = panel->add<lvgui::Button>("Clear log...");
+		clearLogButton->setOnClick([confirmModal] {
+			confirmModal->setVisible(true);
+			// Deliberately NOT calling bringToFront(): the active modal draws through
+			// the overlay list regardless of its own raw z-order position
+			// (docs/gui/05, "Panel", "Modal panels"), so a modal shown again after
+			// being hidden doesn't need reordering to appear on top and receive input.
+		});
+
+		// ContextMenu: right-click anywhere in the window for it. GuiContext has no
+		// built-in right-click gesture of its own (docs/gui/05, "ContextMenu") -- this
+		// polls ctx.input().mouseReleased[Right] from the application's OWN per-frame
+		// callback, exactly the way any consumer would drive one, whether from here or
+		// from inside a specific widget's own update().
+		auto* rightClickMenu = panel->add<lvgui::ContextMenu>();
+		rightClickMenu->addItem("Reset gravity to 9.81", [gravity] { gravity->setValue(9.81f, true); });
+		rightClickMenu->addItem("Toggle grid", [] { showGrid = !showGrid; });
+		rightClickMenu->addSeparator();
+		rightClickMenu->addItem("Log a message", [solverLog] { solverLog->push("[gui-demo] context menu action"); });
+
+		app.setUpdateCallback([&gui, rightClickMenu, solverLog](float dt) {
+			const lvgui::InputState& in = gui.input();
+			if (in.mouseReleased[static_cast<int>(lvgui::MouseButton::Right)]) {
+				rightClickMenu->open(in.mousePos);
+			}
+
+			// A fake "solver" feeding the log view periodically, so isFollowingBottom()'s
+			// stick-to-bottom behaviour is visible without needing the context menu.
+			static float logAccum = 0.0f;
+			static int logStep = 0;
+			logAccum += dt;
+			if (logAccum >= 0.5f) {
+				logAccum -= 0.5f;
+				++logStep;
+				solverLog->push("[step " + std::to_string(logStep) + "] residual = " +
+				                 std::to_string(1.0f / static_cast<float>(logStep + 1)));
+			}
+		});
+
+		// Restore "main" and "theme"'s saved position/size/collapsed/scroll from the last
+		// run, if there is one -- both panels above already exist by this point, which is
+		// what loadLayout() requires (docs/gui_usage.md, "Remembering where panels were
+		// left"). Safe even before either has ever had a layout() pass run against it.
+		const char* kLayoutPath = "gui_demo_layout.txt";
+		if (std::ifstream layoutIn(kLayoutPath); layoutIn) {
+			std::ostringstream buf;
+			buf << layoutIn.rdbuf();
+			gui.loadLayout(buf.str());
+			std::cout << "[gui-demo] restored panel layout from " << kLayoutPath << std::endl;
+		}
+
 		app.run();
+
+		// app.run() returns once the window closes -- save whatever position/size/
+		// collapsed/scroll state "main" and "theme" ended up with for next launch.
+		std::ofstream layoutOut(kLayoutPath);
+		layoutOut << gui.saveLayout();
+		std::cout << "[gui-demo] saved panel layout to " << kLayoutPath << std::endl;
 	}
 	catch (const std::exception& error)
 	{

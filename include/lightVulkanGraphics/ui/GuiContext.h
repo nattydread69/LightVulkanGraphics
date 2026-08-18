@@ -32,10 +32,19 @@ namespace lightGraphics::ui {
 class UiPlatformGlfw;
 
 struct GuiCreateInfo {
-	// Required: the path to a TrueType file to bake. There is no built-in search order
-	// yet, so leaving this empty throws rather than falling back to a bundled default --
-	// see the constructor. VkApp::initUi() fills it in via findFontPath().
+	// The path to a TrueType file to bake. Left empty, the constructor falls back to a
+	// small built-in search for the bundled Inter font (env var
+	// LIGHT_VULKAN_GRAPHICS_FONT_PATH, build tree, install prefix -- see
+	// findBundledFontPath(), GuiContext.cpp) and throws only if that search comes up
+	// empty too. A VkApp-based consumer never has to think about any of this:
+	// VkApp::initUi() already resolves a concrete path via its own findFontPath() before
+	// constructing GuiContext. This fallback exists for a caller constructing a bare
+	// GuiContext directly, without VkApp.
 	std::string fontPath;
+	// Drives the font bake (via GuiContext's constructor). Authoritative over
+	// theme.fontSize below -- the constructor overwrites theme.fontSize from this value,
+	// so the two can never independently disagree about what size text actually renders
+	// at. Set this, not theme.fontSize, to change the GUI's font size.
 	float       fontSize      = 14.0f;
 	Theme       theme         = Theme::dark();
 	int         atlasWidth    = 512;
@@ -53,7 +62,8 @@ class GuiContext {
 public:
 	// Throws std::runtime_error if fontPath cannot be opened or fails to bake (see
 	// docs/gui/07-public-api.md, "Error handling policy" -- construction failures throw).
-	// An empty fontPath also throws -- see GuiCreateInfo::fontPath above.
+	// An empty fontPath also throws, but only once the built-in search described on
+	// GuiCreateInfo::fontPath (above) has already failed to find anything either.
 	GuiContext(const GuiCreateInfo&, PlatformHooks);
 	~GuiContext();
 
@@ -66,6 +76,16 @@ public:
 	void   destroyAllPanels();
 	std::size_t panelCount() const { return m_panels.size(); }
 	Panel* panelAt(std::size_t index) const;   // index 0 = frontmost
+	// The frontmost currently-visible PanelFlags::Modal panel, or nullptr if none is open
+	// (docs/gui/05-widgets.md, "Panel", "Modal panels"). m_panels is already stored
+	// front-to-back, so this is the first Modal match found walking it -- which is also
+	// exactly what governs input while it's non-null: hover/hit-testing and Tab-focus
+	// collection are restricted to this one panel, and wantsMouse()/wantsKeyboard()/
+	// wantsScroll() all report true unconditionally. If more than one Modal panel is
+	// visible at once (a confirmation opened from inside another modal), the newest one
+	// -- inserted frontmost by createPanel() -- blocks the older one too, the same way a
+	// nested native dialog blocks its parent, without this needing an explicit stack.
+	Panel* activeModalPanel() const;
 
 	// ---- frame ----
 	void beginFrame(Vec2 displaySize, float contentScale, float deltaTime);
@@ -74,6 +94,10 @@ public:
 	const DrawList& drawList() const { return m_drawList; }
 
 	// ---- input hand-off ----
+	// All three unconditionally report true whenever activeModalPanel() is non-null,
+	// regardless of cursor position or focus state -- docs/gui/05-widgets.md, "Panel",
+	// "Modal panels": a modal has to swallow the camera hand-off outright, not just over
+	// its own rect, or a click past its edge would reach the 3D scene underneath it.
 	bool wantsMouse()    const;
 	bool wantsKeyboard() const;
 	// docs/gui/04-input-and-events.md, "Scroll wheel": the resolution of "wheel
@@ -161,6 +185,25 @@ public:
 	void postToMainThread(std::function<void()>);
 	bool atlasNeedsRebuild() const { return m_atlasNeedsRebuild; }
 	void acknowledgeAtlasRebuild() { m_atlasNeedsRebuild = false; }
+
+	// ---- layout persistence (docs/gui/05-widgets.md, "Panel", "Layout persistence") ----
+	// Serializes bounds/collapsed/scrollY for every CURRENT panel that has a non-empty
+	// Panel::persistenceId() set -- panels without one are silently skipped (see
+	// Panel::setPersistenceId's comment on why this is opt-in rather than title-keyed).
+	// The format is a small dependency-free `[id]` + `key=value` text blob, not
+	// JSON/INI-via-a-library, matching 00-overview.md's "zero external GUI dependency"
+	// goal -- there is intentionally no schema version or nesting, because there is
+	// nothing here that needs either.
+	std::string saveLayout() const;
+	// Applies saved state to whichever CURRENTLY EXISTING panels have a matching
+	// persistenceId() -- a panel created after this call, or whose id isn't present in
+	// `data`, is left exactly as it was constructed. Unrecognised sections/keys and
+	// malformed numbers are skipped line-by-line rather than thrown: this is a
+	// best-effort restore of a previous session's layout, not a construction-time
+	// contract (docs/gui/07-public-api.md, "Error handling policy" -- this falls under
+	// "per-frame operations never throw", not "construction failures throw", since it can
+	// run at any point after panels exist, not only at startup).
+	void loadLayout(std::string_view data);
 
 private:
 	void rebakeFont(float contentScale);

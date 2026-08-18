@@ -252,9 +252,15 @@ Mirrors the search order `SHADER_PATHS.md` already describes for `spv/`. Search 
 4. `../share/LightVulkanGraphics/fonts/`, `/usr/local/share/LightVulkanGraphics/fonts/`,
    `/usr/share/LightVulkanGraphics/fonts/` — install locations
 
-The resolved path is what's actually passed into `GuiCreateInfo::fontPath`; there is no
-separate "explicit override" step yet at the `GuiCreateInfo` level itself (fontPath is
-currently required and used as-is — see [07-public-api.md](07-public-api.md)).
+For a `VkApp`-based consumer, `VkApp::findFontPath()` (`VkAppUi.cpp`) runs this search
+and passes the resolved path into `GuiCreateInfo::fontPath` before `GuiContext` is ever
+constructed. A caller constructing a bare `GuiContext` directly, without `VkApp`, gets
+the identical search order run again independently — `GuiContext`'s own
+`findBundledFontPath()` (`GuiContext.cpp`) — since `LightVulkanGraphicsUI` cannot call
+into `VkApp`'s copy (the dependency runs core → UI, never the reverse; see
+[00-overview.md](00-overview.md)). Either way, an explicit `GuiCreateInfo::fontPath`
+always wins outright — the search only ever runs when it's left empty (see
+[07-public-api.md](07-public-api.md)).
 
 Install to `${DATAROOTDIR}/LightVulkanGraphics/fonts/`.
 

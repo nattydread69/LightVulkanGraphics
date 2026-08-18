@@ -21,7 +21,8 @@ include/lightVulkanGraphics/ui/
     widgets/
         Label.h  Separator.h  Spacer.h  Button.h  Checkbox.h  RadioButton.h
         Slider.h  DragValue.h  Vec3Field.h  TextBox.h  DropDown.h
-        ProgressBar.h  PlotLine.h  CollapsingSection.h  Row.h
+        ProgressBar.h  PlotLine.h  CollapsingSection.h  Row.h  ColorEdit.h  Image.h
+        TabBar.h  ListBox.h  ContextMenu.h  LogView.h
 ```
 
 `*` `PlatformHooks` is declared in `GuiContext.h` itself; `src/ui/UiPlatformGlfw.h`
@@ -167,10 +168,15 @@ compare it against the live content scale and decide when to rebake.
 namespace lightGraphics::ui {
 
 struct GuiCreateInfo {
-    // Required for now -- GuiContext throws if this is empty. VkApp resolves it via its
-    // own font search order (see 03-text-and-fonts.md, "Font asset resolution") before
-    // ever constructing a GuiCreateInfo; GuiContext itself has no fallback search of its
-    // own yet.
+    // Left empty, GuiContext's constructor falls back to its own bundled-font search
+    // (findBundledFontPath(), GuiContext.cpp -- env var, build tree, install prefix) and
+    // throws only if THAT comes up empty too. VkApp-based consumers never exercise this
+    // path at all: VkApp resolves a concrete path via its own font search order (see
+    // 03-text-and-fonts.md, "Font asset resolution") before ever constructing a
+    // GuiCreateInfo. The fallback exists for a caller constructing a bare GuiContext
+    // directly, without VkApp -- LightVulkanGraphicsUI cannot call into VkApp's search
+    // itself (the dependency runs core -> UI, never the reverse), so it duplicates the
+    // same search order rather than sharing it.
     std::string fontPath;
     float       fontSize      = 14.0f;
     Theme       theme         = Theme::dark();
@@ -199,6 +205,9 @@ public:
     void   destroyAllPanels();
     std::size_t panelCount() const;
     Panel* panelAt(std::size_t index) const;   // index 0 = frontmost
+    // Frontmost visible PanelFlags::Modal panel, or nullptr (docs/gui/05-widgets.md,
+    // "Panel", "Modal panels").
+    Panel* activeModalPanel() const;
 
     // ---- frame ----
     void beginFrame(Vec2 displaySize, float contentScale, float deltaTime);
@@ -235,6 +244,10 @@ public:
     void postToMainThread(std::function<void()>);
     bool atlasNeedsRebuild() const;     // renderer polls; clears on acknowledge
     void acknowledgeAtlasRebuild();
+
+    // ---- layout persistence (docs/gui/05-widgets.md, "Panel", "Layout persistence") ----
+    std::string saveLayout() const;
+    void        loadLayout(std::string_view);
 };
 
 } // namespace lightGraphics::ui
@@ -264,18 +277,29 @@ public:
     // ... existing API ...
 
 #ifdef LVG_WITH_UI
+    void            setGuiCreateInfo(const ui::GuiCreateInfo&);  // before init(); no effect after
     bool            hasGui() const;
     ui::GuiContext& gui();                 // asserts hasGui()
+
+    // For the Image widget (docs/gui/05-widgets.md, "Image").
+    ui::TextureId   registerUiTexture(const uint8_t* rgbaPixels, uint32_t width, uint32_t height);
+    void            unregisterUiTexture(ui::TextureId);
 #endif
 };
 
 } // namespace lightGraphics
 ```
 
-Threading a caller-supplied `GuiCreateInfo` (custom font path/size, initial theme)
-through `VkApp::init()` is not wired up yet — every app currently gets the same
-defaults. Switch themes at runtime with `gui.theme() = ...` in the meantime (see
-[06-layout-and-theme.md](06-layout-and-theme.md), "Theme").
+`setGuiCreateInfo()` follows the same "must be called before `init()`" convention as
+`setMaxTextureCount()`: it stores the struct, and `init()`'s call to `initUi()` is what
+actually constructs `GuiContext` from it. Fields left at `GuiCreateInfo`'s own defaults
+behave exactly as before this existed — an empty `fontPath` still resolves through the
+bundled-font search (`VkApp::findFontPath()`) rather than being passed through to throw.
+`fontSize` is authoritative over `theme.fontSize` (see `GuiCreateInfo::fontSize`'s
+comment) — set it once here rather than reconciling both fields by hand. Themes can
+still be swapped at runtime with `gui.theme() = ...` (see
+[06-layout-and-theme.md](06-layout-and-theme.md), "Theme"); doing so resets `fontSize`
+to that theme's own default, so re-apply a non-default size afterward if one was set.
 
 ## Usage — what a consumer writes
 

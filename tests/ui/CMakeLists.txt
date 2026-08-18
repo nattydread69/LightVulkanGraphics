@@ -158,6 +158,66 @@ target_compile_definitions(lvgui_panel_tests PRIVATE
 
 add_test(NAME lvgui_panel_tests COMMAND lvgui_panel_tests)
 
+# ColorEdit3/ColorEdit4 -- headless, same pattern as tests above.
+add_executable(lvgui_coloredit_tests
+	test_coloredit.cpp
+)
+target_link_libraries(lvgui_coloredit_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_coloredit_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_coloredit_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_coloredit_tests COMMAND lvgui_coloredit_tests)
+
+# ListBox -- headless, same pattern as tests above.
+add_executable(lvgui_listbox_tests
+	test_listbox.cpp
+)
+target_link_libraries(lvgui_listbox_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_listbox_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_listbox_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_listbox_tests COMMAND lvgui_listbox_tests)
+
+# ContextMenu -- headless, same pattern as tests above.
+add_executable(lvgui_contextmenu_tests
+	test_contextmenu.cpp
+)
+target_link_libraries(lvgui_contextmenu_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_contextmenu_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_contextmenu_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_contextmenu_tests COMMAND lvgui_contextmenu_tests)
+
+# LogView -- headless, same pattern as tests above.
+add_executable(lvgui_logview_tests
+	test_logview.cpp
+)
+target_link_libraries(lvgui_logview_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_logview_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_logview_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_logview_tests COMMAND lvgui_logview_tests)
+
+# Modal panels (PanelFlags::Modal) -- headless, same pattern as tests above.
+add_executable(lvgui_modal_tests
+	test_modal.cpp
+)
+target_link_libraries(lvgui_modal_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_modal_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_modal_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_modal_tests COMMAND lvgui_modal_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)

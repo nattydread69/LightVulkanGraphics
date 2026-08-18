@@ -1,4 +1,5 @@
 #include <lightVulkanGraphics/ui/Font.h>
+#include <lightVulkanGraphics/ui/GuiContext.h>
 #include <lightVulkanGraphics/ui/widgets/TextBox.h>
 #include "Utf8.h"
 
@@ -202,6 +203,20 @@ namespace {
 		assert(font.hasGlyph(lvgui::TextBox::kPasswordMaskCodepoint));
 		std::cout << "✓ testTextBoxPasswordMaskCodepointIsBakedByDefault\n";
 	}
+
+	// docs/gui/05-widgets.md / GuiContext.h, GuiCreateInfo::fontPath: a bare GuiContext
+	// (no VkApp) with fontPath left empty must fall back to findBundledFontPath()'s
+	// search (GuiContext.cpp) rather than throwing. LVG_BUILD_FONT_DIR is baked into the
+	// already-compiled LightVulkanGraphicsUI library as this project's real
+	// assets/fonts directory (CMakeLists.txt), so this needs no test-specific compile
+	// definition of its own -- unlike LVG_UI_TEST_FONT_PATH above, which every other
+	// test in this file depends on.
+	void testEmptyFontPathFallsBackToBundledFont() {
+		lvgui::GuiCreateInfo info;   // fontPath deliberately left default-constructed (empty)
+		lvgui::GuiContext ctx(info, lvgui::PlatformHooks{});
+		assert(ctx.font().isBaked());
+		std::cout << "✓ testEmptyFontPathFallsBackToBundledFont\n";
+	}
 }
 
 int main() {
@@ -221,6 +236,7 @@ int main() {
 	testGlyphInkFitsItsAdvance(font);
 	testFallbackGlyphIsNeverZeroSize(font);
 	testTextBoxPasswordMaskCodepointIsBakedByDefault(font);
+	testEmptyFontPathFallsBackToBundledFont();
 
 	std::cout << "\n✅ All Font tests passed!\n";
 	return 0;

@@ -79,6 +79,14 @@ public:
 	// postToMainThread() drains at the top of the next beginFrame(), before anything
 	// touches the panel list.
 	void setOnClose(std::function<void()> onClose) { m_onClose = std::move(onClose); }
+	// Hides the panel and fires setOnClose(), in that order -- the exact sequence the
+	// title-bar close button already performs (PanelFlags::Closable), extracted so
+	// GuiContext can trigger the identical behaviour from Escape on a Closable Modal
+	// panel (docs/gui/05-widgets.md, "Panel", "Modal panels") without duplicating it.
+	// Has no effect if PanelFlags::Closable isn't set -- same gate the button itself is
+	// subject to, so calling this on a panel that never opted into being closable can't
+	// silently hide it out from under a caller who didn't check first.
+	void requestClose();
 	void bringToFront();
 
 	// Anchoring (docs/gui/05, "Panel", "Anchoring and on-screen clamping").
@@ -90,6 +98,27 @@ public:
 	// docs/gui/05, takes none) to know the current displaySize.
 	void setAnchor(Anchor anchor) { m_anchor = anchor; }
 	Anchor anchor() const { return m_anchor; }
+
+	// Opt-in key for GuiContext::saveLayout()/loadLayout() (docs/gui/05, "Panel",
+	// "Layout persistence"). Empty (the default) means this panel is skipped by both --
+	// a title-derived key would be neither stable (consumers change display titles
+	// freely) nor unique (nothing stops two panels sharing one), so persistence keys off
+	// an explicit, consumer-chosen id instead. Must not contain '[', ']', or a newline --
+	// those are the save-format's own delimiters (see saveLayout()'s comment) and are not
+	// escaped.
+	void setPersistenceId(std::string id) { m_persistenceId = std::move(id); }
+	const std::string& persistenceId() const { return m_persistenceId; }
+
+	// Sets scrollY directly, WITHOUT clamping to the current maxScrollY() -- deliberately
+	// asymmetric with the wheel/scrollbar-drag paths in update(), which always clamp
+	// immediately. loadLayout() may call this before the first layout() pass has ever
+	// run, when m_contentHeight (and therefore maxScrollY()) doesn't reflect real content
+	// yet; clamping here against that not-yet-valid bound would silently discard a
+	// restored scroll position back to 0. Panel::layout()'s own existing
+	// `m_scrollY = std::clamp(...)` at the end of every pass (docs/gui/05, "Panel",
+	// "Scrolling") settles this to a valid value on the very next pass regardless -- the
+	// same self-correcting trick m_needsScrollbar's ordering trap already relies on.
+	void setScrollY(float y) { m_scrollY = y; }
 
 	std::size_t widgetCount() const { return m_widgets.size(); }
 	Widget* widgetAt(std::size_t index) const { return m_widgets[index].get(); }
@@ -195,6 +224,7 @@ private:
 
 	GuiContext& m_context;
 	std::string m_title;
+	std::string m_persistenceId;
 	Rect m_bounds;
 	PanelFlags m_flags;
 	bool m_visible = true;

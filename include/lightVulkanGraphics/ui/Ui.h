@@ -7,8 +7,8 @@
 //     #include <lightVulkanGraphics/ui/Ui.h>
 //     namespace lvgui = lightGraphics::ui;
 //
-// The design specification lives in docs/gui/. Subsequent phases will add includes for
-// the remaining widget headers as they land.
+// The design specification lives in docs/gui/. New widget headers get an include here
+// as they land.
 
 #include "Types.h"
 #include "Font.h"
@@ -36,3 +36,9 @@
 #include "widgets/CollapsingSection.h"
 #include "widgets/ProgressBar.h"
 #include "widgets/PlotLine.h"
+#include "widgets/ColorEdit.h"
+#include "widgets/Image.h"
+#include "widgets/TabBar.h"
+#include "widgets/ListBox.h"
+#include "widgets/ContextMenu.h"
+#include "widgets/LogView.h"

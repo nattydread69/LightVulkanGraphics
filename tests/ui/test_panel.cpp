@@ -1,5 +1,5 @@
-// Panel behaviour: scrolling, resize grip, anchoring, tooltips, and the two title-bar
-// buttons (collapse/close) -- headless, same pattern as
+// Panel behaviour: scrolling, resize grip, anchoring, tooltips, the two title-bar
+// buttons (collapse/close), and layout persistence -- headless, same pattern as
 // test_layout.cpp/test_hittest.cpp/test_dropdown.cpp: no Vulkan device, no window.
 // See docs/gui/05-widgets.md, "Panel", for the behaviour these pin down.
 
@@ -389,6 +389,97 @@ namespace {
 		std::cout << "✓ testTitleBarButtonsAreAbsentWithoutTheirFlags\n";
 	}
 
+	void testSaveLayoutSkipsPanelsWithoutAPersistenceId() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* kept = ctx.createPanel("Kept", { 10.0f, 10.0f, 100.0f, 100.0f });
+		kept->setPersistenceId("kept");
+		ctx.createPanel("Skipped", { 200.0f, 200.0f, 100.0f, 100.0f });   // no id set
+		step(ctx);
+
+		std::string saved = ctx.saveLayout();
+		assert(saved.find("[kept]") != std::string::npos);
+		assert(saved.find("[Skipped]") == std::string::npos);
+
+		std::cout << "✓ testSaveLayoutSkipsPanelsWithoutAPersistenceId\n";
+	}
+
+	void testSaveThenLoadRestoresBoundsAndCollapsed() {
+		std::string saved;
+		{
+			lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+			auto* panel = ctx.createPanel("Settings", { 10.0f, 10.0f, 100.0f, 100.0f },
+			                               lvgui::PanelFlags::Default);
+			panel->setPersistenceId("settings");
+			step(ctx);
+
+			panel->setBounds({ 340.0f, 220.0f, 260.0f, 180.0f });
+			panel->setCollapsed(true);
+			step(ctx);
+
+			saved = ctx.saveLayout();
+			assert(!saved.empty());
+		}
+
+		// A FRESH GuiContext and panel -- loadLayout() must work across sessions, not
+		// just onto the same Panel* it happened to be saved from (that's the whole
+		// point: this is meant to run again after the process restarts).
+		lvgui::GuiContext ctx2(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* restored = ctx2.createPanel("Settings", { 10.0f, 10.0f, 100.0f, 100.0f },
+		                                   lvgui::PanelFlags::Default);
+		restored->setPersistenceId("settings");
+		step(ctx2);
+
+		ctx2.loadLayout(saved);
+
+		assert(restored->bounds().x == 340.0f);
+		assert(restored->bounds().y == 220.0f);
+		assert(restored->bounds().w == 260.0f);
+		assert(restored->bounds().h == 180.0f);
+		assert(restored->collapsed());
+
+		std::cout << "✓ testSaveThenLoadRestoresBoundsAndCollapsed\n";
+	}
+
+	void testLoadLayoutIgnoresIdsWithNoMatchingCurrentPanel() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 10.0f, 10.0f, 100.0f, 100.0f });
+		panel->setPersistenceId("panel");
+		step(ctx);
+		lvgui::Rect before = panel->bounds();
+
+		// A section for an id nothing currently claims -- must be silently skipped, not
+		// crash and not disturb the panel that DOES exist.
+		ctx.loadLayout("[nonexistent-panel]\nx=999.0\ny=999.0\n");
+
+		assert(panel->bounds().x == before.x);
+		assert(panel->bounds().y == before.y);
+
+		std::cout << "✓ testLoadLayoutIgnoresIdsWithNoMatchingCurrentPanel\n";
+	}
+
+	void testLoadLayoutBeforeFirstLayoutPassStillClampsScrollYNextPass() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 220.0f, 120.0f });
+		panel->setPersistenceId("panel");
+		for (int i = 0; i < 6; ++i) {
+			panel->add<lvgui::Spacer>(40.0f);
+		}
+		// Deliberately no step() here -- loadLayout() runs before layout() has EVER
+		// computed a real m_contentHeight, so maxScrollY() would currently answer 0.
+		// setScrollY() must not clamp against that not-yet-valid bound (see its own
+		// comment, Panel.h) -- restoring an absurdly large value must not stick past the
+		// next real layout pass.
+		ctx.loadLayout("[panel]\nscrollY=99999.0\n");
+
+		step(ctx);   // runs layout() for the first time
+
+		assert(panel->needsScrollbar());
+		assert(panel->scrollY() >= 0.0f);
+		assert(panel->scrollY() <= panel->contentHeight());   // sanity: not still 99999
+
+		std::cout << "✓ testLoadLayoutBeforeFirstLayoutPassStillClampsScrollYNextPass\n";
+	}
+
 }
 
 int main() {
@@ -403,6 +494,10 @@ int main() {
 	testClickingCollapseArrowDoesNotAlsoDragThePanel();
 	testCloseButtonHidesThePanelAndFiresOnCloseOnce();
 	testTitleBarButtonsAreAbsentWithoutTheirFlags();
+	testSaveLayoutSkipsPanelsWithoutAPersistenceId();
+	testSaveThenLoadRestoresBoundsAndCollapsed();
+	testLoadLayoutIgnoresIdsWithNoMatchingCurrentPanel();
+	testLoadLayoutBeforeFirstLayoutPassStillClampsScrollYNextPass();
 
 	std::cout << "\n✅ All Panel tests passed!\n";
 	return 0;

@@ -6,8 +6,12 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <sstream>
 #include <stdexcept>
+#include <vector>
 
 namespace lightGraphics::ui {
 
@@ -48,6 +52,53 @@ namespace {
 			}
 		}
 	}
+
+	// Fallback search for the bundled Inter font when GuiCreateInfo::fontPath is left
+	// empty -- only ever exercised by a caller constructing a bare GuiContext directly,
+	// without VkApp. Every VkApp-based consumer already gets a resolved path from
+	// VkApp::initUi() (VkAppUi.cpp) before GuiContext is ever constructed, so for them
+	// this function is never even called.
+	//
+	// Deliberately duplicates VkApp::findFontPath()'s search order (env var, build-tree
+	// compile define, relative paths, install prefixes) rather than calling it: the
+	// dependency here runs core -> LightVulkanGraphicsUI, never the reverse
+	// (docs/gui/00-overview.md), so this library cannot call into VkApp's code no matter
+	// how identical the logic would otherwise be. LVG_BUILD_FONT_DIR is defined for
+	// BOTH targets in CMakeLists.txt for exactly this reason -- see the comment there.
+	// Returns an empty string, not a thrown exception, if nothing is found; the
+	// constructor decides what that means. `tried` accumulates every candidate path
+	// checked, success or not -- docs/gui/03-text-and-fonts.md, "Font asset resolution":
+	// "a GUI that silently renders nothing is worse than one that refuses to start, so
+	// name every path that was tried" (the same requirement VkApp::findFontPath()
+	// already meets for its own, separate copy of this search).
+	std::string findBundledFontPath(std::ostringstream& tried) {
+		std::vector<std::filesystem::path> searchRoots;
+
+		if (const char* envPath = std::getenv("LIGHT_VULKAN_GRAPHICS_FONT_PATH")) {
+			if (envPath[0] != '\0') {
+				searchRoots.emplace_back(envPath);
+			}
+		}
+
+#ifdef LVG_BUILD_FONT_DIR
+		searchRoots.emplace_back(LVG_BUILD_FONT_DIR);
+#endif
+
+		searchRoots.emplace_back("assets/fonts");
+		searchRoots.emplace_back("../assets/fonts");
+		searchRoots.emplace_back("../share/LightVulkanGraphics/fonts");
+		searchRoots.emplace_back("/usr/local/share/LightVulkanGraphics/fonts");
+		searchRoots.emplace_back("/usr/share/LightVulkanGraphics/fonts");
+
+		for (const auto& root : searchRoots) {
+			std::filesystem::path candidate = root / "Inter-Regular.ttf";
+			tried << "\n  " << candidate.string();
+			if (std::ifstream(candidate, std::ios::binary).good()) {
+				return candidate.string();
+			}
+		}
+		return {};
+	}
 }
 
 GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
@@ -57,23 +108,41 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 	, m_atlasHeight(info.atlasHeight)
 	, m_hooks(std::move(hooks))
 	, m_platform(std::make_unique<UiPlatformGlfw>()) {
-	if (info.fontPath.empty()) {
+	// GuiCreateInfo::fontSize is authoritative over theme.fontSize (see its comment,
+	// GuiContext.h): m_theme was just copy-constructed from info.theme, which may carry
+	// its own, independently-set fontSize (a caller who passed a custom Theme along with
+	// a custom fontSize could otherwise end up with the atlas baked at one size while
+	// every widget's row height and label metrics are computed from another). Overwriting
+	// here, once, up front, is what keeps m_fontSizeLogical and m_theme.fontSize
+	// impossible to observe as disagreeing anywhere else in this class.
+	m_theme.fontSize = m_fontSizeLogical;
+
+	// An empty fontPath falls back to the standard search order (findBundledFontPath(),
+	// above) rather than throwing outright -- this is what makes a bare GuiContext,
+	// constructed without VkApp, usable at all without a caller having to know where
+	// the bundled font landed on disk. VkApp-based consumers never observe this path:
+	// VkApp::initUi() (VkAppUi.cpp) already resolves a concrete fontPath via its own
+	// findFontPath() before constructing GuiContext.
+	std::string fontPath = info.fontPath;
+	std::ostringstream triedPaths;
+	if (fontPath.empty()) {
+		fontPath = findBundledFontPath(triedPaths);
+	}
+	if (fontPath.empty()) {
 		throw std::runtime_error(
-			"GuiContext: GuiCreateInfo::fontPath must name a TrueType file; there is no "
-			"built-in font search order yet (see docs/gui/07-public-api.md, GuiCreateInfo). "
-			"VkApp::initUi() resolves the bundled Inter font via findFontPath() and can be "
-			"used as a model.");
+			"GuiContext: GuiCreateInfo::fontPath was empty and no bundled font could be "
+			"found. Searched:" + triedPaths.str());
 	}
 
-	std::ifstream file(info.fontPath, std::ios::binary | std::ios::ate);
+	std::ifstream file(fontPath, std::ios::binary | std::ios::ate);
 	if (!file) {
-		throw std::runtime_error("GuiContext: could not open font file: " + info.fontPath);
+		throw std::runtime_error("GuiContext: could not open font file: " + fontPath);
 	}
 	std::streamsize size = file.tellg();
 	file.seekg(0, std::ios::beg);
 	m_fontData.resize(static_cast<std::size_t>(size));
 	if (!file.read(reinterpret_cast<char*>(m_fontData.data()), size)) {
-		throw std::runtime_error("GuiContext: could not read font file: " + info.fontPath);
+		throw std::runtime_error("GuiContext: could not read font file: " + fontPath);
 	}
 
 	m_font.bake(m_fontData, m_fontSizeLogical, m_atlasWidth, m_atlasHeight, 1.0f);
@@ -105,6 +174,15 @@ void GuiContext::destroyPanel(Panel* panel) {
 void GuiContext::destroyAllPanels() {
 	m_panels.clear();
 	m_hoveredPanel = nullptr;
+}
+
+Panel* GuiContext::activeModalPanel() const {
+	for (const auto& panelPtr : m_panels) {
+		if (panelPtr->visible() && hasFlag(panelPtr->flags(), PanelFlags::Modal)) {
+			return panelPtr.get();
+		}
+	}
+	return nullptr;
 }
 
 Panel* GuiContext::panelAt(std::size_t index) const {
@@ -214,8 +292,20 @@ void GuiContext::updateFocusNavigation() {
 			// needs to inspect the key queue for Escape at all: by the time its own
 			// update() runs, ctx.popupOwner() == this is already false, so it just sees
 			// "not open" like any other frame the popup happens to be closed.
+			//
+			// A Closable Modal panel is next in priority, above the generic "clear
+			// focus" default -- docs/gui/05-widgets.md, "Panel", "Modal panels": Escape
+			// dismissing a confirmation dialog is expected baseline behaviour, the same
+			// way clicking its own title-bar X already does (Panel::requestClose() is the
+			// exact same call that button makes). A non-Closable modal is left alone --
+			// PanelFlags::Closable is the panel's own opt-in signal that it may be
+			// dismissed this way at all, same gate the button itself is subject to, so a
+			// modal that deliberately omits it (forcing an explicit in-dialog choice)
+			// can't be bypassed via Escape either.
 			if (isPopupOpen()) {
 				closePopup();
+			} else if (Panel* modal = activeModalPanel()) {
+				modal->requestClose();
 			} else {
 				m_focusedId = kInvalidWidgetId;
 			}
@@ -225,9 +315,17 @@ void GuiContext::updateFocusNavigation() {
 			continue;
 		}
 
+		// docs/gui/05-widgets.md, "Panel", "Modal panels": Tab must not be able to leave
+		// the modal for a background panel's own controls -- collecting focusable
+		// widgets from anywhere else while one is open would make this whole mechanism
+		// pointless the moment a keyboard-only user tried it.
+		Panel* modal = activeModalPanel();
 		std::vector<Widget*> focusable;
 		for (auto& panelPtr : m_panels) {
 			if (!panelPtr->visible()) {
+				continue;
+			}
+			if (modal && panelPtr.get() != modal) {
 				continue;
 			}
 			for (std::size_t i = 0; i < panelPtr->widgetCount(); ++i) {
@@ -283,6 +381,13 @@ void GuiContext::update() {
 		popup = nullptr;
 	}
 
+	// docs/gui/05-widgets.md, "Panel", "Modal panels": while a Modal panel is open, it is
+	// the ONLY panel this walk can ever resolve to -- every other panel (and the 3D scene
+	// behind all of them, via wantsMouse()/wantsScroll() below) is unreachable until it
+	// closes. A popup belonging to a widget INSIDE the modal is unaffected: popupHit is
+	// still checked first, same as always, since the modal is what registered it.
+	Panel* modal = activeModalPanel();
+
 	// (a) hit test panels front-to-back; m_panels[0] is frontmost. Skipped entirely when
 	// the popup claims the point -- it must win even over a DIFFERENT panel that
 	// happens to overlap the popup rect and sits in front of the popup's own owner.
@@ -290,6 +395,9 @@ void GuiContext::update() {
 	if (!popupHit) {
 		for (auto& panelPtr : m_panels) {
 			Panel* p = panelPtr.get();
+			if (modal && p != modal) {
+				continue;
+			}
 			if (p->visible() && p->hitTest(mouse)) {
 				hoveredPanel = p;
 				break;
@@ -378,7 +486,16 @@ void GuiContext::update() {
 
 	updateFocusNavigation();
 
-	// (e) panels update front-to-back (each panel updates its own widgets).
+	// (e) panels update front-to-back (each panel updates its own widgets). Deliberately
+	// NOT restricted to the modal panel while one is open: every widget's own
+	// press/drag/hover/focus handling already checks ctx.activeId()/hoveredId()/
+	// focusedId() against its own id, and those can never resolve to anything outside
+	// the modal while it's open (see the hoveredPanel walk above) -- so a background
+	// widget's update() is a harmless no-op for anything interactive. What it must NOT
+	// be blocked for is passive, time-driven state that has nothing to do with capture --
+	// a ProgressBar's indeterminate sweep, a LogView still receiving pushed lines -- a
+	// modal blocks INTERACTION, not the rest of the application quietly continuing
+	// underneath it.
 	for (auto& panelPtr : m_panels) {
 		if (panelPtr->visible()) {
 			panelPtr->update(*this);
@@ -406,10 +523,35 @@ void GuiContext::endFrame() {
 	m_drawList.clear();
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 
+	// The active modal panel (if any) is drawn separately, below, into the overlay list
+	// instead of here -- see that block's own comment for why.
+	Panel* modal = activeModalPanel();
 	for (auto it = m_panels.rbegin(); it != m_panels.rend(); ++it) {
+		if (it->get() == modal) {
+			continue;
+		}
 		if ((*it)->visible()) {
 			(*it)->draw(m_drawList, *this);
 		}
+	}
+
+	// docs/gui/05-widgets.md, "Panel", "Modal panels": the backdrop and the modal panel
+	// itself draw into the overlay list, which is guaranteed to land above every panel
+	// drawn above regardless of the modal's own raw position in m_panels -- the same
+	// reason DropDown's popup already has to escape its owner's z-order (see the comment
+	// just below). A modal created early and shown later via setVisible(true), rather
+	// than freshly createPanel()'d, keeps whatever z-order slot it already had; without
+	// this it could end up drawn BEHIND a panel raised afterward even though it is the
+	// one actually receiving all interaction, which would look broken. Drawn before the
+	// popup/tooltip sections below so a popup opened from a widget INSIDE the modal
+	// still lands on top of it, not underneath.
+	if (modal) {
+		Vec2 display = input().displaySize;
+		Rect fullscreen{ 0.0f, 0.0f, display.x, display.y };
+		m_overlayList.pushClipRect(fullscreen, /*intersectWithCurrent=*/false);
+		m_overlayList.addRectFilled(fullscreen, m_theme.modalBackdrop);
+		m_overlayList.popClipRect();
+		modal->draw(m_overlayList, *this);
 	}
 
 	// The popup draws into overlayList AFTER every panel above -- docs/gui/05,
@@ -444,6 +586,15 @@ void GuiContext::endFrame() {
 }
 
 bool GuiContext::wantsMouse() const {
+	// docs/gui/05-widgets.md, "Panel", "Modal panels": swallows the camera hand-off
+	// outright while a modal is open, independent of cursor position -- a click past its
+	// edge must not reach the 3D scene underneath it. This has to be checked here, not
+	// left to fall out of m_hoveredPanel alone: the whole point of a modal is that
+	// clicking OUTSIDE it (where m_hoveredPanel would otherwise be null) is exactly the
+	// case that must still say yes.
+	if (activeModalPanel() != nullptr) {
+		return true;
+	}
 	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr || isPopupOpen();
 }
 
@@ -452,7 +603,12 @@ bool GuiContext::wantsScroll() const {
 	// wantsMouse() (deliberately true over any panel, to swallow drags/clicks aimed at the
 	// panel's own background), this asks the narrower question "will something actually
 	// react to a wheel tick right now" so a non-overflowing panel doesn't blind the camera
-	// to zoom/dolly for no reason.
+	// to zoom/dolly for no reason. A modal is the one exception to that narrowing -- see
+	// wantsMouse()'s comment; the camera must not dolly through a dialog that has nothing
+	// scrollable in it either.
+	if (activeModalPanel() != nullptr) {
+		return true;
+	}
 	if (isPopupOpen()) {
 		return true;
 	}
@@ -465,6 +621,11 @@ bool GuiContext::wantsScroll() const {
 }
 
 bool GuiContext::wantsKeyboard() const {
+	// See wantsMouse()'s comment -- the same "swallow it outright, not just over our own
+	// rect" reasoning applies to the keyboard-driven camera (WASD) hand-off.
+	if (activeModalPanel() != nullptr) {
+		return true;
+	}
 	if (m_focusedId == kInvalidWidgetId) {
 		return false;
 	}
@@ -596,6 +757,80 @@ void GuiContext::drawTooltip(const Widget& w) {
 void GuiContext::postToMainThread(std::function<void()> fn) {
 	std::lock_guard<std::mutex> lock(m_mainThreadMutex);
 	m_mainThreadQueue.push_back(std::move(fn));
+}
+
+std::string GuiContext::saveLayout() const {
+	// %.6f / std::strtof (loadLayout, below) both go through the C locale, not this
+	// process's global one -- fine for a config-style file nothing but this parser ever
+	// reads, but worth naming: a consumer that has called std::setlocale() to a locale
+	// with a non-'.' decimal point would still round-trip correctly against ITSELF (both
+	// sides use the same locale), just not against a file produced under a different one.
+	std::ostringstream out;
+	char line[256];
+	for (const auto& panelPtr : m_panels) {
+		const Panel& p = *panelPtr;
+		if (p.persistenceId().empty()) {
+			continue;
+		}
+		Rect b = p.bounds();
+		out << '[' << p.persistenceId() << "]\n";
+		std::snprintf(line, sizeof(line), "x=%.6f\ny=%.6f\nw=%.6f\nh=%.6f\ncollapsed=%d\nscrollY=%.6f\n",
+		              b.x, b.y, b.w, b.h, p.collapsed() ? 1 : 0, p.scrollY());
+		out << line << '\n';
+	}
+	return out.str();
+}
+
+void GuiContext::loadLayout(std::string_view data) {
+	Panel* current = nullptr;
+	std::istringstream in{ std::string(data) };
+	std::string lineStr;
+	while (std::getline(in, lineStr)) {
+		if (lineStr.empty()) {
+			continue;
+		}
+		if (lineStr.front() == '[' && lineStr.back() == ']') {
+			std::string id = lineStr.substr(1, lineStr.size() - 2);
+			// Re-resolved by VALUE every time a new section starts, not cached from
+			// saveLayout()'s panel list -- loadLayout() may run against a different
+			// GuiContext's panels (a fresh session) than the one that wrote `data`, so
+			// there is no earlier Panel* to reuse even in principle.
+			current = nullptr;
+			for (const auto& panelPtr : m_panels) {
+				if (panelPtr->persistenceId() == id) {
+					current = panelPtr.get();
+					break;
+				}
+			}
+			continue;
+		}
+		if (!current) {
+			continue;   // section for a panel that doesn't currently exist -- skip its lines
+		}
+		std::size_t eq = lineStr.find('=');
+		if (eq == std::string::npos) {
+			continue;
+		}
+		std::string key = lineStr.substr(0, eq);
+		float value = std::strtof(lineStr.c_str() + eq + 1, nullptr);
+
+		if (key == "collapsed") {
+			current->setCollapsed(value != 0.0f);
+		} else if (key == "scrollY") {
+			// NOT current->bounds()-clamped here -- see Panel::setScrollY()'s comment on
+			// why the value is taken as-is and left for the next layout() pass to settle.
+			current->setScrollY(value);
+		} else if (key == "x" || key == "y" || key == "w" || key == "h") {
+			Rect b = current->bounds();
+			if (key == "x")      b.x = value;
+			else if (key == "y") b.y = value;
+			else if (key == "w") b.w = value;
+			else                 b.h = value;
+			current->setBounds(b);
+		}
+		// Unrecognised keys are ignored -- see loadLayout()'s header comment on why this
+		// is a best-effort restore, not a strict parse.
+	}
 }
 
 } // namespace lightGraphics::ui
