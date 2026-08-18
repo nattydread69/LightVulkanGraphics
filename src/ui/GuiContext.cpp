@@ -150,6 +150,17 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 	m_overlayList.setWhitePixelUV(m_font.whitePixelUV());
+
+	// Heading face: an independent second bake from the SAME font bytes, at a second
+	// (larger) logical size -- see GuiCreateInfo::headingFontSize's comment. Left
+	// disabled (m_hasHeadingFont stays false) when the consumer never opted in; nothing
+	// downstream (Label::setHeading(), VkAppUi.cpp's texture registration) touches
+	// m_headingFont unless hasHeadingFont() is true first.
+	if (info.headingFontSize > 0.0f) {
+		m_headingFontSizeLogical = info.headingFontSize;
+		m_headingFont.bake(m_fontData, m_headingFontSizeLogical, m_atlasWidth, m_atlasHeight, 1.0f);
+		m_hasHeadingFont = true;
+	}
 }
 
 GuiContext::~GuiContext() = default;
@@ -208,6 +219,17 @@ void GuiContext::rebakeFont(float contentScale) {
 	verifyInternalGlyphsBaked(m_font);
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 	m_overlayList.setWhitePixelUV(m_font.whitePixelUV());
+
+	// Re-bake the heading face too, at the SAME new contentScale -- otherwise a monitor
+	// switch would leave headings blurry/undersized relative to the now-correctly-rebaked
+	// primary font. VkApp's per-frame atlasNeedsRebuild() check (VkApp.cpp) is what
+	// notices this flag and re-registers m_headingFontTextureId's GPU texture from the
+	// freshly baked pixels -- this function only redoes the CPU-side bake.
+	if (m_hasHeadingFont) {
+		m_headingFont.bake(m_fontData, m_headingFontSizeLogical * contentScale, m_atlasWidth, m_atlasHeight,
+		                    contentScale);
+	}
+
 	m_atlasNeedsRebuild = true;
 }
 
@@ -302,7 +324,14 @@ void GuiContext::updateFocusNavigation() {
 			// dismissed this way at all, same gate the button itself is subject to, so a
 			// modal that deliberately omits it (forcing an explicit in-dialog choice)
 			// can't be bypassed via Escape either.
-			if (isPopupOpen()) {
+			//
+			// An open MenuBar dropdown (docs/gui/05-widgets.md, "MenuBar") takes priority
+			// over even the popup check -- same "Escape closes whatever's floating on top
+			// first" idea, checked first here purely because MenuBar isn't a Widget and so
+			// isPopupOpen() can never observe it either way.
+			if (m_menuBar.isMenuOpen()) {
+				m_menuBar.closeMenu();
+			} else if (isPopupOpen()) {
 				closePopup();
 			} else if (Panel* modal = activeModalPanel()) {
 				modal->requestClose();
@@ -365,6 +394,13 @@ void GuiContext::update() {
 	const bool leftPressed  = in.mousePressed[static_cast<int>(MouseButton::Left)];
 	const bool leftReleased = in.mouseReleased[static_cast<int>(MouseButton::Left)];
 
+	// docs/gui/05-widgets.md, "MenuBar": resolved first, ahead of even the popup -- it is
+	// not a Widget (see MenuBar.h's class comment) so it cannot participate in the
+	// popupOwner()/activeId machinery below at all; it gets its own small, self-contained
+	// hit-test/open/close state machine instead, mirroring how Panel itself (also not a
+	// Widget) is handled as its own special case throughout this function.
+	m_menuBar.update(*this);
+
 	// docs/gui/05-widgets.md, "DropDown": an open popup floats above every panel and is
 	// hit-tested BEFORE any of them.
 	Widget* popup = popupOwner();
@@ -391,8 +427,11 @@ void GuiContext::update() {
 	// (a) hit test panels front-to-back; m_panels[0] is frontmost. Skipped entirely when
 	// the popup claims the point -- it must win even over a DIFFERENT panel that
 	// happens to overlap the popup rect and sits in front of the popup's own owner.
+	// Also skipped while the cursor is over the MenuBar's row or its open dropdown, for
+	// the identical reason -- a click on "File" must never ALSO register on whatever
+	// panel happens to sit underneath the bar.
 	Panel* hoveredPanel = nullptr;
-	if (!popupHit) {
+	if (!popupHit && !m_menuBar.isHovered()) {
 		for (auto& panelPtr : m_panels) {
 			Panel* p = panelPtr.get();
 			if (modal && p != modal) {
@@ -554,6 +593,17 @@ void GuiContext::endFrame() {
 		modal->draw(m_overlayList, *this);
 	}
 
+	// docs/gui/05-widgets.md, "MenuBar": drawn into the overlay list, after even the
+	// modal backdrop/panel above, so the bar (and its dropdown, if open) stays visually
+	// present on top of everything -- MenuBar::update() already made it non-interactive
+	// while a modal is active, so this is cosmetic only, not a competing input path.
+	Vec2 display = input().displaySize;
+	Rect fullscreen{ 0.0f, 0.0f, display.x, display.y };
+	m_overlayList.pushClipRect(fullscreen, /*intersectWithCurrent=*/false);
+	m_menuBar.draw(m_overlayList, *this);
+	m_menuBar.drawOpenMenu(m_overlayList, *this);
+	m_overlayList.popClipRect();
+
 	// The popup draws into overlayList AFTER every panel above -- docs/gui/05,
 	// "DropDown": it "must escape its parent panel's clip rect and draw above every
 	// other panel, including panels in front of its owner." pushClipRect(rect, false)
@@ -595,7 +645,12 @@ bool GuiContext::wantsMouse() const {
 	if (activeModalPanel() != nullptr) {
 		return true;
 	}
-	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr || isPopupOpen();
+	// m_menuBar.isHovered() covers merely hovering the bar/an open dropdown (matching how
+	// m_hoveredPanel alone already claims the mouse for an ordinary panel with no click
+	// involved); isMenuOpen() additionally covers a menu that stayed open while the mouse
+	// moved back off it entirely (docs/gui/05-widgets.md, "MenuBar").
+	return m_activeId != kInvalidWidgetId || m_hoveredPanel != nullptr || isPopupOpen() ||
+	       m_menuBar.isHovered() || m_menuBar.isMenuOpen();
 }
 
 bool GuiContext::wantsScroll() const {

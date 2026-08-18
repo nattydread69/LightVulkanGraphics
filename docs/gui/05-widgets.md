@@ -72,6 +72,16 @@ public:
     void setAlign(Align h);              // Left | Center | Right
     void setWordWrap(bool);              // greedy break at spaces
     void setColor(Color);                // default: theme.text
+    void setTabular(bool);               // pad digit advances to the widest digit's --
+                                          // for a Label used as a numeric readout
+                                          // (docs/gui/03-text-and-fonts.md, "Tabular
+                                          // figures"). Off by default.
+    void setHeading(bool);               // draw with GuiContext's heading face/size
+                                          // instead of the primary font
+                                          // (docs/gui/03-text-and-fonts.md, "Headings").
+                                          // Falls back to the primary font if the
+                                          // GuiContext has none configured. Off by
+                                          // default.
 };
 ```
 
@@ -268,6 +278,11 @@ Two callbacks matter. A simulation that rebuilds a mesh on every parameter chang
 `onCommit`; one that just updates a uniform wants `onChange`. Providing only one forces
 users into either laggy dragging or stale values.
 
+Like `DragValue`, the value text drawn over the track (when `setShowValue(true)`, the
+default) always uses `TextFlags::Tabular` (docs/gui/03-text-and-fonts.md, "Tabular
+figures") — same reasoning: it is a live-updating digit string, so its columns must not
+jitter as the value changes during a drag. The row label does not get the flag.
+
 ### Interaction rules
 
 | Input | Behaviour |
@@ -374,6 +389,11 @@ Interaction: press and drag horizontally; value changes by `dx * speed`. Shift =
 Alt/Ctrl = 10×. Ctrl-click for text entry, as with `Slider`. The control region is drawn
 as a `frameBg` rect with the formatted value centred — visually identical to a text box,
 which correctly signals "this holds a number you can edit".
+
+The formatted value always draws with `TextFlags::Tabular` (docs/gui/03-text-and-fonts.md,
+"Tabular figures") — it is a live-updating digit string by construction, so its digit
+columns must not jitter horizontally as the value changes. The row label (prose, not
+digits) does not get the flag.
 
 ## CompositeWidget
 
@@ -1334,3 +1354,119 @@ the summary above:
   resize/scrollbar drag) **or a popup is open** — showing one on top of an in-progress
   drag or an open popup would be visual noise for state the user is already mid-gesture
   on.
+
+## MenuBar
+
+A single, global row of dropdown menus fixed to the window's top edge — File / Edit /
+View / Help, in the traditional desktop-app sense (VS Code's own menu bar is exactly the
+shape this targets). **Not the same thing as `TabBar`**, which groups content *within*
+one panel; this is one bar, owned by `GuiContext` itself, independent of which panels
+exist or are visible.
+
+```cpp
+class MenuBar {
+public:
+    class Menu {
+    public:
+        void addItem(std::string label, std::function<void()> onSelect,
+                     std::string shortcutHint = "");
+        void addSeparator();
+    };
+
+    Menu addMenu(std::string title);
+    std::size_t menuCount() const;
+    float height(const GuiContext&) const;   // 0 if menuCount() == 0
+
+    // Geometry queries -- useful for a consumer's own hit-testing/rendering decisions.
+    Rect barRect(const GuiContext&) const;
+    Rect menuTitleRect(const GuiContext&, std::size_t menuIndex) const;
+    Rect openMenuRect(const GuiContext&) const;   // empty Rect if openIndex() < 0
+    int  openIndex() const;                       // -1 if nothing is open
+};
+```
+
+```cpp
+auto file = gui.menuBar().addMenu("File");
+file.addItem("New Scene", [] { ... });
+file.addItem("Open...", [] { ... }, "Ctrl+O");
+file.addSeparator();
+file.addItem("Exit", [] { ... }, "Ctrl+Q");
+```
+
+Starts empty (`menuCount() == 0`) and stays entirely inert — zero draw calls, zero
+interaction cost — until `addMenu()` is called at least once; a consumer who never
+touches `gui.menuBar()` sees no change to their existing layout or behaviour at all.
+
+**`shortcutHint` is display-only.** "Ctrl+O" draws right-aligned in the row, dimmed
+(`theme.textDisabled`) — it does not read or dispatch the actual key combination. Wiring
+a real accelerator is the consumer's own job, the same way it would be for any other
+keyboard shortcut in this library: read `ctx.input()`'s key queue, or call
+`injectKey()`.
+
+**Layout is the consumer's job.** `height(ctx)` reports how tall the bar currently is
+(`0` when empty); nothing here shifts panel positions to make room for it automatically.
+Position your own panels' starting `y` at or below that height if you don't want them to
+render underneath the bar — `gui_demo.cpp` does this by construction (every panel starts
+comfortably below the default 24px bar height) rather than querying it, since a menu bar
+is normally added once, near the top of `main()`, before any panel geometry is decided.
+
+### Deliberately not a `Widget`
+
+Every `Widget` belongs to exactly one `Panel` — `Panel::add()`/`CompositeWidget::add()`
+are the only things that ever set a widget's owning panel/parent, and `GuiContext`
+resolves ids, hit-testing, and the `DropDown`-style popup mechanism entirely through that
+per-panel tree (`findWidget()` walks `m_panels`; the popup is keyed off a `Widget* owner`
+passed to `openPopup()`). A menu bar is not scoped to any one panel — it must sit above
+every panel, independent of which ones exist — so it is a second top-level kind of thing
+`GuiContext` owns directly and drives with hard-coded calls throughout `update()`/
+`endFrame()`/`wantsMouse()`, the exact same treatment `Panel` itself already gets (`Panel`
+isn't a `Widget` either — see this document's own base-class section). Its interaction is
+resolved with a small, self-contained hit-test/open-close state machine reading
+`ctx.input()` directly, never through `WidgetId`/`activeId` capture at all.
+
+### Interaction
+
+**Click a title to open its menu; click the same title again to close it** (the same
+"closes on a second click of the control" convention `DropDown`'s own control uses).
+Clicking a *different* title always opens/switches to it — never a toggle for that one.
+
+**Hover-switch between open menus.** Once a menu is open, moving the cursor onto a
+sibling title — no click needed — switches the dropdown to that menu. This is what makes
+sweeping the mouse across "File Edit View" feel like a native menu bar instead of
+requiring a click per menu.
+
+**Click anywhere outside the bar and the open dropdown closes it**, same as a widget
+popup dismissing on an outside press (`GuiContext::update()`). `Escape` closes it too,
+checked ahead of even the ordinary popup-close priority in `updateFocusNavigation()`
+(`MenuBar` isn't a `Widget`, so `isPopupOpen()` can never observe it either way — it
+needs its own explicit check).
+
+**The bar (and its open dropdown, if any) claims hit-testing priority over every panel**,
+identical in spirit to how an open popup already wins over a panel that happens to
+overlap it: `GuiContext::update()` skips the panel hit-test walk entirely while the
+cursor is over the bar's row or an open dropdown, so a click on "File" can never *also*
+register on whatever panel sits underneath the bar. `wantsMouse()` reflects both cases —
+merely hovering the bar (even without a click, matching how hovering an ordinary panel
+already claims the mouse) and a menu that stayed open after the cursor moved back off it.
+
+**Mouse-only in this version** — no `Alt`-key mnemonics, no arrow-key navigation within
+an open menu, matching `ContextMenu`'s own "mouse-only, a menu this small doesn't
+obviously need an alternate keyboard path yet" reasoning. `Escape` still closes it, for
+the same reason `ContextMenu`'s does: `GuiContext`'s generic "if something's open, close
+it on Escape" default, extended by one more `if` for this one case.
+
+**Flat items and separators only — no nested submenus.** Each top-level menu opens one
+flat dropdown, reusing exactly the layout/drawing approach `ContextMenu`'s own popup
+already established (row height, `itemSpacing`-tall separators, hover highlight,
+clamped-on-screen width). An item that itself needs to open a further cascade is out of
+scope for this version.
+
+### Modal panels
+
+While a `PanelFlags::Modal` panel is open, `MenuBar::update()` returns immediately —
+non-interactive, exactly matching "modal blocks INTERACTION, not the rest of the app"
+(the same idiom `GuiContext::update()` already applies to background panels' own
+`update()` calls while a modal is active). It still **draws** every frame regardless, so
+the bar stays visually present (drawn even on top of the modal backdrop) rather than
+flickering out of existence — there is just nothing it will do in response to a click
+while a modal has the floor.

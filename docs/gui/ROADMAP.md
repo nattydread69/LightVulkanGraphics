@@ -25,9 +25,15 @@ order, and finally the modal dialog — the one item in that batch that needed a
 change to the input hand-off, `wantsMouse()`/`wantsKeyboard()`/`wantsScroll()`, rather
 than being just a new `Widget` subclass) has shipped and moved into the numbered docs.
 Anti-aliased edges, the third item of what was this document's Tier 1, has since shipped
-too (docs/gui/02-rendering.md, "Anti-aliasing"). What was Tier 3 is promoted below.
+too (docs/gui/02-rendering.md, "Anti-aliasing"). So has the fourth: second font face or
+size, split across two changes — `TextFlags::Tabular` (docs/gui/03-text-and-fonts.md,
+"Tabular figures") fixes numeric-readout digit jitter within the single existing `Font`,
+and a genuine second, independently-baked `Font` for headings (same doc, "Headings")
+rides the `Image`/`registerUiTexture()` multi-texture plumbing to get its own atlas onto
+the GPU with no `UiRenderer`/Vulkan changes — `Label::setHeading()` is the widget-level
+opt-in. What was Tier 3 is promoted below; only one item is left above it.
 
-## Tier 1 — larger, pick at most one
+## Tier 1
 
 ### Transfer-function editor
 
@@ -39,15 +45,6 @@ control-point editor built on the same HSV/gradient primitives, and its gradient
 is exactly what `Image`/`registerUiTexture()` (05-widgets.md) now makes straightforward
 to draw — nothing about it is blocked anymore, it is just still the largest single item
 here.
-
-### Second font face or size
-
-There is one `Font`, baked once, at one size. That means no headings and no monospace
-column for numeric readouts — and for scientific data, proportional digits make columns
-visibly jitter as values change. Fixing it means either a second atlas or multi-range
-packing into the existing one — the multi-texture plumbing `Image` added (`UiRenderer`'s
-per-`DrawCmd` descriptor selection, docs/gui/02-rendering.md) means a second atlas, if
-that turns out to be the simpler of the two, is no longer a new mechanism to build.
 
 ## Explicit non-goals
 

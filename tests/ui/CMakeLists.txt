@@ -218,6 +218,18 @@ target_compile_definitions(lvgui_modal_tests PRIVATE
 
 add_test(NAME lvgui_modal_tests COMMAND lvgui_modal_tests)
 
+# MenuBar -- headless, same pattern as tests above.
+add_executable(lvgui_menubar_tests
+	test_menubar.cpp
+)
+target_link_libraries(lvgui_menubar_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_menubar_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_menubar_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_menubar_tests COMMAND lvgui_menubar_tests)
+
 # These tests live in their own directory scope, so the top-level CMakeLists' pass over
 # DIRECTORY PROPERTY TESTS does not reach them; apply the same suppression wiring here.
 if (LVG_ENABLE_SANITIZERS)

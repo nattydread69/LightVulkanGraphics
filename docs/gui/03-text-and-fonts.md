@@ -184,13 +184,52 @@ float scale = requestedPixelSize / m_bakedPixelSize;
 
 Text below about 0.8× or above about 1.5× the baked size looks poor. Bake at the size you
 actually use — `theme.fontSize * contentScale` — and treat other sizes as an exceptional
-case. If you later want a title font and a body font, bake two `Font` objects into two
-atlas regions rather than scaling one aggressively.
+case. For a title font and a body font, bake two `Font` objects rather than scaling one
+aggressively — see "Headings", below.
+
+## Headings
+
+A second, independent `Font` object (`GuiContext::m_headingFont`), baked from the same
+font bytes as the primary one but at a second, larger logical size
+(`GuiCreateInfo::headingFontSize`, `0.0f` by default — leaving it unset costs nothing,
+no second bake happens at all). `GuiContext::hasHeadingFont()`/`headingFont()`/
+`headingFontSize()` expose it; `Label::setHeading(bool)` is the widget-level opt-in,
+falling back to the primary font/size if the `GuiContext` it draws against never
+configured one (not every consumer opts in, and a heading Label must never crash or
+render nothing because of that).
+
+Two atlases means two GPU textures, which is where this differs from tabular figures
+(above): `GuiContext` stays Vulkan-agnostic and cannot register a texture itself
+(docs/gui/02-rendering.md, "Target layering"), so the heading atlas rides the SAME
+mechanism `Image`/`registerUiTexture()` already built for consumer-supplied images
+(docs/gui/05-widgets.md, "Image") — no new `UiRenderer`/Vulkan code at all:
+
+1. `VkApp::registerHeadingFontTexture()` (`VkAppUi.cpp`) expands the heading `Font`'s R8
+   (single-channel coverage) atlas into RGBA8 — replicating each byte into the red
+   channel, zeroing the rest — and calls the existing `registerUiTexture()`. This works
+   because the shared UI fragment shader (`shaders/ui.frag`) always samples only the red
+   channel as coverage, `float coverage = texture(uAtlas, vUV).r;`, regardless of
+   whether the bound texture is the true-R8 primary atlas or a registered RGBA8 image.
+   The wasted G/B/A channels (4× the atlas's real memory) are an acceptable one-time
+   cost for a single, typically-small heading atlas.
+2. `VkApp::initUi()` calls it once after the primary atlas is up; `GuiContext` reports
+   the resulting `TextureId` back through `setHeadingFontTextureId()`.
+3. On a DPI-triggered rebake (`GuiContext::rebakeFont()`, "DPI and content scale" in
+   docs/gui/06-layout-and-theme.md), the per-frame `atlasNeedsRebuild()` check in
+   `VkApp`'s main loop unregisters the stale heading texture and re-registers a fresh
+   one — `registerUiTexture()`/`unregisterUiTexture()` are register/unregister only,
+   unlike the primary atlas's in-place `UiRenderer::rebuildAtlas()`.
+
+`DrawList::addText`/`addTextClipped` both take a trailing `TextureId textureId =
+kAtlasTextureId` parameter (same default-preserving pattern as their `TextFlags`
+parameter) so glyph quads batch into the heading atlas's own `DrawCmd` instead of the
+primary atlas's — the same clip-rect-or-texture-change command-splitting `addImage()`
+already relies on (docs/gui/02-rendering.md).
 
 ## Measurement
 
 ```cpp
-Vec2  Font::measureText(std::string_view utf8, float pixelSize) const;
+Vec2  Font::measureText(std::string_view utf8, float pixelSize, TextFlags flags = TextFlags::None) const;
 float Font::lineHeight(float pixelSize) const;
 float Font::ascent(float pixelSize) const;
 
@@ -286,12 +325,35 @@ your chosen Inter build is incomplete. Ship the licence text at
 ### Tabular figures
 
 If the chosen font supports the `tnum` OpenType feature, `stb_truetype` will not apply
-it — stb does not do OpenType feature substitution. If you want digits of equal width in
-numeric readouts (and you do, because otherwise a live-updating value jitters
-horizontally as digits change), the practical workaround is to measure the widest digit
-once at bake time and advance every digit by that amount when a `TextFlags::Tabular` flag
-is set. Ten lines, and it removes a visual annoyance that would otherwise irritate every
-user of a simulation readout.
+it — stb does not do OpenType feature substitution. Without equal-width digits, a
+live-updating numeric readout visibly jitters horizontally as its digits change, which
+would irritate every user of a simulation readout — so `Font` computes a substitute at
+bake time: `m_tabularDigitAdvanceAtBake` is the widest baked `'0'`–`'9'` glyph's own
+`xAdvance`, and
+
+```cpp
+float Font::advanceFor(std::uint32_t codepoint, float pixelSize, TextFlags flags = TextFlags::None) const;
+```
+
+returns that (scaled) width instead of the glyph's own advance whenever `flags` has
+`TextFlags::Tabular` set and `codepoint` is an ASCII digit — every other codepoint, and
+every digit without the flag, gets its own glyph's advance exactly as before.
+`Font::measureText` takes the same trailing `flags` parameter and sums through
+`advanceFor` internally, so a truncation/ellipsis measurement and the text it describes
+never disagree about which advance a digit used. `DrawList::addText`/`addTextClipped` and
+`wrapText` (`src/ui/TextWrap.h`) take the identical trailing `flags` parameter and thread
+it down to the same `advanceFor` call — the glyph itself always renders at its natural
+ink size and position; only the PEN ADVANCE after it is padded, so a narrower digit (a
+`'1'` next to an `'8'`) leaves trailing blank space rather than being stretched or
+recentred.
+
+A `TextFlags::Tabular` request is a no-op — falls back to the glyph's own advance — if
+the font has no digit baked at all (`m_tabularDigitAdvanceAtBake` stays `0.0f`).
+
+`Label::setTabular(bool)` is the widget-level opt-in for a consumer's own numeric-readout
+Label. `DragValueT`/`SliderT` (`docs/gui/05-widgets.md`) pass `TextFlags::Tabular` on
+their own live VALUE text unconditionally — that display is always digits — while
+leaving their (prose) label text untouched.
 
 ## Explicitly out of scope for v1
 

@@ -4,12 +4,33 @@
 
 namespace lightGraphics::ui {
 
+namespace {
+	// Resolves which Font/size/texture this Label actually draws with this frame:
+	// the heading face (docs/gui/03-text-and-fonts.md, "Headings") only when the widget
+	// asked for one AND the GuiContext it's drawn/measured with actually has one baked
+	// -- a Label must never crash or silently vanish just because a consumer left
+	// GuiCreateInfo::headingFontSize at its disabled 0.0f default.
+	struct LabelFont {
+		const Font& font;
+		float pixelSize;
+		TextureId textureId;
+	};
+
+	LabelFont resolveLabelFont(const GuiContext& ctx, bool heading) {
+		if (heading && ctx.hasHeadingFont()) {
+			return { ctx.headingFont(), ctx.headingFontSize(), ctx.headingFontTextureId() };
+		}
+		return { ctx.font(), ctx.theme().fontSize, kAtlasTextureId };
+	}
+}
+
 Label::Label(std::string text) : m_text(std::move(text)) {}
 
 Vec2 Label::preferredSize(const GuiContext& ctx) const {
-	const Theme& th = ctx.theme();
+	LabelFont lf = resolveLabelFont(ctx, m_heading);
+	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
 	if (!m_wordWrap) {
-		return ctx.font().measureText(m_text, th.fontSize);
+		return lf.font.measureText(m_text, lf.pixelSize, flags);
 	}
 
 	// m_bounds.w reflects the row width from the PREVIOUS layout pass (0 the very first
@@ -17,11 +38,11 @@ Vec2 Label::preferredSize(const GuiContext& ctx) const {
 	// for exactly this reason: pass 1 gives every widget a first-cut bounds; pass 2 then
 	// sees the correct width here and reports the true wrapped height. See docs/gui/05,
 	// "Label".
-	float lh = ctx.font().lineHeight(th.fontSize);
+	float lh = lf.font.lineHeight(lf.pixelSize);
 	if (m_bounds.w <= 0.0f) {
 		return { 0.0f, lh };
 	}
-	auto lines = wrapText(ctx.font(), m_text, th.fontSize, m_bounds.w);
+	auto lines = wrapText(lf.font, m_text, lf.pixelSize, m_bounds.w, flags);
 	return { 0.0f, static_cast<float>(lines.size()) * lh };
 }
 
@@ -31,20 +52,23 @@ void Label::draw(DrawList& dl, const GuiContext& ctx) const {
 	}
 	const Theme& th = ctx.theme();
 	Color color = m_colorOverride ? *m_colorOverride : (effectivelyEnabled() ? th.text : th.textDisabled);
+	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
+	LabelFont lf = resolveLabelFont(ctx, m_heading);
 
 	if (m_wordWrap) {
-		auto lines = wrapText(ctx.font(), m_text, th.fontSize, m_bounds.w);
-		float lh = ctx.font().lineHeight(th.fontSize);
+		auto lines = wrapText(lf.font, m_text, lf.pixelSize, m_bounds.w, flags);
+		float lh = lf.font.lineHeight(lf.pixelSize);
 		float y = m_bounds.y;
 		for (auto& line : lines) {
 			Rect lineRect{ m_bounds.x, y, m_bounds.w, lh };
-			dl.addTextClipped(ctx.font(), th.fontSize, lineRect, color, line, m_align, Align::Start);
+			dl.addTextClipped(lf.font, lf.pixelSize, lineRect, color, line, m_align, Align::Start, flags,
+			                   lf.textureId);
 			y += lh;
 		}
 		return;
 	}
 
-	dl.addTextClipped(ctx.font(), th.fontSize, m_bounds, color, m_text, m_align, Align::Center);
+	dl.addTextClipped(lf.font, lf.pixelSize, m_bounds, color, m_text, m_align, Align::Center, flags, lf.textureId);
 }
 
 } // namespace lightGraphics::ui

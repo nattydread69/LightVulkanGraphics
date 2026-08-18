@@ -981,6 +981,19 @@ namespace lightGraphics
 					if (uiRenderer_ && guiContext_->atlasNeedsRebuild())
 					{
 						uiRenderer_->rebuildAtlas(guiContext_->font());
+
+						// The heading face (docs/gui/03-text-and-fonts.md, "Headings") has no
+						// analogous in-place rebuild: it isn't the primary atlas, it's a
+						// registerUiTexture()-registered image, and that API is register/
+						// unregister only. GuiContext::rebakeFont() already redid its CPU-side
+						// pixels (same rebake pass that set atlasNeedsRebuild() in the first
+						// place); drop the stale GPU texture and upload the new one.
+						if (guiContext_->hasHeadingFont())
+						{
+							unregisterUiTexture(guiContext_->headingFontTextureId());
+							registerHeadingFontTexture();
+						}
+
 						guiContext_->acknowledgeAtlasRebuild();
 					}
 				}

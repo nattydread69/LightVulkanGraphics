@@ -3,6 +3,7 @@
 #include <lightVulkanGraphics/ui/widgets/TextBox.h>
 #include "Utf8.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -217,6 +218,102 @@ namespace {
 		assert(ctx.font().isBaked());
 		std::cout << "✓ testEmptyFontPathFallsBackToBundledFont\n";
 	}
+
+	// docs/gui/03-text-and-fonts.md, "Headings": GuiCreateInfo::headingFontSize left at
+	// its 0.0f default must leave the heading face entirely disabled -- a consumer who
+	// never opts in pays nothing extra (no second bake, no wasted atlas memory).
+	void testHeadingFontDisabledByDefault() {
+		lvgui::GuiCreateInfo info;
+		info.fontPath = LVG_UI_TEST_FONT_PATH;
+		lvgui::GuiContext ctx(info, lvgui::PlatformHooks{});
+		assert(!ctx.hasHeadingFont());
+		assert(ctx.headingFontSize() == 0.0f);
+		// kAtlasTextureId (0) until VkApp registers a real one -- see headingFontTextureId()'s
+		// comment. A bare, headless GuiContext (this test) never gets that far.
+		assert(ctx.headingFontTextureId() == lvgui::kAtlasTextureId);
+		std::cout << "✓ testHeadingFontDisabledByDefault\n";
+	}
+
+	// Setting GuiCreateInfo::headingFontSize bakes a genuinely second, independent Font
+	// -- distinct atlas, larger glyphs than the primary at the normal 14px test size --
+	// not just a re-scaled view of the same one.
+	void testHeadingFontOnRequestBakesALargerIndependentFont() {
+		lvgui::GuiCreateInfo info;
+		info.fontPath = LVG_UI_TEST_FONT_PATH;
+		info.fontSize = 14.0f;
+		info.headingFontSize = 28.0f;
+		lvgui::GuiContext ctx(info, lvgui::PlatformHooks{});
+
+		assert(ctx.hasHeadingFont());
+		assert(ctx.headingFont().isBaked());
+		assert(ctx.headingFontSize() == 28.0f);
+
+		// Measured each at ITS OWN size (28px for heading, 14px for primary) -- a
+		// correctly-independent second bake renders roughly twice as wide/tall, not the
+		// same metrics reused.
+		float primaryWidth = ctx.font().measureText("Heading", 14.0f).x;
+		float headingWidth = ctx.headingFont().measureText("Heading", 28.0f).x;
+		assert(headingWidth > primaryWidth * 1.5f);
+
+		float primaryLineHeight = ctx.font().lineHeight(14.0f);
+		float headingLineHeight = ctx.headingFont().lineHeight(28.0f);
+		assert(headingLineHeight > primaryLineHeight * 1.5f);
+
+		std::cout << "✓ testHeadingFontOnRequestBakesALargerIndependentFont\n";
+	}
+
+	// docs/gui/03-text-and-fonts.md, "Tabular figures": every digit's own pen advance is
+	// padded to the widest digit's, so a live-updating numeric readout's columns don't
+	// jitter as the value changes. Every digit measured alone, under TextFlags::Tabular,
+	// must come out to exactly the same width -- the widest digit's own (unpadded) width.
+	void testTabularDigitsAllMeasureTheSameWidth(const lvgui::Font& font) {
+		float widest = 0.0f;
+		for (char d = '0'; d <= '9'; ++d) {
+			widest = std::max(widest, font.measureText(std::string(1, d), 14.0f).x);
+		}
+		assert(widest > 0.0f);
+
+		for (char d = '0'; d <= '9'; ++d) {
+			float w = font.measureText(std::string(1, d), 14.0f, lvgui::TextFlags::Tabular).x;
+			assert(std::fabs(w - widest) < 0.01f);
+		}
+		std::cout << "✓ testTabularDigitsAllMeasureTheSameWidth\n";
+	}
+
+	// Tabular only touches ASCII digits -- everything else (letters, punctuation, a
+	// digit measured WITHOUT the flag) must come out identical to the flag-less
+	// measurement, byte for byte.
+	void testTabularOnlyAffectsDigitsAndOnlyWhenRequested(const lvgui::Font& font) {
+		const char* nonDigits = "Hello, world! Omega";
+		float plain = font.measureText(nonDigits, 14.0f).x;
+		float tabular = font.measureText(nonDigits, 14.0f, lvgui::TextFlags::Tabular).x;
+		assert(std::fabs(plain - tabular) < 0.001f);
+
+		float digitPlain = font.measureText("5", 14.0f).x;
+		float digitNoneFlag = font.measureText("5", 14.0f, lvgui::TextFlags::None).x;
+		assert(std::fabs(digitPlain - digitNoneFlag) < 0.001f);
+
+		std::cout << "✓ testTabularOnlyAffectsDigitsAndOnlyWhenRequested\n";
+	}
+
+	// A font with no digits baked at all (a restricted glyph range) must not crash or
+	// misbehave under TextFlags::Tabular -- advanceFor() falls back to the (fallback)
+	// glyph's own advance, exactly as it would with the flag unset, since
+	// m_tabularDigitAdvanceAtBake stays 0.0f when no '0'-'9' glyph was ever baked.
+	void testTabularIsNoOpWhenNoDigitsAreBaked() {
+		std::vector<std::uint8_t> ttf = loadFontFile();
+		lvgui::GlyphRange greekOnly[] = { { 0x0391, 0x03C9 } };
+
+		lvgui::Font font;
+		font.bake(ttf, 14.0f, greekOnly, 1, 512, 512, 1.0f);
+		assert(!font.hasGlyph('5'));
+
+		float withTabular = font.advanceFor('5', 14.0f, lvgui::TextFlags::Tabular);
+		float withoutTabular = font.advanceFor('5', 14.0f, lvgui::TextFlags::None);
+		assert(std::fabs(withTabular - withoutTabular) < 0.001f);
+
+		std::cout << "✓ testTabularIsNoOpWhenNoDigitsAreBaked\n";
+	}
 }
 
 int main() {
@@ -237,6 +334,13 @@ int main() {
 	testFallbackGlyphIsNeverZeroSize(font);
 	testTextBoxPasswordMaskCodepointIsBakedByDefault(font);
 	testEmptyFontPathFallsBackToBundledFont();
+
+	testTabularDigitsAllMeasureTheSameWidth(font);
+	testTabularOnlyAffectsDigitsAndOnlyWhenRequested(font);
+	testTabularIsNoOpWhenNoDigitsAreBaked();
+
+	testHeadingFontDisabledByDefault();
+	testHeadingFontOnRequestBakesALargerIndependentFont();
 
 	std::cout << "\n✅ All Font tests passed!\n";
 	return 0;

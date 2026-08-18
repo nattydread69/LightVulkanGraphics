@@ -138,4 +138,24 @@ constexpr bool hasFlag(PanelFlags flags, PanelFlags bit) {
 	return static_cast<std::uint32_t>(flags & bit) != 0;
 }
 
+enum class TextFlags : std::uint32_t {
+	None    = 0,
+	// Pads every ASCII digit's ('0'-'9') pen advance out to the widest digit's own
+	// advance in the font, so a live-updating numeric readout's digit columns never
+	// shift the characters after them horizontally as values change -- see
+	// docs/gui/03-text-and-fonts.md, "Tabular figures". A no-op if the font has no
+	// digits baked (Font::advanceFor() falls back to the glyph's own advance).
+	Tabular = 1 << 0,
+};
+
+constexpr TextFlags operator|(TextFlags a, TextFlags b) {
+	return static_cast<TextFlags>(static_cast<std::uint32_t>(a) | static_cast<std::uint32_t>(b));
+}
+constexpr TextFlags operator&(TextFlags a, TextFlags b) {
+	return static_cast<TextFlags>(static_cast<std::uint32_t>(a) & static_cast<std::uint32_t>(b));
+}
+constexpr bool hasFlag(TextFlags flags, TextFlags bit) {
+	return static_cast<std::uint32_t>(flags & bit) != 0;
+}
+
 } // namespace lightGraphics::ui

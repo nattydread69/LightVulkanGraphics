@@ -16,6 +16,7 @@
 #include "DrawList.h"
 #include "InputState.h"
 #include "KeyCodes.h"
+#include "MenuBar.h"
 #include "Panel.h"
 
 #include <cstdint>
@@ -50,6 +51,14 @@ struct GuiCreateInfo {
 	int         atlasWidth    = 512;
 	int         atlasHeight   = 512;
 	bool        enableTooltips = true;
+	// 0.0f (default) disables the heading face entirely -- hasHeadingFont() stays false
+	// and headingFont() must not be called. A positive value bakes a SECOND Font from
+	// the same font bytes as `fontPath`, at this logical size, alongside the primary one
+	// (docs/gui/03-text-and-fonts.md, "Headings"): a second, independent baked atlas for
+	// headings / larger UI text, distinct from the tabular-figure digit padding (which
+	// stays inside the single primary Font). Like fontSize, this is a LOGICAL size --
+	// GuiContext folds in contentScale itself before baking, same as the primary font.
+	float       headingFontSize = 0.0f;
 };
 
 struct PlatformHooks {
@@ -69,6 +78,13 @@ public:
 
 	GuiContext(const GuiContext&)            = delete;
 	GuiContext& operator=(const GuiContext&) = delete;
+
+	// ---- menu bar (docs/gui/05-widgets.md, "MenuBar") ----
+	// A single, global, always-on-top row of dropdown menus fixed to the window's top
+	// edge -- NOT the per-panel TabBar. Starts empty (menuCount() == 0, drawn as
+	// nothing, zero interaction cost) until addMenu() is called on it.
+	MenuBar&       menuBar()       { return m_menuBar; }
+	const MenuBar& menuBar() const { return m_menuBar; }
 
 	// ---- panels ----
 	Panel* createPanel(std::string title, Rect bounds, PanelFlags flags = PanelFlags::Default);
@@ -122,6 +138,29 @@ public:
 	const Theme& theme() const { return m_theme; }
 	const Font&  font() const { return m_font; }
 	const InputState& input() const;
+
+	// ---- heading face (docs/gui/03-text-and-fonts.md, "Headings") ----
+	// True iff GuiCreateInfo::headingFontSize was positive at construction. headingFont()
+	// and headingFontSize() below are only valid to call when this is true -- a widget
+	// that wants to use the heading face (Label::setHeading()) must check this first and
+	// fall back to the primary font otherwise, since not every consumer configures one.
+	bool hasHeadingFont() const { return m_hasHeadingFont; }
+	const Font& headingFont() const { return m_headingFont; }
+	// The LOGICAL size the heading face was baked at (GuiCreateInfo::headingFontSize),
+	// i.e. what to pass as `pixelSize` to measureText()/addText() on headingFont() --
+	// mirrors how theme.fontSize is the render size for the primary font.
+	float headingFontSize() const { return m_headingFontSizeLogical; }
+	// The TextureId the heading atlas is registered under (VkApp::registerUiTexture(),
+	// docs/gui/05-widgets.md, "Image"), or kAtlasTextureId if it hasn't been registered
+	// yet -- GuiContext cannot register it itself (it stays Vulkan-agnostic; see
+	// docs/gui/02-rendering.md, "Target layering"), so the Vulkan-aware owner (VkApp)
+	// registers the atlas after construction and reports the id back here. A DrawList
+	// draw call made with this still-default id before that handoff happens (or in a
+	// bare, headless GuiContext with no VkApp at all) simply batches into the PRIMARY
+	// atlas's command instead -- harmless in a headless test, since no real texture is
+	// ever sampled there anyway.
+	TextureId headingFontTextureId() const { return m_headingFontTextureId; }
+	void setHeadingFontTextureId(TextureId id) { m_headingFontTextureId = id; }
 
 	WidgetId hoveredId() const { return m_hoveredId; }
 	WidgetId activeId()  const { return m_activeId; }
@@ -218,11 +257,21 @@ private:
 	Font     m_font;
 	DrawList m_drawList;
 	DrawList m_overlayList;
+	MenuBar  m_menuBar;
 
 	std::vector<std::uint8_t> m_fontData;   // kept around so beginFrame() can rebake on DPI change
 	float m_fontSizeLogical = 14.0f;
 	int   m_atlasWidth = 512;
 	int   m_atlasHeight = 512;
+
+	// Heading face -- see hasHeadingFont()/headingFont() above. m_headingFont is baked
+	// from the SAME m_fontData as the primary font (headings are a second SIZE of the
+	// same face, not a second font file -- see GuiCreateInfo::headingFontSize), so no
+	// second copy of the font bytes is kept here.
+	Font  m_headingFont;
+	bool  m_hasHeadingFont = false;
+	float m_headingFontSizeLogical = 0.0f;
+	TextureId m_headingFontTextureId = kAtlasTextureId;
 
 	PlatformHooks m_hooks;
 	std::unique_ptr<UiPlatformGlfw> m_platform;

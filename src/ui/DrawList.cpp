@@ -599,10 +599,11 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 	updateCurrentCommandIndexCount();
 }
 
-void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color color, std::string_view utf8) {
+void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color color, std::string_view utf8,
+                        TextFlags flags, TextureId textureId) {
 	if (utf8.empty()) return;
 
-	ensureCommand();
+	ensureCommand(textureId);
 
 	std::uint32_t col = packColor(color);
 	// glyph.offset is baseline-relative (negative for the ink above the baseline, which
@@ -620,7 +621,7 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 	while (pos < utf8.size()) {
 		std::uint32_t cp = decodeUtf8(utf8, pos);
 		const Glyph& glyph = font.glyphFor(cp);
-		float advance = glyph.xAdvance * scale;
+		float advance = font.advanceFor(cp, pixelSize, flags);
 
 		// Space and tab advance the pen but never emit a quad -- there is nothing to
 		// blend, and it is one less draw-list entry per word gap.
@@ -651,15 +652,19 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 }
 
 void DrawList::addTextClipped(const Font& font, float pixelSize, const Rect& rect, Color color,
-                               std::string_view utf8, Align h, Align v) {
+                               std::string_view utf8, Align h, Align v, TextFlags flags,
+                               TextureId textureId) {
 	static constexpr std::string_view kEllipsis = "...";
 
 	std::string_view display = utf8;
 	std::string truncated;
 
-	Vec2 textSize = font.measureText(utf8, pixelSize);
+	Vec2 textSize = font.measureText(utf8, pixelSize, flags);
 	if (textSize.x > rect.w) {
-		float ellipsisWidth = font.measureText(kEllipsis, pixelSize).x;
+		// The ellipsis itself is plain ASCII periods, never digits -- Tabular has no
+		// effect on it either way, but passing flags through keeps this measurement
+		// consistent with every other one in this function.
+		float ellipsisWidth = font.measureText(kEllipsis, pixelSize, flags).x;
 		float available = std::max(0.0f, rect.w - ellipsisWidth);
 
 		// Codepoint boundaries only -- a byte-by-byte search could cut a multi-byte
@@ -674,7 +679,7 @@ void DrawList::addTextClipped(const Font& font, float pixelSize, const Rect& rec
 		std::size_t lo = 0, hi = boundaries.size() - 1, best = 0;
 		while (lo <= hi) {
 			std::size_t mid = lo + (hi - lo) / 2;
-			float w = font.measureText(utf8.substr(0, boundaries[mid]), pixelSize).x;
+			float w = font.measureText(utf8.substr(0, boundaries[mid]), pixelSize, flags).x;
 			if (w <= available) {
 				best = mid;
 				lo = mid + 1;
@@ -687,7 +692,7 @@ void DrawList::addTextClipped(const Font& font, float pixelSize, const Rect& rec
 		truncated.assign(utf8.substr(0, boundaries[best]));
 		truncated += kEllipsis;
 		display = truncated;
-		textSize = font.measureText(display, pixelSize);
+		textSize = font.measureText(display, pixelSize, flags);
 	}
 
 	float x;
@@ -706,7 +711,7 @@ void DrawList::addTextClipped(const Font& font, float pixelSize, const Rect& rec
 	}
 
 	pushClipRect(rect);
-	addText(font, pixelSize, { x, y }, color, display);
+	addText(font, pixelSize, { x, y }, color, display, flags, textureId);
 	popClipRect();
 }
 

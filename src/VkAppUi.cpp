@@ -123,11 +123,23 @@ namespace lightGraphics
 		uiRenderer_ = std::make_unique<ui::UiRenderer>();
 		uiRenderer_->init(rendererInfo, guiContext_->font());
 
+		// Heading face (docs/gui/03-text-and-fonts.md, "Headings"): GuiContext already
+		// baked a second Font, CPU-side, if GuiCreateInfo::headingFontSize was set --
+		// this is the one-time step that only VkApp (the Vulkan-aware owner) can do,
+		// uploading that atlas as a registered texture and reporting its id back.
+		registerHeadingFontTexture();
+
 		if (debugOutput)
 		{
 			std::ostringstream message;
 			message << "LVGUI initialised: atlas " << guiContext_->font().atlasWidth() << 'x'
 			        << guiContext_->font().atlasHeight() << ", font " << guiInfo.fontPath;
+			if (guiContext_->hasHeadingFont())
+			{
+				message << ", heading atlas " << guiContext_->headingFont().atlasWidth() << 'x'
+				        << guiContext_->headingFont().atlasHeight() << " at " << guiContext_->headingFontSize()
+				        << "px";
+			}
 			logMessage(LogLevel::Debug, message.str());
 		}
 	}
@@ -242,6 +254,38 @@ namespace lightGraphics
 		{
 			uiRenderer_->unregisterTexture(id);
 		}
+	}
+
+	void VkApp::registerHeadingFontTexture()
+	{
+		if (!guiContext_ || !guiContext_->hasHeadingFont())
+		{
+			return;
+		}
+
+		// Expands the heading Font's R8 (single-channel coverage) atlas into RGBA8 by
+		// replicating each byte into the red channel and zeroing the rest.
+		// registerUiTexture() only accepts RGBA8 (docs/gui/05-widgets.md, "Image"), but
+		// the shared UI fragment shader (shaders/ui.frag) ALWAYS samples only the red
+		// channel as coverage -- `float coverage = texture(uAtlas, vUV).r;` -- regardless
+		// of whether the bound texture is the primary atlas (uploaded as true R8_UNORM)
+		// or a registered RGBA8 image. That means the heading atlas can piggyback on the
+		// EXISTING registerUiTexture() path with zero UiRenderer/Vulkan changes -- this
+		// expansion is the only new code the trick needs. G/B/A are wasted here (4x the
+		// atlas's real memory footprint), an acceptable one-time cost for a single,
+		// typically-small heading atlas; not worth a second, R8-specific registration
+		// path in UiRenderer for that.
+		const ui::Font& heading = guiContext_->headingFont();
+		const std::vector<std::uint8_t>& r8 = heading.atlasPixels();
+		std::vector<std::uint8_t> rgba(r8.size() * 4, 0);
+		for (std::size_t i = 0; i < r8.size(); ++i)
+		{
+			rgba[i * 4] = r8[i];
+		}
+
+		ui::TextureId id = registerUiTexture(rgba.data(), static_cast<uint32_t>(heading.atlasWidth()),
+		                                      static_cast<uint32_t>(heading.atlasHeight()));
+		guiContext_->setHeadingFontTextureId(id);
 	}
 
 } // namespace lightGraphics

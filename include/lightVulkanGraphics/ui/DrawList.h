@@ -50,9 +50,19 @@ public:
 	void addConvexPolyFilled(const Vec2* pts, int count, Color color);
 	void addPolyline(const Vec2* pts, int count, Color color, float thickness, bool closed);
 
-	void addText(const Font& font, float pixelSize, Vec2 topLeft, Color color, std::string_view utf8);
+	// `textureId` defaults to kAtlasTextureId (the primary font's atlas, exactly as
+	// before this parameter existed). A caller drawing with a SECOND baked Font whose
+	// atlas has been registered as its own texture (docs/gui/03-text-and-fonts.md,
+	// "Headings") passes that Font's own registered id here -- glyph UVs already come
+	// from that Font's own atlas space, so the vertex data is correct either way; this
+	// only controls which DrawCmd (and therefore which descriptor set / GPU texture) the
+	// glyph quads batch into. See addImage()'s comment below for why a texture change,
+	// unlike a clip-rect change, can split a command even when nothing else did.
+	void addText(const Font& font, float pixelSize, Vec2 topLeft, Color color, std::string_view utf8,
+	             TextFlags flags = TextFlags::None, TextureId textureId = kAtlasTextureId);
 	void addTextClipped(const Font& font, float pixelSize, const Rect& rect, Color color,
-	                     std::string_view utf8, Align h, Align v);
+	                     std::string_view utf8, Align h, Align v, TextFlags flags = TextFlags::None,
+	                     TextureId textureId = kAtlasTextureId);
 
 	// Draws a registered texture (VkApp::registerUiTexture(), docs/gui/05-widgets.md,
 	// "Image") over `rect`, sampling the sub-rectangle [uv0, uv1] of it (defaults to the

@@ -82,9 +82,18 @@ public:
 	// the larger, physical bake height is what converts glyph metrics down to logical
 	// pixels. See the DPI section of docs/gui/06-layout-and-theme.md -- getting the
 	// direction of that division backwards is the most common bug here.
-	Vec2 measureText(std::string_view utf8, float pixelSize) const;
+	Vec2 measureText(std::string_view utf8, float pixelSize, TextFlags flags = TextFlags::None) const;
 	float lineHeight(float pixelSize) const;
 	float ascent(float pixelSize) const;
+
+	// The pen advance to use for `codepoint` at `pixelSize`. Identical to
+	// `glyphFor(codepoint).xAdvance`, scaled, EXCEPT when `flags` has TextFlags::Tabular
+	// and `codepoint` is an ASCII digit ('0'-'9'): then it returns the widest baked
+	// digit's own (scaled) advance instead, so every digit in a live-updating numeric
+	// readout occupies the same pen-advance width regardless of which digit it actually
+	// is (docs/gui/03-text-and-fonts.md, "Tabular figures"). Falls back to the glyph's
+	// own advance if no digits were baked at all (tabularDigitAdvance would be 0).
+	float advanceFor(std::uint32_t codepoint, float pixelSize, TextFlags flags = TextFlags::None) const;
 
 	// Byte index of the character boundary nearest to pixel offset x along the string.
 	std::size_t indexAtOffset(std::string_view utf8, float pixelSize, float x) const;
@@ -122,6 +131,9 @@ private:
 	float m_contentScaleAtBake = 1.0f;
 	float m_ascentAtBake = 0.0f;
 	float m_lineHeightAtBake = 0.0f;
+	// Widest xAdvance among baked '0'-'9', at bake pixel size (unscaled) -- 0 if no
+	// digit was baked. See advanceFor()'s comment.
+	float m_tabularDigitAdvanceAtBake = 0.0f;
 
 	std::vector<Glyph> m_glyphs;
 	std::array<std::uint16_t, kFlatLookupSize> m_flatLookup;

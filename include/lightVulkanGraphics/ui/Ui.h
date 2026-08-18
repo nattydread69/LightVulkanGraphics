@@ -18,6 +18,7 @@
 #include "Theme.h"
 #include "Widget.h"
 #include "Panel.h"
+#include "MenuBar.h"
 #include "GuiContext.h"
 
 #include "widgets/Label.h"

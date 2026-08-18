@@ -51,9 +51,11 @@ void addTriangleFilled(Vec2, Vec2, Vec2, Color);
 void addCircleFilled(Vec2 centre, float radius, Color, int segments = 0);
 void addConvexPolyFilled(const Vec2* pts, int count, Color);
 void addPolyline    (const Vec2* pts, int count, Color, float thickness, bool closed);
-void addText        (const Font&, float pixelSize, Vec2 topLeft, Color, std::string_view utf8);
+void addText        (const Font&, float pixelSize, Vec2 topLeft, Color, std::string_view utf8,
+                     TextFlags flags = TextFlags::None, TextureId textureId = kAtlasTextureId);
 void addTextClipped (const Font&, float pixelSize, const Rect&, Color,
-                     std::string_view utf8, Align h, Align v);
+                     std::string_view utf8, Align h, Align v,
+                     TextFlags flags = TextFlags::None, TextureId textureId = kAtlasTextureId);
 void addImage        (TextureId, const Rect&, Vec2 uv0 = {0,0}, Vec2 uv1 = {1,1},
                       Color tint = white);
 ```

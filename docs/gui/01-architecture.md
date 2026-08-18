@@ -77,13 +77,17 @@ This is the contract. Everything is single-threaded on the main thread.
       - rebake the font atlas if contentScale changed  (rare; flags the renderer)
 
 3.  gui.update()
-      a. hit test: walk panels front-to-back, find topmost panel containing the cursor
-      b. if activeId != 0, that widget keeps the mouse regardless of position
-      c. resolve hoveredId
-      d. dispatch keyboard events to focusedId; handle Tab / Shift-Tab focus cycling
-      e. for each panel front-to-back: panel->update(ctx) → widget->update(ctx)
+      a. menuBar.update(ctx) FIRST -- MenuBar (docs/gui/05-widgets.md, "MenuBar") isn't
+         a Widget or a Panel, so it gets its own small hit-test/open-close state machine,
+         resolved before anything below; while its row or an open dropdown is under the
+         cursor, the panel hit-test walk in (b) is skipped entirely for this frame
+      b. hit test: walk panels front-to-back, find topmost panel containing the cursor
+      c. if activeId != 0, that widget keeps the mouse regardless of position
+      d. resolve hoveredId
+      e. dispatch keyboard events to focusedId; handle Tab / Shift-Tab focus cycling
+      f. for each panel front-to-back: panel->update(ctx) → widget->update(ctx)
          (widgets fire their callbacks here, inside this call, synchronously)
-      f. reorder z if a panel title bar was clicked
+      g. reorder z if a panel title bar was clicked
 
 4.  Host application reads widget values / has already had its callbacks fired.
       Camera update MUST be guarded:
@@ -94,7 +98,9 @@ This is the contract. Everything is single-threaded on the main thread.
       - run layout for every visible panel (positions all widgets)
       - clear both DrawLists
       - for each panel BACK-to-front: panel->draw(drawList)
-      - draw overlay content (open dropdown popup, tooltip) into overlayList
+      - draw overlay content (menu bar row + its open dropdown, modal backdrop, open
+        popup, tooltip) into overlayList -- the menu bar draws even while non-
+        interactive behind an open modal, so it stays visually present throughout
       - append overlayList onto drawList  → final ordered command stream
 
 6.  Scene rendering as today (3D pass)

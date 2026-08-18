@@ -3,6 +3,7 @@
 
 #include "stb/stb_truetype.h"
 
+#include <algorithm>
 #include <cassert>
 #include <stdexcept>
 #include <string>
@@ -164,6 +165,17 @@ void Font::bakeInternal(const std::vector<std::uint8_t>& ttfData, float pixelHei
 	m_whitePixelUV = { 2.0f / static_cast<float>(atlasWidth), (static_cast<float>(atlasHeight) - 2.0f) / static_cast<float>(atlasHeight) };
 	m_bakedPixelSize = pixelHeight;
 
+	// Widest ASCII digit advance, for TextFlags::Tabular (advanceFor(), below) -- computed
+	// once here rather than per-call, since it never changes between bakes of the same
+	// font/size. 0.0f (the member's default) if the font has no digits in its baked
+	// ranges, which advanceFor() treats as "tabular padding not available."
+	m_tabularDigitAdvanceAtBake = 0.0f;
+	for (std::uint32_t digit = '0'; digit <= '9'; ++digit) {
+		if (hasGlyph(digit)) {
+			m_tabularDigitAdvanceAtBake = std::max(m_tabularDigitAdvanceAtBake, glyphFor(digit).xAdvance);
+		}
+	}
+
 	int ascentRaw = 0, descentRaw = 0, lineGapRaw = 0;
 	stbtt_GetFontVMetrics(&fontInfo, &ascentRaw, &descentRaw, &lineGapRaw);
 	float unitsScale = stbtt_ScaleForPixelHeight(&fontInfo, pixelHeight);
@@ -198,15 +210,23 @@ const Glyph& Font::glyphFor(std::uint32_t codepoint) const {
 	return m_glyphs[slot];
 }
 
-Vec2 Font::measureText(std::string_view utf8, float pixelSize) const {
-	float scale = (m_bakedPixelSize > 0.0f) ? pixelSize / m_bakedPixelSize : 0.0f;
+Vec2 Font::measureText(std::string_view utf8, float pixelSize, TextFlags flags) const {
 	float width = 0.0f;
 	std::size_t pos = 0;
 	while (pos < utf8.size()) {
 		std::uint32_t cp = decodeUtf8(utf8, pos);
-		width += glyphFor(cp).xAdvance * scale;
+		width += advanceFor(cp, pixelSize, flags);
 	}
 	return { width, lineHeight(pixelSize) };
+}
+
+float Font::advanceFor(std::uint32_t codepoint, float pixelSize, TextFlags flags) const {
+	float scale = (m_bakedPixelSize > 0.0f) ? pixelSize / m_bakedPixelSize : 0.0f;
+	if (hasFlag(flags, TextFlags::Tabular) && codepoint >= '0' && codepoint <= '9' &&
+	    m_tabularDigitAdvanceAtBake > 0.0f) {
+		return m_tabularDigitAdvanceAtBake * scale;
+	}
+	return glyphFor(codepoint).xAdvance * scale;
 }
 
 float Font::lineHeight(float pixelSize) const {

@@ -74,6 +74,75 @@ namespace {
 		std::cout << "✓ testAddTextClippedTruncatesAndClips\n";
 	}
 
+	// docs/gui/03-text-and-fonts.md, "Tabular figures": end-to-end plumbing check, not
+	// just the Font-level arithmetic (test_font.cpp already pins that) -- with
+	// TextFlags::Tabular, the character AFTER a single digit must land at the exact same
+	// pen position regardless of which digit precedes it, since addText() must actually
+	// be asking Font::advanceFor() for the (padded) digit advance, not the glyph's own.
+	void testAddTextTabularFlagGivesEveryDigitTheSamePenAdvance() {
+		lvgui::DrawList listA;
+		listA.clear();
+		listA.addText(testFont(), 14.0f, { 0, 0 }, lvgui::Color(255, 255, 255), "1X",
+		              lvgui::TextFlags::Tabular);
+
+		lvgui::DrawList listB;
+		listB.clear();
+		listB.addText(testFont(), 14.0f, { 0, 0 }, lvgui::Color(255, 255, 255), "8X",
+		              lvgui::TextFlags::Tabular);
+
+		// Each glyph is one quad (4 vertices): '1'/'8' is vertices[0..3], 'X' is
+		// vertices[4..7]. vertices[4].pos.x is 'X's left edge -- i.e. the pen position
+		// after the digit's (padded) advance.
+		assert(listA.vertices().size() == 8);
+		assert(listB.vertices().size() == 8);
+		assert(std::fabs(listA.vertices()[4].pos.x - listB.vertices()[4].pos.x) < 0.01f);
+
+		std::cout << "✓ testAddTextTabularFlagGivesEveryDigitTheSamePenAdvance\n";
+	}
+
+	// docs/gui/03-text-and-fonts.md, "Headings": a Label drawing with the heading face
+	// passes that face's own registered TextureId through so its glyph quads sample the
+	// HEADING atlas, not the primary one -- addText()/addTextClipped() must actually
+	// route it into ensureCommand(), same mechanism addImage() already uses
+	// (testSwitchingTextureIdStartsANewCommand, above).
+	void testAddTextWithExplicitTextureIdBatchesIntoThatCommand() {
+		lvgui::DrawList list;
+		list.clear();
+
+		list.addRectFilled({ 0, 0, 10, 10 }, lvgui::Color(255, 0, 0));   // atlas (default)
+		list.addText(testFont(), 14.0f, { 0, 0 }, lvgui::Color(255, 255, 255), "Hi",
+		             lvgui::TextFlags::None, /*textureId=*/7);
+		list.addRectFilled({ 20, 0, 10, 10 }, lvgui::Color(0, 255, 0));  // back to the atlas
+
+		assert(list.commands().size() == 3);
+		assert(list.commands()[0].textureId == lvgui::kAtlasTextureId);
+		assert(list.commands()[1].textureId == 7);
+		assert(list.commands()[1].indexCount == 12);   // "Hi": two glyph quads, 6 indices each
+		assert(list.commands()[2].textureId == lvgui::kAtlasTextureId);
+
+		std::cout << "✓ testAddTextWithExplicitTextureIdBatchesIntoThatCommand\n";
+	}
+
+	void testAddTextClippedWithExplicitTextureIdBatchesIntoThatCommand() {
+		lvgui::DrawList list;
+		list.clear();
+
+		lvgui::Rect rect = { 10, 10, 100, 20 };
+		list.addTextClipped(testFont(), 14.0f, rect, lvgui::Color(255, 255, 255), "Heading",
+		                     lvgui::Align::Start, lvgui::Align::Center, lvgui::TextFlags::None,
+		                     /*textureId=*/7);
+
+		bool foundHeadingTextureCommand = false;
+		for (const auto& cmd : list.commands()) {
+			if (cmd.textureId == 7 && cmd.indexCount > 0) {
+				foundHeadingTextureCommand = true;
+			}
+		}
+		assert(foundHeadingTextureCommand);
+
+		std::cout << "✓ testAddTextClippedWithExplicitTextureIdBatchesIntoThatCommand\n";
+	}
+
 	void testRectFilledBasic() {
 		lvgui::DrawList list;
 		list.clear();
@@ -935,6 +1004,9 @@ int main() {
 	testAddTextEmitsOneQuadPerVisibleGlyph();
 	testAddTextSkipsWhitespaceQuads();
 	testAddTextClippedTruncatesAndClips();
+	testAddTextTabularFlagGivesEveryDigitTheSamePenAdvance();
+	testAddTextWithExplicitTextureIdBatchesIntoThatCommand();
+	testAddTextClippedWithExplicitTextureIdBatchesIntoThatCommand();
 
 	testRectFilledSquareCornersExact();
 	testRectFilledRoundedStaysInBoundsAndOffCentre();

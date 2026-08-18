@@ -623,6 +623,13 @@ namespace lightGraphics
 		void forwardInputToGui();
 		void recordUi(VkCommandBuffer cmd);
 		std::string findFontPath(const std::string& fontName);
+		// Uploads guiContext_->headingFont()'s atlas as a registered texture and reports
+		// the id back via GuiContext::setHeadingFontTextureId() -- shared by initUi()
+		// (first upload) and the per-frame DPI-rebake check in mainLoop() (re-upload
+		// after GuiContext::rebakeFont() redid the CPU-side pixels; registerUiTexture()
+		// has no update-in-place path, so this unregisters the stale one first). No-op if
+		// !guiContext_->hasHeadingFont(). See docs/gui/03-text-and-fonts.md, "Headings".
+		void registerHeadingFontTexture();
 
 		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). Defined
 		// out-of-line in VkAppUi.cpp -- inline bodies here would give every translation

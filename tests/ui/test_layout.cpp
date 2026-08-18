@@ -29,6 +29,12 @@ namespace {
 		return info;
 	}
 
+	lvgui::GuiCreateInfo testCreateInfoWithHeading() {
+		lvgui::GuiCreateInfo info = testCreateInfo();
+		info.headingFontSize = 28.0f;   // 2x the default 14px fontSize
+		return info;
+	}
+
 	void step(lvgui::GuiContext& ctx) {
 		ctx.beginFrame({ 800.0f, 600.0f }, 1.0f, 0.016f);
 		ctx.update();
@@ -267,6 +273,49 @@ namespace {
 		std::cout << "✓ testCompositeViaBoundsOverrideStillLaysOutChildren\n";
 	}
 
+	// docs/gui/03-text-and-fonts.md, "Headings": a Label with setHeading(true), drawn
+	// against a GuiContext that actually has one configured, must measure noticeably
+	// TALLER than an identical non-heading Label -- proof preferredSize() is really
+	// asking the heading Font for its metrics, not silently still using the primary one.
+	void testHeadingLabelUsesLargerFontMetrics() {
+		lvgui::GuiContext ctx(testCreateInfoWithHeading(), lvgui::PlatformHooks{});
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
+
+		auto* normal = panel->add<lvgui::Label>("Section");
+		auto* heading = panel->add<lvgui::Label>("Section");
+		heading->setHeading(true);
+
+		lvgui::Vec2 normalSize = normal->preferredSize(ctx);
+		lvgui::Vec2 headingSize = heading->preferredSize(ctx);
+
+		assert(headingSize.y > normalSize.y * 1.5f);
+		assert(headingSize.x > normalSize.x * 1.5f);
+
+		std::cout << "✓ testHeadingLabelUsesLargerFontMetrics\n";
+	}
+
+	// A Label with setHeading(true) against a GuiContext that never configured a
+	// heading font (GuiCreateInfo::headingFontSize left at 0.0f) must fall back to the
+	// primary font's metrics exactly, not crash or produce a zero-size label.
+	void testHeadingLabelFallsBackWithoutHeadingFontConfigured() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});   // no heading font
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
+
+		auto* normal = panel->add<lvgui::Label>("Section");
+		auto* heading = panel->add<lvgui::Label>("Section");
+		heading->setHeading(true);
+
+		lvgui::Vec2 normalSize = normal->preferredSize(ctx);
+		lvgui::Vec2 headingSize = heading->preferredSize(ctx);
+
+		assert(headingSize.x == normalSize.x);
+		assert(headingSize.y == normalSize.y);
+
+		step(ctx);   // also exercise draw() -- must not crash without a registered texture
+
+		std::cout << "✓ testHeadingLabelFallsBackWithoutHeadingFontConfigured\n";
+	}
+
 }
 
 int main() {
@@ -278,6 +327,9 @@ int main() {
 	testDisabledCompositeChildDrawsWithDisabledColorWithoutMutatingItsOwnFlag();
 	testCompositeChildBoundsReflectSameFrameResizeNoLag();
 	testCompositeViaBoundsOverrideStillLaysOutChildren();
+
+	testHeadingLabelUsesLargerFontMetrics();
+	testHeadingLabelFallsBackWithoutHeadingFontConfigured();
 
 	std::cout << "\n✅ All layout tests passed!\n";
 	return 0;

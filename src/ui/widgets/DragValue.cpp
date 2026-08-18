@@ -241,7 +241,13 @@ void DragValueT<T>::draw(DrawList& dl, const GuiContext& ctx) const {
 
 	std::string text = formatValue();
 	Color textColor = effectivelyEnabled() ? th.text : th.textDisabled;
-	dl.addTextClipped(ctx.font(), th.fontSize, box, textColor, text, Align::Center, Align::Center);
+	// Tabular: this is a live-updating numeric readout, exactly the case
+	// docs/gui/03-text-and-fonts.md's "Tabular figures" targets -- without it, each
+	// digit's own natural (proportional) width means the value visibly jitters
+	// horizontally as it changes. The label text above is prose, not digits, so it
+	// stays untouched.
+	dl.addTextClipped(ctx.font(), th.fontSize, box, textColor, text, Align::Center, Align::Center,
+	                   TextFlags::Tabular);
 }
 
 template class DragValueT<float>;

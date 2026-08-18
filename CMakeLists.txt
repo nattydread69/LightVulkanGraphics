@@ -459,6 +459,7 @@ if(LVG_BUILD_UI)
 		src/ui/Theme.cpp
 		src/ui/Widget.cpp
 		src/ui/Panel.cpp
+		src/ui/MenuBar.cpp
 		src/ui/GuiContext.cpp
 		src/ui/widgets/Label.cpp
 		src/ui/widgets/Separator.cpp

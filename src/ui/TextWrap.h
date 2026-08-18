@@ -20,6 +20,7 @@ class Font;
 // that one line rather than being hyphenated (matching Label's own long-standing
 // behaviour; hyphenation is out of scope for a scientific-visualisation parameter panel).
 // `width <= 0` or empty `text` returns the whole string as a single line, unwrapped.
-std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width);
+std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width,
+                                        TextFlags flags = TextFlags::None);
 
 } // namespace lightGraphics::ui

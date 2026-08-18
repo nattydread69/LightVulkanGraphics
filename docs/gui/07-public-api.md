@@ -16,6 +16,7 @@ include/lightVulkanGraphics/ui/
     DrawList.h       UiVertex, DrawCmd, DrawList
     Widget.h         Widget base
     Panel.h          Panel
+    MenuBar.h        MenuBar (docs/gui/05-widgets.md, "MenuBar" -- not a Widget)
     GuiContext.h     GuiContext, GuiCreateInfo, PlatformHooks*
     Ui.h             umbrella header — includes everything, defines `namespace lvgui`
     widgets/
@@ -124,9 +125,12 @@ public:
               int atlasWidth = 512, int atlasHeight = 512, float contentScale = 1.0f);
     bool isBaked() const;
 
-    Vec2  measureText(std::string_view utf8, float pixelSize) const;
+    Vec2  measureText(std::string_view utf8, float pixelSize, TextFlags flags = TextFlags::None) const;
     float lineHeight(float pixelSize) const;
     float ascent(float pixelSize) const;
+    // Padded per TextFlags::Tabular for ASCII digits -- docs/gui/03-text-and-fonts.md,
+    // "Tabular figures".
+    float advanceFor(std::uint32_t codepoint, float pixelSize, TextFlags flags = TextFlags::None) const;
     std::size_t indexAtOffset(std::string_view utf8, float pixelSize, float x) const;
     float offsetAtIndex(std::string_view utf8, float pixelSize, std::size_t byteIndex) const;
 
@@ -183,6 +187,10 @@ struct GuiCreateInfo {
     int         atlasWidth    = 512;
     int         atlasHeight   = 512;
     bool        enableTooltips = true;
+    // 0.0f (default) = no heading face baked at all. A positive logical size bakes a
+    // SECOND, independent Font from the same font bytes, for Label::setHeading()
+    // (docs/gui/03-text-and-fonts.md, "Headings").
+    float       headingFontSize = 0.0f;
 };
 
 struct PlatformHooks {
@@ -231,6 +239,17 @@ public:
     const Theme& theme() const;
     const Font&  font() const;
     const InputState& input() const;
+
+    // ---- heading face (docs/gui/03-text-and-fonts.md, "Headings") ----
+    bool hasHeadingFont() const;
+    const Font& headingFont() const;      // only valid when hasHeadingFont()
+    float headingFontSize() const;
+    TextureId headingFontTextureId() const;
+    void setHeadingFontTextureId(TextureId);   // VkApp calls this once it's registered
+
+    // ---- menu bar (docs/gui/05-widgets.md, "MenuBar") ----
+    MenuBar&       menuBar();
+    const MenuBar& menuBar() const;
 
     WidgetId hoveredId() const;
     WidgetId activeId()  const;
@@ -281,7 +300,9 @@ public:
     bool            hasGui() const;
     ui::GuiContext& gui();                 // asserts hasGui()
 
-    // For the Image widget (docs/gui/05-widgets.md, "Image").
+    // For the Image widget (docs/gui/05-widgets.md, "Image") -- and, internally,
+    // for registering the heading face's atlas as a texture too
+    // (docs/gui/03-text-and-fonts.md, "Headings").
     ui::TextureId   registerUiTexture(const uint8_t* rgbaPixels, uint32_t width, uint32_t height);
     void            unregisterUiTexture(ui::TextureId);
 #endif

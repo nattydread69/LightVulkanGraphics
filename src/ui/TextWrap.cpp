@@ -3,7 +3,8 @@
 
 namespace lightGraphics::ui {
 
-std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width) {
+std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width,
+                                        TextFlags flags) {
 	std::vector<std::string_view> lines;
 	if (width <= 0.0f || text.empty()) {
 		lines.push_back(text);
@@ -17,7 +18,7 @@ std::vector<std::string_view> wrapText(const Font& font, std::string_view text, 
 	while (pos <= text.size()) {
 		bool atEnd = pos == text.size();
 		if (atEnd || text[pos] == ' ') {
-			float w = font.measureText(text.substr(lineStart, pos - lineStart), pixelSize).x;
+			float w = font.measureText(text.substr(lineStart, pos - lineStart), pixelSize, flags).x;
 			if (w > width && lastLineEnd > lineStart) {
 				// Overflowed -- break at the last space seen on this line instead, and
 				// re-evaluate the SAME pos against the new, shorter line.

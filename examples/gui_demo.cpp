@@ -75,6 +75,9 @@ int main()
 		// api.md), so this is the only place that needs to know the chosen size.
 		lvgui::GuiCreateInfo guiInfo;
 		guiInfo.fontSize = 15.0f;
+		// Second, larger face for section headings (docs/gui/03-text-and-fonts.md,
+		// "Headings") -- exercised below by the "LVGUI Demo" panel's own title Label.
+		guiInfo.headingFontSize = 24.0f;
 		app.setGuiCreateInfo(guiInfo);
 
 		app.init(1280, 800, "LVGUI Demo");
@@ -94,6 +97,26 @@ int main()
 
 		auto& gui = app.gui();
 
+		// docs/gui/05-widgets.md, "MenuBar": a single, global row of dropdown menus fixed
+		// to the window's top edge -- unlike TabBar, which groups widgets within one
+		// panel. Every panel below is positioned well clear of its default height
+		// (theme.titleBarHeight), which is the consumer's own job (the bar does not
+		// reserve that space automatically).
+		{
+			auto file = gui.menuBar().addMenu("File");
+			file.addItem("New Scene", [] { std::cout << "[gui-demo] File > New Scene\n"; });
+			file.addItem("Open...", [] { std::cout << "[gui-demo] File > Open...\n"; }, "Ctrl+O");
+			file.addSeparator();
+			file.addItem("Exit", [] { std::cout << "[gui-demo] File > Exit (not wired up)\n"; }, "Ctrl+Q");
+
+			auto edit = gui.menuBar().addMenu("Edit");
+			edit.addItem("Undo", [] { std::cout << "[gui-demo] Edit > Undo\n"; }, "Ctrl+Z");
+			edit.addItem("Redo", [] { std::cout << "[gui-demo] Edit > Redo\n"; }, "Ctrl+Y");
+
+			auto view = gui.menuBar().addMenu("View");
+			view.addItem("Reset Camera", [&app] { app.setCameraLookAt({ 4.0f, 2.5f, 6.0f }, { 0.0f, 0.0f, 0.0f }); });
+		}
+
 		// A second, smaller panel behind the main one, purely so clicking it demonstrates
 		// z-order raising it to the front (docs/gui/05, "Panel").
 		gui.createPanel("Back Panel", { 700.0f, 400.0f, 220.0f, 120.0f });
@@ -109,6 +132,7 @@ int main()
 		// bracketing app.run() below.
 		panel->setPersistenceId("main");
 
+		panel->add<lvgui::Label>("LVGUI Demo")->setHeading(true);
 		panel->add<lvgui::Label>("Basics -- Label, Separator, Spacer, Button");
 		panel->add<lvgui::Label>("Drag this title bar around")->setColor({ 0x9A, 0xA3, 0xAF, 0xFF });
 		panel->add<lvgui::Spacer>(4.0f);

@@ -381,7 +381,10 @@ void SliderT<T>::draw(DrawList& dl, const GuiContext& ctx) const {
 	if (m_showValue) {
 		std::string text = formatValue();
 		Color valueColor = effectivelyEnabled() ? th.text : th.textDisabled;
-		dl.addTextClipped(ctx.font(), th.fontSize, track, valueColor, text, Align::Center, Align::Center);
+		// Tabular: a live-updating numeric readout -- see the matching comment in
+		// DragValue::draw().
+		dl.addTextClipped(ctx.font(), th.fontSize, track, valueColor, text, Align::Center, Align::Center,
+		                   TextFlags::Tabular);
 	}
 }
 
