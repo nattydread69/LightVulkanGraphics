@@ -447,42 +447,11 @@ if (WIN32)
 endif()
 
 if(LVG_BUILD_UI)
-	set(LVGUI_SOURCES
-		src/ui/Types.cpp
-		src/ui/DrawList.cpp
-		src/ui/Font.cpp
-		src/ui/FontImpl.cpp
-		src/ui/Utf8.cpp
-		src/ui/TextWrap.cpp
-		src/ui/UiRenderer.cpp
-		src/ui/UiPlatformGlfw.cpp
-		src/ui/Theme.cpp
-		src/ui/Widget.cpp
-		src/ui/Panel.cpp
-		src/ui/MenuBar.cpp
-		src/ui/GuiContext.cpp
-		src/ui/widgets/Label.cpp
-		src/ui/widgets/Separator.cpp
-		src/ui/widgets/Button.cpp
-		src/ui/widgets/Checkbox.cpp
-		src/ui/widgets/RadioButton.cpp
-		src/ui/widgets/Slider.cpp
-		src/ui/widgets/DragValue.cpp
-		src/ui/widgets/TextBox.cpp
-		src/ui/widgets/CompositeWidget.cpp
-		src/ui/widgets/DropDown.cpp
-		src/ui/widgets/Row.cpp
-		src/ui/widgets/Vec3Field.cpp
-		src/ui/widgets/CollapsingSection.cpp
-		src/ui/widgets/ProgressBar.cpp
-		src/ui/widgets/PlotLine.cpp
-		src/ui/widgets/ColorEdit.cpp
-		src/ui/widgets/Image.cpp
-		src/ui/widgets/TabBar.cpp
-		src/ui/widgets/ListBox.cpp
-		src/ui/widgets/ContextMenu.cpp
-		src/ui/widgets/LogView.cpp
-	)
+	# LVGUI_EXCLUDED_SOURCES (computed above, in the core "Sources" section) is the
+	# authoritative glob of src/ui/*.cpp -- reuse it here instead of hand-listing files,
+	# so adding/removing a src/ui/*.cpp source only ever requires touching the source
+	# tree, never this list.
+	set(LVGUI_SOURCES ${LVGUI_EXCLUDED_SOURCES})
 
 	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
 	add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphicsUI)
