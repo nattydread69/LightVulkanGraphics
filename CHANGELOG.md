@@ -27,6 +27,7 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ### Fixed
 - The Vulkan validation-layer debug messenger printed to the console unconditionally, ignoring `debugOutput` / `LightVulkanGraphicsCreateInfo::enableDebugOutput` (both default `false`). It now always routes through `logMessage()`, so that flag is the sole switch for validation-layer chatter.
+- `FBXLoader::loadModel()` computed a skinned bone's world bind pose as `mesh.globalBindTransform * inverse(offsetMatrix)` for every source format. Assimp's glTF2 importer reports `mOffsetMatrix` already relative to the skin's common space, unlike its FBX importer (mesh-node-local); for a glTF/glb mesh node with a non-identity transform, premultiplying by `mesh.globalBindTransform` doubled that transform and corrupted every bone's bind position (e.g. a hip bind height collapsing from ~1m to ~0.1m with an axis swap). glTF/glb sources now use `inverse(offsetMatrix)` directly; FBX is unaffected (verified via `worker_skinning_sanity`).
 
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.

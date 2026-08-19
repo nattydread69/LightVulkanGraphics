@@ -30,6 +30,7 @@
 #include <iostream>
 #include <algorithm>
 #include <filesystem>
+#include <cctype>
 #include <cstring>
 #include <cmath>
 #include <limits>
@@ -257,11 +258,36 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     currentModelDirectory_ = absFilePath.parent_path();
     embeddedTextures_.clear();
 
+    // Assimp's glTF2 importer reports skin bind data already relative to the
+    // skin's common space rather than the FBX convention of "relative to the
+    // scene root / mesh node" that the code below (globalInverseTransform,
+    // and further down, skinningGlobalBindTransform) assumes. For a glTF/glb
+    // source whose scene root or mesh nodes carry a non-identity transform
+    // (e.g. a Blender-baked scale/orientation compensation), folding that
+    // transform in here corrupts every bone's bind pose and, downstream, the
+    // render-time skinning matrix (RiggedSkinning.h's buildRiggedFinalBoneMatrix
+    // premultiplies by globalInverseTransform). Verified against a Blender-
+    // exported .glb whose root transform was a spurious 0.1-scale + axis-swap
+    // rotation that visibly flattened the posed character.
+    std::string sourceExtension = absFilePath.extension().string();
+    for (char& c : sourceExtension)
+    {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    bool const isGltfSource = sourceExtension == ".gltf" || sourceExtension == ".glb";
+
     // Default to the scene root inverse and tighten it to the armature root after we have
     // the imported node hierarchy. Using the scene root here causes large bind-pose errors
     // for Worker.fbx because the actual skinning root is CharacterArmature.
-    model->globalInverseTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
-    model->globalInverseTransform = glm::inverse(model->globalInverseTransform);
+    if (isGltfSource)
+    {
+        model->globalInverseTransform = glm::mat4(1.0f);
+    }
+    else
+    {
+        model->globalInverseTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
+        model->globalInverseTransform = glm::inverse(model->globalInverseTransform);
+    }
 
     // Process the scene
     processNode(scene->mRootNode, scene, *model);
@@ -293,6 +319,17 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         }
     }
 
+    // Assimp's glTF2 importer reports mOffsetMatrix already relative to the
+    // skin's common (root) space, unlike its FBX importer, which reports it
+    // relative to each individual mesh node's own local space. Premultiplying
+    // by mesh.globalBindTransform is required to recover a world-space bind
+    // pose in the FBX case, but double-applies that mesh node's transform in
+    // the glTF/glb case -- for an asset whose mesh nodes carry a non-identity
+    // transform (e.g. a Blender-baked scale/orientation compensation), that
+    // corrupts every bone's bind position (verified against a Blender-exported
+    // .glb: inverse(offsetMatrix) alone reproduced the correct ~1m hip height,
+    // while premultiplying by mesh.globalBindTransform collapsed it to ~0.1m
+    // with an axis swap). isGltfSource (computed above) already gates this.
     std::vector<bool> hasSkinningBindTransform(model->bones.size(), false);
     for (auto& mesh : model->meshes)
     {
@@ -319,8 +356,9 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
             // a skin bind basis that differs from node local transforms.
             if (!hasSkinningBindTransform[globalBoneIndex])
             {
-                model->bones[globalBoneIndex].skinningGlobalBindTransform =
-                    mesh.globalBindTransform * glm::inverse(meshBone.offsetMatrix);
+                model->bones[globalBoneIndex].skinningGlobalBindTransform = isGltfSource
+                    ? glm::inverse(meshBone.offsetMatrix)
+                    : mesh.globalBindTransform * glm::inverse(meshBone.offsetMatrix);
                 model->bones[globalBoneIndex].hasSkinBindTransform = true;
                 hasSkinningBindTransform[globalBoneIndex] = true;
             }
