@@ -185,8 +185,10 @@ namespace lightGraphics
         std::string lastError;
 
         // Assimp scene processing
-        void processNode(aiNode* node, const aiScene* scene, RiggedModel& model);
-        RiggedMesh processMesh(aiMesh* mesh, const aiScene* scene);
+        void processNode(aiNode* node, const aiScene* scene, RiggedModel& model,
+                          const glm::mat4& parentTransform = glm::mat4(1.0f));
+        RiggedMesh processMesh(aiMesh* mesh, const aiScene* scene,
+                                const glm::mat4& nodeTransform);
         void processBones(aiMesh* mesh, RiggedMesh& riggedMesh);
         void processAnimations(const aiScene* scene, RiggedModel& model);
         void processAnimationChannel(aiNodeAnim* channel, AnimationChannel& animChannel);
