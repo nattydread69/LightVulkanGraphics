@@ -458,13 +458,16 @@ bool FBXLoader::isValidFBXFile(const std::string& filePath)
     return (scene != nullptr && !(scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE));
 }
 
-void FBXLoader::processNode(aiNode* node, const aiScene* scene, RiggedModel& model)
+void FBXLoader::processNode(aiNode* node, const aiScene* scene, RiggedModel& model,
+                             const glm::mat4& parentTransform)
 {
+    glm::mat4 const nodeTransform = parentTransform * aiMatrix4x4ToGlm(node->mTransformation);
+
     // Process all meshes in this node
     for (unsigned int i = 0; i < node->mNumMeshes; i++)
     {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        RiggedMesh riggedMesh = processMesh(mesh, scene);
+        RiggedMesh riggedMesh = processMesh(mesh, scene, nodeTransform);
         riggedMesh.nodeName = node->mName.C_Str();
         model.meshes.push_back(riggedMesh);
     }
@@ -472,13 +475,27 @@ void FBXLoader::processNode(aiNode* node, const aiScene* scene, RiggedModel& mod
     // Process child nodes
     for (unsigned int i = 0; i < node->mNumChildren; i++)
     {
-        processNode(node->mChildren[i], scene, model);
+        processNode(node->mChildren[i], scene, model, nodeTransform);
     }
 }
 
-RiggedMesh FBXLoader::processMesh(aiMesh* mesh, const aiScene* scene)
+RiggedMesh FBXLoader::processMesh(aiMesh* mesh, const aiScene* scene, const glm::mat4& nodeTransform)
 {
     RiggedMesh riggedMesh;
+
+    // Skinned meshes are positioned entirely by their bones (the skin
+    // cluster's own bind data, or the node-hierarchy bind pose the bone
+    // chain itself walks) -- see computeBindPose()/buildRiggedFinalBoneMatrix
+    // callers throughout this codebase. Applying this mesh's own node
+    // transform on top would double-transform them. Static, unskinned
+    // meshes (e.g. architectural props with no bones at all) have nothing
+    // else to place them in the scene, though: without baking their node's
+    // accumulated transform into the vertex data here, every such mesh
+    // renders at its own local origin instead of its actual position in the
+    // scene, collapsing an entire multi-node scene (e.g. a building's walls,
+    // floor, and props, each its own node) into one overlapping jumble.
+    bool const bakeNodeTransform = mesh->mNumBones == 0;
+    glm::mat3 const normalTransform = glm::mat3(nodeTransform);
 
     // Process vertices
     for (unsigned int i = 0; i < mesh->mNumVertices; i++)
@@ -487,10 +504,22 @@ RiggedMesh FBXLoader::processMesh(aiMesh* mesh, const aiScene* scene)
 
         // Position
         vertex.position = aiVector3DToGlm(mesh->mVertices[i]);
+        if (bakeNodeTransform)
+        {
+            vertex.position = glm::vec3(nodeTransform * glm::vec4(vertex.position, 1.0f));
+        }
 
         // Normal
         if (mesh->mNormals)
+        {
             vertex.normal = aiVector3DToGlm(mesh->mNormals[i]);
+            if (bakeNodeTransform)
+            {
+                glm::vec3 const transformed = normalTransform * vertex.normal;
+                float const len = glm::length(transformed);
+                vertex.normal = len > 1e-8f ? transformed / len : vertex.normal;
+            }
+        }
         else
             vertex.normal = glm::vec3(0.0f);
 
