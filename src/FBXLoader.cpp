@@ -192,6 +192,7 @@ FBXLoader::~FBXLoader()
 std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
 {
     lastError = "";
+    currentModelPath = filePath;
 
     Assimp::Importer importer;
 
@@ -587,7 +588,8 @@ RiggedMesh FBXLoader::processMesh(aiMesh* mesh, const aiScene* scene, const glm:
                 if (embedded)
                 {
                     riggedMesh.embeddedTexture = embedded;
-                    riggedMesh.embeddedTextureKey = "embedded:" + std::string(texPath.C_Str());
+                    riggedMesh.embeddedTextureKey =
+                        "embedded:" + currentModelPath + ":" + std::string(texPath.C_Str());
                 }
             }
         }

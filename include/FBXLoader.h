@@ -183,6 +183,16 @@ namespace lightGraphics
 
     private:
         std::string lastError;
+        // The file currently being loaded, set at the top of loadModel() --
+        // folded into embedded-texture cache keys (see processMesh()) since
+        // VkApp's texture cache is one process-wide map keyed by string, but
+        // Assimp's embedded-texture references ("*0", "*1", ...) are only
+        // unique *within* one source file. Without the source path in the
+        // key, loading a second glb whose material also references "*0"
+        // hits the first file's cache entry and silently reuses its
+        // texture (observed as a character model's texture appearing on an
+        // unrelated static prop loaded afterward).
+        std::string currentModelPath;
 
         // Assimp scene processing
         void processNode(aiNode* node, const aiScene* scene, RiggedModel& model,
