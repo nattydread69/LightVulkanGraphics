@@ -210,6 +210,14 @@ namespace lightGraphics
 		// loop starts (see run()). Exposed publicly in case a consumer drives its own
 		// loop instead of calling run().
 		void showWindow();
+		// For a consumer whose own updateCallback_ runs a slow synchronous reload (e.g.
+		// loading a different model) with the window already visible and focused: the
+		// window manager isn't gated by run() having started here the way it is at
+		// startup, so a long enough gap with nothing pumping events reads as a hung
+		// application the same way the pre-showWindow() startup case once did. Hiding
+		// around such a reload and showing again after avoids that; a brief loading
+		// flicker is preferable to an OS "not responding" dialog.
+		void hideWindow();
 		// Caps how many distinct textures/solid-color textures can exist at once
 		// (each consumes one descriptor set from a fixed-size pool sized at init()
 		// time). Must be called before init(); has no effect afterward. Raise this

@@ -443,6 +443,39 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
             << std::endl;
     }
 
+    // Some character exports leave one or more meshes completely unskinned alongside
+    // an otherwise fully-skinned rig -- a common leftover from a "fit to clothes"/
+    // base-body reference layer the authoring tool used internally (DAZ Studio,
+    // Character Creator, and similar all have this workflow) and never meant to ship.
+    // A static prop scene (this same loader also serves those -- see RiggedObject's
+    // decorative-model use, e.g. a dojo background) legitimately has EVERY mesh
+    // unskinned, so this only fires when the model has at least one properly skinned
+    // mesh to begin with: a rigged, posable character is expected to be entirely
+    // skinned, so an unskinned mesh mixed in among skinned ones is reliably leftover/
+    // reference geometry rather than an intentional static part of the rig -- it can
+    // never move with the animated result, so nothing meant to render alongside it
+    // would have been left unbound.
+    bool const hasSkinnedMesh = std::any_of(model->meshes.begin(), model->meshes.end(),
+        [](const RiggedMesh& mesh) { return !mesh.bones.empty(); });
+    if (hasSkinnedMesh)
+    {
+        size_t const meshCountBeforeFilter = model->meshes.size();
+        model->meshes.erase(
+            std::remove_if(model->meshes.begin(), model->meshes.end(),
+                [](const RiggedMesh& mesh) { return mesh.bones.empty(); }),
+            model->meshes.end());
+        size_t const droppedCount = meshCountBeforeFilter - model->meshes.size();
+        if (droppedCount > 0)
+        {
+            consoleErrorStream()
+                << "[FBXLoader] Dropped " << droppedCount << " unskinned mesh(es) from "
+                << filePath << " -- this model has other properly skinned meshes, so"
+                   " these are almost certainly leftover reference/fitting geometry"
+                   " from the authoring tool, not an intentional static part of the rig."
+                << std::endl;
+        }
+    }
+
     return model;
     }
     catch (const std::exception& e)

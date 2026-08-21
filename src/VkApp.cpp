@@ -941,6 +941,14 @@ namespace lightGraphics
 		}
 	}
 
+	void VkApp::hideWindow()
+	{
+		if (window_)
+		{
+			glfwHideWindow(window_);
+		}
+	}
+
 	// -----------------------------
 	// Init chain
 	// -----------------------------

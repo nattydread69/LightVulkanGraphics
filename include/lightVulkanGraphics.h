@@ -55,6 +55,9 @@ namespace lightGraphics
         // The window starts hidden and run() reveals it automatically (see
         // VkApp::run()). Exposed here too for a consumer driving its own loop instead.
         void showWindow() { VkApp::showWindow(); }
+        // See VkApp::hideWindow() -- pair with showWindow() around a live synchronous
+        // reload so it doesn't read as a hung application to the window manager.
+        void hideWindow() { VkApp::hideWindow(); }
         size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject)
         {
             return VkApp::addRiggedObject(riggedObject);
