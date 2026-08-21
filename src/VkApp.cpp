@@ -605,6 +605,12 @@ namespace lightGraphics
 		{
 			throw std::logic_error("Scene not finalized. Call finalizeScene() before run().");
 		}
+		// The window is created hidden (see createWindow()) precisely so that whatever
+		// synchronous setup a consumer does between construction and run() -- often a
+		// slow scene load -- happens before the OS/window manager is tracking a mapped
+		// window and pinging it for liveness. Reveal it now, right as the event loop
+		// that actually answers those pings is about to start.
+		showWindow();
 		mainLoop();
 	}
 
@@ -897,6 +903,9 @@ namespace lightGraphics
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+		// Always created hidden; run() reveals it once the event loop that answers the
+		// window manager's liveness pings is actually about to start. See run().
+		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
 		window_ = glfwCreateWindow(w, h, title, nullptr, nullptr);
 		if (!window_)
@@ -922,6 +931,14 @@ namespace lightGraphics
 		uiPlatform_ = std::make_unique<ui::UiPlatformGlfw>();
 		uiPlatform_->installCallbacks(window_);
 #endif
+	}
+
+	void VkApp::showWindow()
+	{
+		if (window_)
+		{
+			glfwShowWindow(window_);
+		}
 	}
 
 	// -----------------------------

@@ -44,7 +44,7 @@ This is the primary header users should include. It re-exports and organizes all
   - Assimp (optional)
 
 #### GUI Component (LVGUI)
-- **Purpose:** Immediate-mode GUI framework
+- **Purpose:** Retained-mode GUI framework (immediate-mode rendering underneath — see `docs/gui/00-overview.md`, D1/D2)
 - **Located:** `lightVulkanGraphics/ui/`
 - **Key Classes:**
   - `GuiContext` - GUI context and management

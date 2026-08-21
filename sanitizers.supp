@@ -1,0 +1,46 @@
+# AddressSanitizer suppressions for LightVulkanGraphics.
+#
+# Usage
+# -----
+# CMake wires this in automatically for CTest when configured with
+# -DLVG_ENABLE_SANITIZERS=ON, so `ctest` needs no extra setup.
+#
+# To run a sanitized binary by hand (an example, or your own application), point
+# ASAN_OPTIONS at this file:
+#
+#     ASAN_OPTIONS=suppressions=/path/to/sanitizers.supp:detect_leaks=0 ./your_app
+#
+# `detect_leaks=0` is not required, but the Vulkan loader and the GPU driver both
+# retain allocations for the process lifetime, so LeakSanitizer is noisy against
+# anything that creates a device.
+#
+# Note that ASan suppressions only apply to errors raised inside an intercepted
+# function (memcpy, strcpy, ...). They cannot suppress an arbitrary
+# heap-buffer-overflow detected in ordinary compiled code -- so if a new error appears
+# that is NOT in this list, it is real and belongs to us. Suppressing the entry below
+# is what made a genuine use-after-free in Font::bake visible in the first place.
+#
+# ---------------------------------------------------------------------------------
+# amdvlk64.so: over-read of VkSwapchainCreateInfoKHR::pQueueFamilyIndices
+# ---------------------------------------------------------------------------------
+# The AMD open-source Vulkan driver memcpy's 16 bytes out of the buffer backing
+# pQueueFamilyIndices during vkCreateSwapchainKHR, while the application correctly
+# supplies queueFamilyIndexCount = 2 (that is, 8 bytes). With the validation layers
+# loaded the layer deep-copies the array into an 8-byte heap allocation, and the
+# driver's 16-byte read runs off the end of it, which is what ASan reports:
+#
+#     READ of size 16 ... 0 bytes after 8-byte region
+#       #0 memcpy
+#       #1 amdvlk64.so
+#       #2 libvulkan.so.1
+#       #3 libVkLayer_khronos_validation.so
+#       #4 lightGraphics::VkApp::createSwapChain()
+#
+# This is driver-side and entirely unrelated to LVGUI. It reproduces identically on a
+# pristine `-DLVG_BUILD_UI=OFF` build with no GUI code compiled in at all, and it is a
+# read rather than a write, so it cannot corrupt application state. It was verified as
+# pre-existing by building both configurations and comparing.
+#
+# Scope is narrowed to the driver library so an intercepted call from any other
+# library -- including our own code -- is still reported.
+interceptor_via_lib:amdvlk64.so

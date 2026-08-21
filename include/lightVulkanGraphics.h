@@ -52,6 +52,9 @@ namespace lightGraphics
 
         // Convenience
         void setLineRenderMode();
+        // The window starts hidden and run() reveals it automatically (see
+        // VkApp::run()). Exposed here too for a consumer driving its own loop instead.
+        void showWindow() { VkApp::showWindow(); }
         size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject)
         {
             return VkApp::addRiggedObject(riggedObject);

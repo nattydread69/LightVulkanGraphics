@@ -206,6 +206,10 @@ namespace lightGraphics
 		void setLogCallback(LogCallback callback) { logCallback_ = callback; }
 		void setManageGlfwLifecycle(bool manage) { manageGlfwLifecycle_ = manage; }
 		bool getManageGlfwLifecycle() const { return manageGlfwLifecycle_; }
+		// The window is created hidden and run() reveals it automatically once its event
+		// loop starts (see run()). Exposed publicly in case a consumer drives its own
+		// loop instead of calling run().
+		void showWindow();
 		// Caps how many distinct textures/solid-color textures can exist at once
 		// (each consumes one descriptor set from a fixed-size pool sized at init()
 		// time). Must be called before init(); has no effect afterward. Raise this

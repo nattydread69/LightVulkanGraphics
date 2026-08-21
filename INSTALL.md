@@ -173,7 +173,8 @@ Essential graphics rendering and object management.
 - `LightVulkanGraphics::Core` (alias)
 
 ### UI
-Immediate-mode GUI framework (LVGUI).
+Retained-mode GUI framework (LVGUI): widgets are constructed once and persist, drawn
+via an immediate-mode renderer each frame. See `docs/gui/00-overview.md`.
 
 **Includes:**
 - GUI context (`GuiContext`)

@@ -540,9 +540,16 @@ if(LVG_BUILD_UI)
 	)
 endif()
 
-# 2) Public headers (everything under include/)
+# 2) Public headers (everything under include/, except lightVulkanGraphics/ui/,
+#    which 2b below installs separately at its own destination). Excluding it
+#    here unconditionally -- not just when LVG_BUILD_UI is OFF -- means an
+#    LVG_BUILD_UI=OFF install has no trace of GUI headers anywhere: with the
+#    GUI target's headers, sources and shaders already all gated on that
+#    option, this was the one place they still leaked into every install
+#    regardless of the flag.
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
+	PATTERN "ui" EXCLUDE
 )
 install(FILES
 	${LVG_GENERATED_INCLUDE_DIR}/LightVulkanGraphicsVersion.h
