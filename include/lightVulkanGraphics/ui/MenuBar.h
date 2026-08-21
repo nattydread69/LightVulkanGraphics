@@ -72,6 +72,25 @@ public:
 	// handle for adding its items. Order of addMenu() calls is left-to-right draw order.
 	Menu addMenu(std::string title);
 	std::size_t menuCount() const { return m_menus.size(); }
+	// Removes every menu, so the next addMenu()/addItem() calls start from an empty bar.
+	// Also closes any open menu (resets openIndex() to -1), the same as a click outside
+	// the bar would -- correct for a consumer that's tearing the bar down or replacing
+	// it with a genuinely different set of menus. NOT what a consumer whose item labels
+	// reflect live state (e.g. "Ragdoll: On") wants if it rebuilds every frame purely to
+	// refresh those labels: calling this every frame would force-close whatever the user
+	// just opened before the next draw ever shows it as open, since MenuBar has no way
+	// to change an already-added item's label in place. See clearKeepingOpenMenu() for
+	// that case instead.
+	void clear() { m_menus.clear(); m_openMenuIndex = -1; }
+	// Same as clear(), but preserves openIndex() across the call instead of resetting
+	// it -- for a consumer that rebuilds the SAME menu bar shape every frame (same
+	// addMenu() calls, same order) purely to refresh item labels/state, so an open
+	// dropdown survives the rebuild instead of closing the instant it was opened.
+	// Safe even if the rebuilt bar ends up with fewer menus than before: isMenuOpen()
+	// (and everything gated on it -- openMenuRect(), drawOpenMenu(), the click-handling
+	// in update()) treats an index that's now out of range as closed, rather than
+	// indexing out of bounds.
+	void clearKeepingOpenMenu() { m_menus.clear(); }
 
 	// 0 if menuCount() == 0 -- a consumer who never touches the menu bar pays nothing and
 	// sees no change to their panel layout; one who does can offset their own panels'
@@ -96,7 +115,15 @@ private:
 
 	int itemAtY(const GuiContext& ctx, const Rect& menu, float mouseY) const;
 
-	bool isMenuOpen() const { return m_openMenuIndex >= 0; }
+	// Bounds-checked, not just a sign check: clearKeepingOpenMenu() can leave
+	// m_openMenuIndex pointing past the end of a smaller rebuilt m_menus, and every
+	// caller of this (openMenuRect(), itemAtY(), drawOpenMenu(), update()'s own click
+	// handling) indexes m_menus directly once this returns true, so the bounds check
+	// belongs here once rather than repeated at every one of those call sites.
+	bool isMenuOpen() const
+	{
+		return m_openMenuIndex >= 0 && static_cast<std::size_t>(m_openMenuIndex) < m_menus.size();
+	}
 	void closeMenu() { m_openMenuIndex = -1; }
 	// True iff the bar row itself (any title) OR the currently open dropdown was under
 	// the cursor as of the last update() call -- cached, not recomputed, so wantsMouse()

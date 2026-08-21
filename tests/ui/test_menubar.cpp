@@ -231,6 +231,99 @@ namespace {
 		std::cout << "✓ testWantsMouseTrueWhileHoveringOrMenuOpen\n";
 	}
 
+	void testClearEmptiesTheBarAndClosesAnyOpenMenu() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto file = ctx.menuBar().addMenu("File");
+		file.addItem("New", [] {});
+		ctx.menuBar().addMenu("Edit");
+		step(ctx);
+
+		clickAt(ctx, centre(ctx.menuBar().menuTitleRect(ctx, 0)));
+		assert(ctx.menuBar().openIndex() == 0);
+
+		ctx.menuBar().clear();
+
+		assert(ctx.menuBar().menuCount() == 0);
+		assert(ctx.menuBar().height(ctx) == 0.0f);
+		assert(ctx.menuBar().openIndex() == -1);
+
+		// The bar is fully reusable afterwards -- the same rebuild-every-frame pattern a
+		// consumer with live-state item labels relies on (docs/gui/05-widgets.md).
+		auto rebuilt = ctx.menuBar().addMenu("File");
+		int fired = -1;
+		rebuilt.addItem("New", [&] { fired = 0; });
+		step(ctx);
+		assert(ctx.menuBar().menuCount() == 1);
+		clickAt(ctx, centre(ctx.menuBar().menuTitleRect(ctx, 0)));
+		lvgui::Rect menu = ctx.menuBar().openMenuRect(ctx);
+		clickAt(ctx, centre(menu));
+		assert(fired == 0);
+
+		std::cout << "✓ testClearEmptiesTheBarAndClosesAnyOpenMenu\n";
+	}
+
+	// Regression test: this is exactly the bug a real consumer hit (takemusuAiki)
+	// rebuilding the bar every frame via clear() to refresh item labels with live
+	// state -- clear() also resets openIndex(), so the menu the user just opened
+	// closed again before the next frame ever drew it open. clearKeepingOpenMenu()
+	// is the fix: same rebuild, but the open menu survives it.
+	void testClearKeepingOpenMenuPreservesOpenIndexAcrossARebuild() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		auto file = ctx.menuBar().addMenu("File");
+		file.addItem("New", [] {});
+		auto edit = ctx.menuBar().addMenu("Edit");
+		edit.addItem("Undo", [] {});
+		step(ctx);
+
+		clickAt(ctx, centre(ctx.menuBar().menuTitleRect(ctx, 0)));
+		assert(ctx.menuBar().openIndex() == 0);
+
+		// The rebuild-every-frame idiom: same menus, same order, fresh item state.
+		ctx.menuBar().clearKeepingOpenMenu();
+		assert(ctx.menuBar().menuCount() == 0);
+		assert(ctx.menuBar().openIndex() == 0);   // still "open" even with zero menus right now
+		auto rebuiltFile = ctx.menuBar().addMenu("File");
+		int fired = -1;
+		rebuiltFile.addItem("New", [&] { fired = 0; });
+		auto rebuiltEdit = ctx.menuBar().addMenu("Edit");
+		rebuiltEdit.addItem("Undo", [&] { fired = 1; });
+		step(ctx);
+
+		assert(ctx.menuBar().openIndex() == 0);   // survived the rebuild
+		lvgui::Rect menu = ctx.menuBar().openMenuRect(ctx);
+		clickAt(ctx, centre(menu));
+		assert(fired == 0);   // the rebuilt "File" menu's own item, not stale state
+		assert(ctx.menuBar().openIndex() == -1);   // selecting an item still closes normally
+
+		std::cout << "✓ testClearKeepingOpenMenuPreservesOpenIndexAcrossARebuild\n";
+	}
+
+	// If a rebuild ever DOES shrink the bar below the preserved open index (unlike
+	// takemusuAiki's fixed-shape rebuild), nothing should crash or read out of bounds.
+	void testClearKeepingOpenMenuIsSafeIfRebuildIsSmaller() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		ctx.menuBar().addMenu("File").addItem("New", [] {});
+		ctx.menuBar().addMenu("Edit").addItem("Undo", [] {});
+		step(ctx);
+
+		clickAt(ctx, centre(ctx.menuBar().menuTitleRect(ctx, 1)));   // open "Edit" (index 1)
+		assert(ctx.menuBar().openIndex() == 1);
+
+		ctx.menuBar().clearKeepingOpenMenu();
+		ctx.menuBar().addMenu("File").addItem("New", [] {});   // rebuilt with only ONE menu now
+		step(ctx);
+
+		// The raw index is still whatever was preserved, but everything that matters
+		// (rect queries, click handling) treats it as closed rather than indexing out
+		// of bounds -- no crash, empty rect.
+		assert(ctx.menuBar().openMenuRect(ctx).w == 0.0f && ctx.menuBar().openMenuRect(ctx).h == 0.0f);
+		bool fired = false;
+		clickAt(ctx, { 700.0f, 550.0f });   // far outside the bar -- must not crash
+		assert(!fired);
+
+		std::cout << "✓ testClearKeepingOpenMenuIsSafeIfRebuildIsSmaller\n";
+	}
+
 	void testSeparatorIsSkippedInItemLayout() {
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
 		auto file = ctx.menuBar().addMenu("File");
@@ -267,6 +360,9 @@ int main() {
 	testClickingAnItemFiresOnSelectAndCloses();
 	testClickOutsideClosesWithoutSelecting();
 	testEscapeClosesTheOpenMenu();
+	testClearEmptiesTheBarAndClosesAnyOpenMenu();
+	testClearKeepingOpenMenuPreservesOpenIndexAcrossARebuild();
+	testClearKeepingOpenMenuIsSafeIfRebuildIsSmaller();
 	testMenuBarTakesPriorityOverAnOverlappingPanel();
 	testWantsMouseTrueWhileHoveringOrMenuOpen();
 	testSeparatorIsSkippedInItemLayout();
