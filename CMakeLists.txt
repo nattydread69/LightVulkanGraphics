@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(libLightVulkanGraphics VERSION 2.0.0 LANGUAGES CXX)
+project(libLightVulkanGraphics VERSION 2.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,8 @@ option(LVG_BUILD_VULKAN_INTEGRATION_TESTS "Build Vulkan tests that require a GPU
 option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project targets" ON)
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
+option(LVG_BUILD_UI "Build the LVGUI GUI layer" ON)
+option(LVG_BUILD_DOXYGEN "Build Doxygen documentation" ON)
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -19,6 +21,9 @@ include(CTest)
 
 set(LVG_PACKAGE_NAME "LightVulkanGraphics")
 set(LVG_ABI_VERSION 2)
+set(LVG_VERSION_MAJOR 2)
+set(LVG_VERSION_MINOR 1)
+set(LVG_VERSION_PATCH 0)
 set(LVG_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/${LVG_PACKAGE_NAME}")
 set(LVG_SHADER_INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
 set(LVG_SHADER_INSTALL_FULL_DIR "${CMAKE_INSTALL_FULL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
@@ -303,11 +308,29 @@ if (NOT TARGET assimp::assimp)
 endif()
 
 # ---------------- Sources ----------------
+# src/ui/ is excluded: it belongs exclusively to the LightVulkanGraphicsUI target below.
+# Globbing it in here too would compile FontImpl.cpp's STB_TRUETYPE_IMPLEMENTATION (and
+# every other src/ui/*.cpp symbol) into both libraries -- exactly the duplicate-symbol
+# hazard docs/gui/03-text-and-fonts.md calls out.
+#
+# Excluded by exact-path removal (list(REMOVE_ITEM ...)) rather than a path-string
+# regex: both globs below come from the same file(GLOB_RECURSE) call, so they use
+# whatever separator convention CMake normalizes to on the current platform, and
+# REMOVE_ITEM matches whole list entries rather than a substring. That keeps this
+# correct on Windows without depending on CMake's forward-slash normalization, and
+# unlike a regex such as "/src/ui/", it cannot accidentally swallow an unrelated future
+# directory (e.g. src/ui_platform/) just because its name shares a prefix.
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
 	"${PROJECT_SOURCE_DIR}/src/*.cpp"
 	"${PROJECT_SOURCE_DIR}/src/*.cxx"
 	"${PROJECT_SOURCE_DIR}/src/*.cc"
 )
+file(GLOB_RECURSE LVGUI_EXCLUDED_SOURCES CONFIGURE_DEPENDS
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cpp"
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cxx"
+	"${PROJECT_SOURCE_DIR}/src/ui/*.cc"
+)
+list(REMOVE_ITEM SOURCES ${LVGUI_EXCLUDED_SOURCES})
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 set_target_properties(${PROJECT_NAME} PROPERTIES
@@ -370,6 +393,10 @@ lvg_compile_shader(vert screen_text)
 lvg_compile_shader(frag screen_text)
 lvg_compile_shader(vert volume_raymarch)
 lvg_compile_shader(frag volume_raymarch)
+if(LVG_BUILD_UI)
+	lvg_compile_shader(vert ui)
+	lvg_compile_shader(frag ui)
+endif()
 
 # Create shader target that depends on all compiled shaders
 add_custom_target(Shaders ALL DEPENDS ${ALL_SHADER_SPVS})
@@ -419,6 +446,81 @@ if (WIN32)
 	set_target_properties(${PROJECT_NAME} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
+if(LVG_BUILD_UI)
+	# LVGUI_EXCLUDED_SOURCES (computed above, in the core "Sources" section) is the
+	# authoritative glob of src/ui/*.cpp -- reuse it here instead of hand-listing files,
+	# so adding/removing a src/ui/*.cpp source only ever requires touching the source
+	# tree, never this list.
+	set(LVGUI_SOURCES ${LVGUI_EXCLUDED_SOURCES})
+
+	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
+	add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphicsUI)
+
+	target_compile_features(LightVulkanGraphicsUI PUBLIC cxx_std_17)
+
+	# Linked into the core SHARED library below, so its objects must be PIC.
+	set_target_properties(LightVulkanGraphicsUI PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+	target_include_directories(LightVulkanGraphicsUI PUBLIC
+		$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+		$<INSTALL_INTERFACE:include>
+	)
+	target_include_directories(LightVulkanGraphicsUI PRIVATE
+		${PROJECT_SOURCE_DIR}/external
+	)
+
+	# GuiContext's own bundled-font fallback search (GuiContext.cpp,
+	# findBundledFontPath() -- used only when a caller constructs a bare GuiContext
+	# directly, without VkApp) needs this too, not just the core target's identical
+	# definition below: the UI library cannot call into VkApp::findFontPath() (the
+	# dependency runs core -> UI, never the reverse), so its search is a self-contained
+	# duplicate that needs its own copy of this same build-tree path.
+	target_compile_definitions(LightVulkanGraphicsUI PRIVATE
+		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
+	)
+
+	# The dependency runs core -> UI, never the reverse. LVGUI is a self-contained
+	# toolkit: layers 1-2 (Types/DrawList/Font/Utf8) are pure glm+std, and UiRenderer
+	# takes explicit Vulkan handles rather than reaching into VkApp. Linking
+	# LightVulkanGraphics here instead would be a cycle -- core has to call into the UI
+	# to record it into the frame (and to expose VkApp::gui()) -- and CMake
+	# rejects cycles unless every target in them is STATIC, which core is not.
+	# It also keeps the headless UI tests free of Vulkan, assimp and glfw *headers* --
+	# UiRenderer.* and UiPlatformGlfw.* still need Vulkan/GLFW PRIVATE to
+	# link, but nothing in include/lightVulkanGraphics/ui/ exposes either.
+	target_link_libraries(LightVulkanGraphicsUI
+		PUBLIC
+			$<BUILD_INTERFACE:${LVG_GLM_BUILD_TARGET}>
+			$<INSTALL_INTERFACE:glm::glm>
+		PRIVATE Vulkan::Vulkan ${GLFW_LIB_TARGET}
+	)
+	lvg_apply_project_options(LightVulkanGraphicsUI)
+	if (LVG_SANITIZER_LINK_FLAG)
+		# Consumers that link ONLY LightVulkanGraphics::UI (the headless tests do) still
+		# need the sanitizer runtimes on their link line. lvg_apply_project_options adds
+		# them PRIVATE, which a static library does not propagate, and since the UI
+		# target deliberately no longer links the core library they cannot arrive via
+		# core's INTERFACE options either.
+		target_link_options(LightVulkanGraphicsUI INTERFACE ${LVG_SANITIZER_LINK_FLAG})
+	endif()
+
+	# Core owns and drives the UI renderer, so it links the UI target (see above).
+	# UI symbols are linked PUBLIC so external code can use the UI API
+	target_link_libraries(${PROJECT_NAME} PUBLIC LightVulkanGraphicsUI)
+
+	# The core library advertises GUI availability to its consumers.
+	target_compile_definitions(${PROJECT_NAME} PUBLIC LVG_WITH_UI)
+
+	# The atlas needs the bundled font at build time, before install rules formalise font
+	# payload installation; mirrors the LVG_BUILD_SHADER_DIR convention above.
+	# LightVulkanGraphicsUI gets the identical definition too, for its OWN, separate
+	# fallback search (see the comment there) -- this one is what VkApp::findFontPath()
+	# (VkAppUi.cpp) reads for every VkApp-based consumer.
+	target_compile_definitions(${PROJECT_NAME} PRIVATE
+		LVG_BUILD_FONT_DIR="${PROJECT_SOURCE_DIR}/assets/fonts"
+	)
+endif()
+
 # ---------------- Install rules (enables `sudo make install`) ----------------
 # 1) Library + export usage requirements
 install(TARGETS ${PROJECT_NAME}
@@ -428,14 +530,38 @@ install(TARGETS ${PROJECT_NAME}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
-# 2) Public headers (everything under include/)
+# 1b) UI Library (optional)
+if(LVG_BUILD_UI)
+	install(TARGETS LightVulkanGraphicsUI
+		EXPORT LightVulkanGraphicsTargets
+		RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+		LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+		ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+	)
+endif()
+
+# 2) Public headers (everything under include/, except lightVulkanGraphics/ui/,
+#    which 2b below installs separately at its own destination). Excluding it
+#    here unconditionally -- not just when LVG_BUILD_UI is OFF -- means an
+#    LVG_BUILD_UI=OFF install has no trace of GUI headers anywhere: with the
+#    GUI target's headers, sources and shaders already all gated on that
+#    option, this was the one place they still leaked into every install
+#    regardless of the flag.
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
+	PATTERN "ui" EXCLUDE
 )
 install(FILES
 	${LVG_GENERATED_INCLUDE_DIR}/LightVulkanGraphicsVersion.h
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
 )
+
+# 2b) UI public headers (if built)
+if(LVG_BUILD_UI)
+	install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/lightVulkanGraphics/
+		DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/lightVulkanGraphics
+	)
+endif()
 
 # 3) SPIR-V payloads (install whatever .spv were generated)
 #    Because the library depends on Shaders, running `make install` will build them first.
@@ -467,6 +593,41 @@ install(FILES
 	${CMAKE_CURRENT_BINARY_DIR}/${LVG_PACKAGE_NAME}ConfigVersion.cmake
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${LVG_PACKAGE_NAME}
 )
+
+# Doxygen documentation target
+if(LVG_BUILD_DOXYGEN)
+	find_package(Doxygen)
+	if(DOXYGEN_FOUND)
+		configure_file(
+			${CMAKE_CURRENT_SOURCE_DIR}/Doxyfile.in
+			${CMAKE_CURRENT_BINARY_DIR}/Doxyfile @ONLY
+		)
+		add_custom_target(doxygen
+			COMMAND ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+			WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+			COMMENT "Generating API documentation with Doxygen"
+			VERBATIM
+		)
+		# Install documentation
+		install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/docs/html/
+			DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/doc/${LVG_PACKAGE_NAME}
+			OPTIONAL
+		)
+	else()
+		message(WARNING "Doxygen not found: documentation will not be built")
+	endif()
+endif()
+
+# Uninstall target
+if(NOT TARGET uninstall)
+	configure_file(
+		"${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+		"${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+		IMMEDIATE @ONLY)
+	add_custom_target(uninstall
+		COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
+	message(STATUS "Added 'uninstall' target: use 'cmake --build build --target uninstall' or 'make uninstall'")
+endif()
 
 # Add examples
 
@@ -512,6 +673,19 @@ if (LVG_BUILD_EXAMPLES)
 
 	add_executable(rotation_glyph_example examples/rotation_glyph_example.cpp)
 	lvg_configure_build_tree_example(rotation_glyph_example)
+
+	# The permanent, growing LVGUI demo: every widget in the library gets a home in here.
+	# It links LightVulkanGraphicsUI directly (not just transitively through the core
+	# library) because consumer code that instantiates Panel::add<W>() for a concrete
+	# widget type is the only place those widgets' constructors/vtables get instantiated
+	# -- the core library's own object code never references them, so its PRIVATE static
+	# link of LightVulkanGraphicsUI does not re-export those symbols. Any real consumer
+	# doing find_package() needs both targets for the same reason.
+	if (LVG_BUILD_UI)
+		add_executable(gui_demo examples/gui_demo.cpp)
+		lvg_configure_build_tree_example(gui_demo)
+		target_link_libraries(gui_demo PRIVATE LightVulkanGraphics::UI)
+	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.
 	if (WIN32 AND ASSIMP_DLL)
@@ -585,6 +759,10 @@ if (BUILD_TESTING)
 		)
 	endif()
 
+	if (LVG_BUILD_UI)
+		add_subdirectory(tests/ui)
+	endif()
+
 	if (LVG_BUILD_EXAMPLES)
 		add_test(
 			NAME light_vulkan_graphics_examples_build
@@ -614,4 +792,18 @@ if (BUILD_TESTING)
 			-DLVG_RELOCATE_INSTALL=ON
 			-P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunPackageConsumerSmokeTest.cmake
 	)
+
+	# Point every test at the sanitizer suppression file when sanitizers are on, so
+	# `ctest` needs no manual ASAN_OPTIONS. See sanitizers.supp for what is suppressed
+	# and why (an AMD driver over-read, not ours). detect_leaks is disabled because the
+	# Vulkan loader and driver retain process-lifetime allocations.
+	if (LVG_ENABLE_SANITIZERS)
+		get_property(_lvg_all_tests DIRECTORY PROPERTY TESTS)
+		if (_lvg_all_tests)
+			set_tests_properties(${_lvg_all_tests} PROPERTIES
+				ENVIRONMENT
+					"ASAN_OPTIONS=suppressions=${CMAKE_CURRENT_SOURCE_DIR}/sanitizers.supp:detect_leaks=0"
+			)
+		endif()
+	endif()
 endif()

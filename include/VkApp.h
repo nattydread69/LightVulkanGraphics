@@ -139,6 +139,22 @@ namespace lightGraphics::detail
 	};
 }
 
+#ifdef LVG_WITH_UI
+// Full GuiContext.h (not just Types.h + forward decls) because VkApp now stores a
+// ui::GuiCreateInfo by value (setGuiCreateInfo(), below) -- GuiCreateInfo has no
+// forward-declarable form. This stays cheap to include: GuiContext.h and everything it
+// pulls in (Panel.h, Widget.h, Font.h, Theme.h, DrawList.h, InputState.h) is deliberately
+// free of Vulkan and GLFW headers (docs/gui/01-architecture.md's layering rule), so this
+// does not drag windowing or graphics-API types into every VkApp.h consumer.
+#include <lightVulkanGraphics/ui/GuiContext.h>
+
+namespace lightGraphics::ui
+{
+	class UiRenderer;
+	class UiPlatformGlfw;
+}
+#endif
+
 namespace lightGraphics
 {
 	class RiggedObject;
@@ -190,6 +206,10 @@ namespace lightGraphics
 		void setLogCallback(LogCallback callback) { logCallback_ = callback; }
 		void setManageGlfwLifecycle(bool manage) { manageGlfwLifecycle_ = manage; }
 		bool getManageGlfwLifecycle() const { return manageGlfwLifecycle_; }
+		// The window is created hidden and run() reveals it automatically once its event
+		// loop starts (see run()). Exposed publicly in case a consumer drives its own
+		// loop instead of calling run().
+		void showWindow();
 		// Caps how many distinct textures/solid-color textures can exist at once
 		// (each consumes one descriptor set from a fixed-size pool sized at init()
 		// time). Must be called before init(); has no effect afterward. Raise this
@@ -577,6 +597,98 @@ namespace lightGraphics
 		std::vector<VkFramebuffer> shadowFramebuffers_;
 		uint32_t shadowMapSize_ = 1024;
 		uint32_t shadowLayerCount_ = static_cast<uint32_t>(lightGraphics::MaxForwardLights);
+
+#ifdef LVG_WITH_UI
+		// ---- LVGUI (see docs/gui/) ----
+		// The core library owns and drives the GUI's Vulkan backend; the dependency
+		// runs core -> LightVulkanGraphicsUI and never the reverse. These are
+		// unique_ptrs to incomplete types, so ~VkApp must stay out-of-line.
+		std::unique_ptr<ui::UiRenderer> uiRenderer_;
+
+		// Raw GLFW input capture (docs/gui/04). Installed in createWindow() so
+		// input capture starts as soon as the window exists, independent of Vulkan
+		// readiness. GuiContext.h must never see a GLFW header (docs/gui/01's layering
+		// rule), so it cannot itself be an installCallbacks() target; forwardInputToGui()
+		// replays this object's already-resolved per-frame InputState into guiContext_
+		// via the same inject* calls a platform layer would use.
+		std::unique_ptr<ui::UiPlatformGlfw> uiPlatform_;
+
+		// The GUI itself (docs/gui/01-05). Owns the theme, font, and panels, and
+		// produces the DrawList uiRenderer_ plays back each frame.
+		std::unique_ptr<ui::GuiContext> guiContext_;
+
+		// Logical display size as of this frame's guiContext_->beginFrame() call, kept
+		// so recordUi() can pass it to UiRenderer::record()'s logicalSize parameter
+		// (docs/gui/06, "DPI and content scale") without re-querying GLFW mid-recording.
+		ui::Vec2 uiLastDisplaySize_{};
+
+		void initUi();
+		void destroyUi();
+		void forwardInputToGui();
+		void recordUi(VkCommandBuffer cmd);
+		std::string findFontPath(const std::string& fontName);
+		// Uploads guiContext_->headingFont()'s atlas as a registered texture and reports
+		// the id back via GuiContext::setHeadingFontTextureId() -- shared by initUi()
+		// (first upload) and the per-frame DPI-rebake check in mainLoop() (re-upload
+		// after GuiContext::rebakeFont() redid the CPU-side pixels; registerUiTexture()
+		// has no update-in-place path, so this unregisters the stale one first). No-op if
+		// !guiContext_->hasHeadingFont(). See docs/gui/03-text-and-fonts.md, "Headings".
+		void registerHeadingFontTexture();
+
+		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). Defined
+		// out-of-line in VkAppUi.cpp -- inline bodies here would give every translation
+		// unit that includes VkApp.h a reason to recompile whenever GuiContext's own
+		// implementation (not just its interface) changes.
+		bool uiWantsMouse() const;
+		bool uiWantsKeyboard() const;
+		// docs/gui/04-input-and-events.md, "Scroll wheel": narrower than uiWantsMouse() --
+		// true only when something under the cursor will actually consume this wheel tick
+		// (a panel with overflow to scroll, a widget that claims the wheel itself, or an
+		// open popup), so hovering a panel with nothing to scroll doesn't also blind the
+		// camera's zoom/dolly.
+		bool uiWantsScroll() const;
+
+	public:
+		// Configure the GUI before init() brings it up -- same "must be called before
+		// init(); has no effect afterward" convention as setMaxTextureCount(). Fields left
+		// at GuiCreateInfo's own defaults keep VkApp's current behaviour: an empty
+		// fontPath still resolves through findFontPath("Inter-Regular.ttf") rather than
+		// being passed through to throw (see initUi()), and fontSize/theme/atlas size
+		// keep GuiCreateInfo's normal defaults (14px, Theme::dark(), 512x512).
+		//
+		// GuiCreateInfo::fontSize is authoritative over GuiCreateInfo::theme.fontSize --
+		// GuiContext's constructor overwrites the latter from the former, so setting only
+		// fontSize (leaving theme at its default) is enough to resize both the baked
+		// atlas and every widget's layout metrics consistently; there is no need to also
+		// touch theme.fontSize by hand (see GuiCreateInfo::fontSize's own comment).
+		void setGuiCreateInfo(const ui::GuiCreateInfo& info) { guiCreateInfo_ = info; }
+
+		bool hasGui() const { return guiContext_ != nullptr; }
+		ui::GuiContext& gui();   // asserts hasGui()
+
+		// Uploads an RGBA8 pixel buffer (row-major, `width * height * 4` bytes, no
+		// padding between rows) for use with the ui::Image widget (docs/gui/05-widgets.md,
+		// "Image") -- returns a ui::TextureId to pass to Image's constructor or
+		// setTextureId(). Requires hasGui(); throws if called before init() has brought
+		// up the GUI, same as every other GUI-dependent call here.
+		//
+		// This is deliberately independent of the scene's own texture system
+		// (createTextureFromPixels()/createSolidColorTexture(), textureDescriptorPool_,
+		// above) rather than sharing it -- the UI backend's descriptor set is already its
+		// own isolated pipeline (docs/gui/02-rendering.md's "one pipeline, one descriptor
+		// set" goal), and coupling it to the scene's texture lifetime would mean a UI
+		// image could be silently invalidated by whatever the scene-texture system is
+		// doing with its own cache and descriptor pool, for no benefit an Image widget
+		// actually needs. Interop with an existing scene render target (rather than a
+		// fresh CPU-uploaded buffer) is tracked as a follow-up in docs/gui/ROADMAP.md, not
+		// attempted here.
+		ui::TextureId registerUiTexture(const std::uint8_t* rgbaPixels, uint32_t width, uint32_t height);
+		// Safe to call with an id that is already unregistered, or that was never valid.
+		void unregisterUiTexture(ui::TextureId id);
+
+	private:
+		ui::GuiCreateInfo guiCreateInfo_{};
+#endif
 
 		// Sync
 		static constexpr int MAX_FRAMES_IN_FLIGHT = 2;

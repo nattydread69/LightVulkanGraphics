@@ -1,6 +1,6 @@
 # Frame capture design
 
-LVG-VOL-2 does not expose a framebuffer capture function. See `frame_capture_blockers.md` for the precise platform and synchronization blockers.
+The library does not currently expose a framebuffer capture function. See `frame_capture_blockers.md` for the precise platform and synchronization blockers.
 
 The intended API queues a request before a frame, copies the presented color image into a reusable host-visible buffer after the render pass, and publishes completion only after the corresponding fence signals. Encoding should run after the mapped bytes have been swizzled from the negotiated BGRA/RGBA swapchain format.
 

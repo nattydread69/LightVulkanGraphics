@@ -23,6 +23,15 @@
 #include "RiggedSkinning.h"
 #include "SceneGraph.h"
 
+#ifdef LVG_WITH_UI
+// ~VkApp lives in this translation unit, and destroying the GUI unique_ptr members
+// requires their complete types.
+#include "ui/UiRenderer.h"
+#include "ui/UiPlatformGlfw.h"
+#include <lightVulkanGraphics/ui/DrawList.h>
+#include <lightVulkanGraphics/ui/Font.h>
+#endif
+
 #if defined(_WIN32)
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -569,6 +578,10 @@ namespace lightGraphics
 		defaultTexture_ = createSolidColorTexture(255, 255, 255, 255);
 		createSceneResources();
 
+#ifdef LVG_WITH_UI
+		initUi();
+#endif
+
 		// Initialize timing for keyboard movement
 		prevTime_ = glfwGetTime();
 	}
@@ -592,6 +605,12 @@ namespace lightGraphics
 		{
 			throw std::logic_error("Scene not finalized. Call finalizeScene() before run().");
 		}
+		// The window is created hidden (see createWindow()) precisely so that whatever
+		// synchronous setup a consumer does between construction and run() -- often a
+		// slow scene load -- happens before the OS/window manager is tracking a mapped
+		// window and pinging it for liveness. Reveal it now, right as the event loop
+		// that actually answers those pings is about to start.
+		showWindow();
 		mainLoop();
 	}
 
@@ -601,6 +620,12 @@ namespace lightGraphics
 		{
 			vkDeviceWaitIdle(device_);
 		}
+
+#ifdef LVG_WITH_UI
+		// Before cleanupSwapChain(), which destroys the render pass the UI pipeline
+		// was created against.
+		destroyUi();
+#endif
 
 		// Tear down swapchain-dependent resources
 		cleanupSwapChain();
@@ -829,6 +854,11 @@ namespace lightGraphics
 		}
 
 		// Window
+#ifdef LVG_WITH_UI
+		// Must run while window_ is still valid: ~UiPlatformGlfw() restores whatever
+		// GLFW callbacks were installed before it.
+		uiPlatform_.reset();
+#endif
 		if (window_ != nullptr)
 		{
 			glfwDestroyWindow(window_);
@@ -873,6 +903,9 @@ namespace lightGraphics
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+		// Always created hidden; run() reveals it once the event loop that answers the
+		// window manager's liveness pings is actually about to start. See run().
+		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
 		window_ = glfwCreateWindow(w, h, title, nullptr, nullptr);
 		if (!window_)
@@ -888,6 +921,24 @@ namespace lightGraphics
 		glfwSetMouseButtonCallback(window_, mouseButtonCallback);
 		glfwSetCursorPosCallback(window_, cursorPosCallback);
 		glfwSetScrollCallback(window_, scrollCallback);
+
+#ifdef LVG_WITH_UI
+		// UiPlatformGlfw installs on top of the callbacks just registered above and
+		// chains to them unconditionally (docs/gui/04, "GLFW plumbing"), so the camera
+		// still sees every event even when the GUI also consumes it. It does not touch
+		// glfwSetWindowUserPointer, which this class already owns for its own
+		// trampolines.
+		uiPlatform_ = std::make_unique<ui::UiPlatformGlfw>();
+		uiPlatform_->installCallbacks(window_);
+#endif
+	}
+
+	void VkApp::showWindow()
+	{
+		if (window_)
+		{
+			glfwShowWindow(window_);
+		}
 	}
 
 	// -----------------------------
@@ -918,7 +969,62 @@ namespace lightGraphics
 			float dt = static_cast<float>(now - prevTime_);
 			prevTime_ = now;
 
-			if (keyboardCameraEnabled_)
+#ifdef LVG_WITH_UI
+			if (uiPlatform_)
+			{
+				int winW = 0, winH = 0;
+				glfwGetWindowSize(window_, &winW, &winH);
+				// GUI stays in logical pixels throughout (docs/gui/04); only the x scale
+				// is used, since GLFW reports x == y on every platform this project
+				// targets.
+				float xscale = 1.0f, yscale = 1.0f;
+				glfwGetWindowContentScale(window_, &xscale, &yscale);
+				(void) yscale;
+				const ui::Vec2 displaySize{ static_cast<float>(winW), static_cast<float>(winH) };
+				uiPlatform_->beginFrame(displaySize, xscale, dt);
+
+				if (guiContext_)
+				{
+					// docs/gui/01-architecture.md per-frame sequence, steps 1-3:
+					// uiPlatform_ already turned this frame's raw GLFW callbacks into a
+					// resolved InputState; forwardInputToGui() replays that into
+					// guiContext_ (which cannot receive GLFW callbacks itself -- see
+					// VkApp.h) before guiContext_ does its own beginFrame()/update().
+					forwardInputToGui();
+					uiLastDisplaySize_ = displaySize;
+					guiContext_->beginFrame(displaySize, xscale, dt);
+					guiContext_->update();
+
+					if (uiRenderer_ && guiContext_->atlasNeedsRebuild())
+					{
+						uiRenderer_->rebuildAtlas(guiContext_->font());
+
+						// The heading face (docs/gui/03-text-and-fonts.md, "Headings") has no
+						// analogous in-place rebuild: it isn't the primary atlas, it's a
+						// registerUiTexture()-registered image, and that API is register/
+						// unregister only. GuiContext::rebakeFont() already redid its CPU-side
+						// pixels (same rebake pass that set atlasNeedsRebuild() in the first
+						// place); drop the stale GPU texture and upload the new one.
+						if (guiContext_->hasHeadingFont())
+						{
+							unregisterUiTexture(guiContext_->headingFontTextureId());
+							registerHeadingFontTexture();
+						}
+
+						guiContext_->acknowledgeAtlasRebuild();
+					}
+				}
+			}
+#endif
+
+			// docs/gui/04, "The camera hand-off": keyboard camera control is skipped
+			// entirely whenever the GUI wants the keyboard (a focused TextBox, etc).
+#ifdef LVG_WITH_UI
+			const bool uiHasKeyboard = uiWantsKeyboard();
+#else
+			const bool uiHasKeyboard = false;
+#endif
+			if (keyboardCameraEnabled_ && !uiHasKeyboard)
 			{
 				updateCameraFromKeyboard(dt);
 			}
@@ -933,7 +1039,25 @@ namespace lightGraphics
 
 			sceneGraph_->updateWorldTransforms();
 			sceneGraph_->syncToRenderer();
+
+#ifdef LVG_WITH_UI
+			// docs/gui/01-architecture.md step 5: layout + build this frame's DrawList,
+			// which recordUi() (called from inside drawFrame()'s recordCommandBuffer)
+			// reads via guiContext_->drawList().
+			if (guiContext_)
+			{
+				guiContext_->endFrame();
+			}
+#endif
+
 			drawFrame();
+
+#ifdef LVG_WITH_UI
+			if (uiPlatform_)
+			{
+				uiPlatform_->endFrame();
+			}
+#endif
 		}
 	}
 
@@ -1230,6 +1354,16 @@ namespace lightGraphics
 		{
 			if (action == GLFW_PRESS)
 			{
+				// docs/gui/04, "The camera hand-off": do not begin a camera drag if the
+				// GUI wants this press. A release is handled unconditionally below --
+				// once a drag is in progress it must not get stuck in look mode just
+				// because the cursor swept over a panel before releasing.
+#ifdef LVG_WITH_UI
+				if (uiWantsMouse())
+				{
+					return;
+				}
+#endif
 				mouseLook_ = true;
 				firstMouse_ = true;
 				glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1287,6 +1421,19 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
+		// docs/gui/04, "The camera hand-off" / "Scroll wheel": resolves the
+		// "wheel over a panel with no overflow dies silently" question by giving the
+		// wheel its own, narrower query (uiWantsScroll()) instead of reusing uiWantsMouse()
+		// here -- wantsMouse() is deliberately true over ANY panel (so drags/clicks aimed
+		// at empty panel background don't fall through to the camera), which used to also
+		// swallow the wheel even over a panel with nothing to scroll. See
+		// docs/gui/04-input-and-events.md, "Scroll wheel" for the full reasoning.
+#ifdef LVG_WITH_UI
+		if (uiWantsScroll())
+		{
+			return;
+		}
+#endif
 		if (orbitEnabled_)
 		{
 			// Dolly in/out
@@ -2917,7 +3064,11 @@ namespace lightGraphics
 		if (!hasRegularObjects && riggedInstances_.empty() &&
 			meshDrawRequests_.empty() && !hasVisibleVolume)
 		{
-			// Nothing to draw
+			// Nothing in the scene to draw -- but the GUI still has to be recorded, or
+			// it would vanish exactly when the 3D scene is empty.
+#ifdef LVG_WITH_UI
+			recordUi(cmd);
+#endif
 			vkCmdEndRenderPass(cmd);
 			if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
 			{
@@ -3331,6 +3482,13 @@ namespace lightGraphics
 
 		// Custom meshes and volumes share a stable application-controlled order.
 		drawOrderedCustomResources(cmd, imageIndex);
+
+		// The UI draws after the scene, inside the same render pass, immediately
+		// before it ends -- opening a second pass would cost a full attachment
+		// load/store on tiled GPUs for nothing.
+#ifdef LVG_WITH_UI
+		recordUi(cmd);
+#endif
 
 		vkCmdEndRenderPass(cmd);
 

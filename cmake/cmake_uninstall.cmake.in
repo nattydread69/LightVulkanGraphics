@@ -1,0 +1,33 @@
+# Uninstall script for LightVulkanGraphics
+# This script removes all installed files from the system
+
+if(NOT EXISTS "@CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt")
+    message(FATAL_ERROR "Cannot find install manifest: @CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt")
+endif()
+
+file(READ "@CMAKE_CURRENT_BINARY_DIR@/install_manifest.txt" files)
+string(REGEX REPLACE "\n" ";" files "${files}")
+
+list(REVERSE files)
+foreach(file ${files})
+    if(IS_SYMLINK "${file}" OR IS_FILE "${file}")
+        message(STATUS "Removing file: $ENV{DESTDIR}${file}")
+        if(NOT EXISTS "$ENV{DESTDIR}${file}")
+            message(STATUS "File not found: $ENV{DESTDIR}${file}")
+        else()
+            file(REMOVE "$ENV{DESTDIR}${file}")
+            if(NOT EXISTS "$ENV{DESTDIR}${file}")
+                message(STATUS "Successfully removed: $ENV{DESTDIR}${file}")
+            else()
+                message(WARNING "Failed to remove: $ENV{DESTDIR}${file}")
+            endif()
+        endif()
+    elseif(IS_DIRECTORY "${file}")
+        message(STATUS "Removing directory: $ENV{DESTDIR}${file}")
+        if(EXISTS "$ENV{DESTDIR}${file}")
+            file(REMOVE_RECURSE "$ENV{DESTDIR}${file}")
+        endif()
+    endif()
+endforeach()
+
+message(STATUS "Uninstallation complete")

@@ -18,6 +18,10 @@
 
 #include "VkApp.h"
 
+#ifdef LVG_WITH_UI
+#include "ui/UiRenderer.h"
+#endif
+
 #include <GLFW/glfw3.h>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -79,6 +83,15 @@ namespace lightGraphics
 		createDescriptorSets();
 		createCommandBuffers();
 		rebuildScreenTextMeshes();
+
+#ifdef LVG_WITH_UI
+		// createRenderPass() above destroyed and recreated renderPass_, which
+		// invalidates every pipeline built against it -- including the UI's.
+		if (uiRenderer_)
+		{
+			uiRenderer_->onRenderPassRecreated(renderPass_);
+		}
+#endif
 	}
 
 	void VkApp::cleanupSwapChain()

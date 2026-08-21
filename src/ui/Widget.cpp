@@ -1,0 +1,67 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Light Vulkan Graphics
+// Copyright (C) 2026 Dr. Nathanael John Inkson
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Lesser General Public License as published
+// by the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU Lesser General Public License for more details.
+//
+// You should have received a copy of the GNU Lesser General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+#include <lightVulkanGraphics/ui/Widget.h>
+#include <lightVulkanGraphics/ui/GuiContext.h>
+
+#include <atomic>
+
+namespace lightGraphics::ui {
+
+namespace {
+	// docs/gui/01-architecture.md ("Widget identity") assigns WidgetIds from "a monotonic
+	// counter in GuiContext". A single process-wide counter is used here instead: Widget's
+	// base constructor runs inside Panel::add<W>()'s make_unique<W>(...), before the new
+	// widget is attached to a Panel or has any way to reach the owning GuiContext, so
+	// there is no GuiContext reference available at the point an id would need to be
+	// allocated. A global counter still satisfies both of the doc's actual requirements
+	// -- ids are never reused within a session, 0 stays reserved for kInvalidWidgetId --
+	// and it avoids a circular Panel<->GuiContext header dependency for what is otherwise
+	// a one-line detail.
+	std::atomic<WidgetId> g_nextWidgetId{ 1 };
+}
+
+WidgetId allocateWidgetId() {
+	return g_nextWidgetId.fetch_add(1, std::memory_order_relaxed);
+}
+
+Widget::Widget() : m_id(allocateWidgetId()) {}
+
+void Widget::setBoundsOverride(const Rect& panelRelative) {
+	m_boundsOverride = panelRelative;
+}
+
+void Widget::clearBoundsOverride() {
+	m_boundsOverride.reset();
+}
+
+Widget::RowSplit Widget::splitRow(const GuiContext& ctx) const {
+	if (m_label.empty()) {
+		return { Rect{}, m_bounds };
+	}
+
+	const Theme& theme = ctx.theme();
+	float labelW = (m_labelWidthOverride >= 0.0f) ? m_labelWidthOverride
+	                                               : m_bounds.w * theme.labelWidthRatio;
+
+	Rect labelRect{ m_bounds.x, m_bounds.y, labelW - theme.itemSpacing, m_bounds.h };
+	Rect controlRect{ m_bounds.x + labelW, m_bounds.y, m_bounds.w - labelW, m_bounds.h };
+	return { labelRect, controlRect };
+}
+
+} // namespace lightGraphics::ui
