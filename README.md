@@ -94,6 +94,7 @@ macOS notes:
 
 Useful CMake options:
 - `-DLVG_BUILD_EXAMPLES=OFF` to skip building the bundled examples
+- `-DLVG_BUILD_UI=OFF` to drop the LVGUI GUI layer entirely (on by default; see [GUI (LVGUI)](#gui-lvgui) below)
 - `-DLVG_ENABLE_WARNINGS=ON` to enable recommended compiler warnings on project targets
 - `-DLVG_WARNINGS_AS_ERRORS=ON` to turn warnings into errors
 - `-DLVG_ENABLE_SANITIZERS=ON` to enable AddressSanitizer and UndefinedBehaviorSanitizer on supported GCC/Clang builds
@@ -241,6 +242,46 @@ suppress console output entirely, either set
 `createInfo.enableConsoleOutput = false` before construction or call
 `lightGraphics::setConsoleOutputEnabled(false)`.
 
+## GUI (LVGUI)
+`lightGraphics::ui` is a built-in, Vulkan-native GUI layer for parameter/debug panels
+beside your 3D scene: labels, buttons, sliders (incl. logarithmic and int), checkboxes,
+radio groups, drag values, text boxes, dropdowns, list boxes, color pickers, sparklines
+(`PlotLine`), progress bars, tab bars, collapsing sections, context menus, tooltips, and
+images. It draws through the same pipeline and render pass as the rest of the frame — no
+second window, no second toolkit — and panels can be dragged, resized, collapsed, and
+have their layout persisted across runs.
+
+`VkApp::init()` brings up a `GuiContext` automatically as soon as the Vulkan device and
+render pass exist:
+
+```cpp
+#include "VkApp.h"
+#include <lightVulkanGraphics/ui/Ui.h>
+
+namespace lvgui = lightGraphics::ui;
+
+lightGraphics::VkApp app;
+app.init(1280, 800, "My Simulation");
+
+if (app.hasGui()) {
+    auto& gui = app.gui();
+    auto* panel = gui.createPanel("Simulation", { 16.0f, 16.0f, 320.0f, 420.0f });
+
+    static float gravity = 9.81f;
+    panel->add<lvgui::Slider>("Gravity", 0.0f, 30.0f, gravity)->bind(&gravity);
+}
+
+app.run();
+```
+
+Every value widget offers both a callback (`setOnCommit`, `setOnChange`, ...) and a
+`bind(&x)` bound pointer, so panels stay in sync with your simulation state without
+manual per-frame plumbing. Build with `-DLVG_BUILD_UI=OFF` to drop the layer entirely.
+
+See [`docs/gui_usage.md`](docs/gui_usage.md) for the full task-focused how-to, and
+[`docs/gui/`](docs/gui/) for the widget-by-widget behavioural spec. The `gui_demo`
+example (below) exercises every widget in one running app.
+
 ## Rotation-Ring Glyphs
 Visualise angular velocity, angular momentum, or torque as an oriented
 annular arrow lying in its actual plane of rotation, rather than only as a
@@ -253,12 +294,20 @@ mesh API, so it needs no Vulkan device to build or test. See
 - `simple_fbx_loader_example`: basic FBX inspection example
 - `fbx_rigged_example`: rigged-model rendering example
 - `rotation_glyph_example`: angular velocity/momentum/torque rotation-ring glyphs alongside the conventional axial arrow (see `docs/rotation_glyphs.md`)
+- `gui_demo`: every LVGUI widget in one running app (panels, sliders, dropdowns, color pickers, plots, and more) — see [GUI (LVGUI)](#gui-lvgui) above and `docs/gui_usage.md`; only built when `LVG_BUILD_UI` is on (the default)
 
 Build the bundled demo after configuring the project:
 
 ```bash
 cmake --build build --target demoVulkanGraphics -j
 ./build/demoVulkanGraphics
+```
+
+Build and run the GUI demo the same way:
+
+```bash
+cmake --build build --target gui_demo -j
+./build/gui_demo
 ```
 
 To build all bundled examples together:

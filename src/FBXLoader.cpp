@@ -123,6 +123,148 @@ namespace lightGraphics
             return correction4;
         }
 
+        // Some legacy FBX exports bake their mesh/skeleton data at a raw scale far
+        // from meters (observed: a file authored in centimeters producing a
+        // ~164-unit-tall raw bounding box) without the file's own UnitScaleFactor
+        // metadata reliably reflecting this: two Blender-exported FBX files in this
+        // codebase report an identical UnitScaleFactor of 1 despite one needing this
+        // correction (martialArtist.fbx) and one not (Worker.fbx, ~1.6-1.9 units
+        // raw), so metadata cannot be trusted to decide this. This threshold instead
+        // measures the raw imported geometry directly -- no legitimate single rigged
+        // asset in this engine spans anywhere near this many meters.
+        constexpr float kImplausibleRawExtentMeters = 20.0f;
+        // The specific, confirmed real-world case this corrects: a raw centimeter
+        // scale masquerading as meters. Not a generic unit detector -- just a fix
+        // for this observed asset class.
+        constexpr float kLegacyCentimeterCorrectionFactor = 1.0f / 100.0f;
+
+        // Scales only the translation column of a raw Assimp affine matrix, leaving
+        // its rotation/local-scale 3x3 block untouched -- correct for any TRS-composed
+        // transform since translation is stored independently of that block. Used
+        // in place of a full TRS decompose/rescale/recompose round trip.
+        void scaleAiMatrixTranslation(aiMatrix4x4& mat, float factor)
+        {
+            mat.a4 *= factor;
+            mat.b4 *= factor;
+            mat.c4 *= factor;
+        }
+
+        void scaleNodeTranslationsRecursive(aiNode* node, float factor)
+        {
+            scaleAiMatrixTranslation(node->mTransformation, factor);
+            for (unsigned int i = 0; i < node->mNumChildren; ++i)
+            {
+                scaleNodeTranslationsRecursive(node->mChildren[i], factor);
+            }
+        }
+
+        // Measures the scene's raw (pre-axis-correction) vertex bounding box and, if
+        // implausibly large, rescales every translation-bearing quantity in the scene
+        // in place -- mesh vertices, bone skin offset matrices, node transforms, and
+        // animation position keyframes -- before any of this loader's own bind-pose
+        // and skinning math runs on it. Doing this up front means every downstream
+        // derived quantity (globalBindTransform, skinningGlobalBindTransform, etc.)
+        // is computed from already-correct data via the loader's existing, already-
+        // proven math, rather than needing each derived field individually patched
+        // after the fact.
+        //
+        // Deliberately scoped to scenes with at least one skinned mesh (mNumBones > 0):
+        // the raw bounding box here is computed from each mesh's untransformed local
+        // vertices, without applying node-hierarchy offsets -- a reasonable proxy for
+        // "how big is this humanoid" when a rigged character's meshes all share one
+        // bind-pose-relative coordinate system (this function's actual, confirmed bug:
+        // a centimeter-authored FBX rig measuring ~164 raw units tall), but not for a
+        // multi-node static scene where each of many separately-positioned meshes (the
+        // dojo background's 379 unskinned meshes: walls, furniture, props) is modeled
+        // near its own local origin -- summing their untransformed extents grossly
+        // misjudges the assembled scene's true size (measured 2007 raw "units" for a
+        // background whose properly-baked extent is ~18) and, applied there, wrongly
+        // shrank an already-correct room by 100x, hiding it behind the camera's near
+        // plane. Unskinned props never hit the bug this exists to fix, so excluding
+        // them entirely removes that false positive instead of chasing a better
+        // threshold.
+        void correctImplausibleFileScale(aiScene* scene)
+        {
+            if (!scene || !scene->mRootNode)
+            {
+                return;
+            }
+
+            bool hasSkinnedMesh = false;
+            for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
+            {
+                if (scene->mMeshes[m]->mNumBones > 0)
+                {
+                    hasSkinnedMesh = true;
+                    break;
+                }
+            }
+            if (!hasSkinnedMesh)
+            {
+                return;
+            }
+
+            glm::vec3 minBounds(std::numeric_limits<float>::max());
+            glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
+            bool hasVertex = false;
+            for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
+            {
+                const aiMesh* mesh = scene->mMeshes[m];
+                for (unsigned int v = 0; v < mesh->mNumVertices; ++v)
+                {
+                    hasVertex = true;
+                    const aiVector3D& p = mesh->mVertices[v];
+                    minBounds.x = std::min(minBounds.x, p.x);
+                    minBounds.y = std::min(minBounds.y, p.y);
+                    minBounds.z = std::min(minBounds.z, p.z);
+                    maxBounds.x = std::max(maxBounds.x, p.x);
+                    maxBounds.y = std::max(maxBounds.y, p.y);
+                    maxBounds.z = std::max(maxBounds.z, p.z);
+                }
+            }
+
+            if (!hasVertex)
+            {
+                return;
+            }
+
+            glm::vec3 const extent = maxBounds - minBounds;
+            float const maxExtent = std::max({extent.x, extent.y, extent.z});
+            if (maxExtent <= kImplausibleRawExtentMeters)
+            {
+                return;
+            }
+
+            float const factor = kLegacyCentimeterCorrectionFactor;
+            for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
+            {
+                aiMesh* mesh = scene->mMeshes[m];
+                for (unsigned int v = 0; v < mesh->mNumVertices; ++v)
+                {
+                    mesh->mVertices[v] *= factor;
+                }
+                for (unsigned int b = 0; b < mesh->mNumBones; ++b)
+                {
+                    scaleAiMatrixTranslation(mesh->mBones[b]->mOffsetMatrix, factor);
+                }
+            }
+
+            for (unsigned int a = 0; a < scene->mNumAnimations; ++a)
+            {
+                const aiAnimation* animation = scene->mAnimations[a];
+                for (unsigned int c = 0; c < animation->mNumChannels; ++c)
+                {
+                    aiNodeAnim* channel = animation->mChannels[c];
+                    for (unsigned int k = 0; k < channel->mNumPositionKeys; ++k)
+                    {
+                        channel->mPositionKeys[k].mValue *= factor;
+                    }
+                }
+            }
+
+            scaleNodeTranslationsRecursive(scene->mRootNode, factor);
+        }
+
         glm::mat4 aiMatrix4x4ToGlm(const aiMatrix4x4& aiMat)
         {
             // Assimp stores matrices in row-major order:
@@ -210,6 +352,13 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         lastError = "Failed to load FBX file: " + std::string(importer.GetErrorString());
         return nullptr;
     }
+
+    // Assimp's importer keeps exclusive ownership of the scene for this scope
+    // (nothing has read from it yet besides the validity check above), so patching
+    // it in place before any further processing is safe -- see
+    // correctImplausibleFileScale()'s comment for why this is necessary and why it
+    // must run this early.
+    correctImplausibleFileScale(const_cast<aiScene*>(scene));
 
     // Everything below can throw (checkedSizeToInt on overflow, glm::inverse on a
     // singular matrix producing non-finite results propagated later, etc.), but this
