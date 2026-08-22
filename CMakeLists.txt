@@ -142,13 +142,32 @@ endif()
 
 # ---------------- GLFW (prefer system; fallback fetch) ----------------
 set(GLFW_LIB_TARGET "")
-find_package(glfw3 CONFIG QUIET)            # usually exports glfw::glfw
+# What LightVulkanGraphicsUI's *installed* interface asks a downstream consumer to
+# provide (via LightVulkanGraphicsConfig.cmake's find_dependency(glfw3 CONFIG) --
+# see the $<INSTALL_INTERFACE:...> use of this below). Set alongside GLFW_LIB_TARGET
+# in each branch below rather than assumed fixed: glfw3's CONFIG package has
+# exported either the plain 'glfw' target or the namespaced 'glfw::glfw' target
+# depending on version/distro (this system's apt package exports plain 'glfw'), so
+# whichever one we actually found here is exactly what a downstream consumer's own
+# find_dependency(glfw3 CONFIG) will produce too. Only the FetchContent fallback
+# needs an explicit guess (a FetchContent'd target lives only in this build and
+# cannot itself be put in our install(EXPORT) set -- CMake error: "requires target
+# glfw that is not in any export set" -- so the installed package instead expects
+# consumers to have their own findable glfw3 CONFIG package, same as it already
+# does for glm via LVG_GLM_BUILD_TARGET/glm::glm).
+set(LVG_GLFW_INSTALL_TARGET "")
+find_package(glfw3 CONFIG QUIET)            # exports glfw::glfw or plain glfw
 if (TARGET glfw::glfw)
 	set(GLFW_LIB_TARGET glfw::glfw)
+	set(LVG_GLFW_INSTALL_TARGET glfw::glfw)
+elseif (TARGET glfw)
+	set(GLFW_LIB_TARGET glfw)
+	set(LVG_GLFW_INSTALL_TARGET glfw)
 else()
 	find_package(glfw3 QUIET)               # module mode -> target 'glfw'
 	if (TARGET glfw)
 		set(GLFW_LIB_TARGET glfw)
+		set(LVG_GLFW_INSTALL_TARGET glfw)
 	else()
 		message(STATUS "System glfw3 not found; fetching from source")
 		FetchContent_Declare(
@@ -165,6 +184,7 @@ else()
 		set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 		FetchContent_MakeAvailable(glfw)
 		set(GLFW_LIB_TARGET glfw)
+		set(LVG_GLFW_INSTALL_TARGET glfw)   # matches glfw's own upstream Config package target name
 	endif()
 endif()
 
@@ -492,7 +512,10 @@ if(LVG_BUILD_UI)
 		PUBLIC
 			$<BUILD_INTERFACE:${LVG_GLM_BUILD_TARGET}>
 			$<INSTALL_INTERFACE:glm::glm>
-		PRIVATE Vulkan::Vulkan ${GLFW_LIB_TARGET}
+		PRIVATE
+			Vulkan::Vulkan
+			$<BUILD_INTERFACE:${GLFW_LIB_TARGET}>
+			$<INSTALL_INTERFACE:${LVG_GLFW_INSTALL_TARGET}>
 	)
 	lvg_apply_project_options(LightVulkanGraphicsUI)
 	if (LVG_SANITIZER_LINK_FLAG)

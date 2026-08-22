@@ -9,6 +9,12 @@ include(CMakeFindDependencyMacro)
 # Find required dependencies
 find_dependency(Vulkan REQUIRED)
 find_dependency(glm REQUIRED CONFIG)
+# LightVulkanGraphicsUI privately links glfw (see CMakeLists.txt's
+# LVG_GLFW_INSTALL_TARGET) -- only required when this install actually built the
+# UI layer, mirroring the LVG_BUILD_UI-gated install rules for its targets/headers.
+if(@LVG_BUILD_UI@)
+    find_dependency(glfw3 REQUIRED CONFIG)
+endif()
 
 # Check for optional components
 set(_LVG_REQUIRED_COMPONENTS)

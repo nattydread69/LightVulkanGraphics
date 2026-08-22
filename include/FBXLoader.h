@@ -118,6 +118,17 @@ namespace lightGraphics
         std::string formatHint;
     };
 
+    // Decoded (but not yet GPU-uploaded) RGBA8 texture pixels -- what
+    // VkApp::prefetchModelTextures() produces off the render thread and
+    // VkApp::primeTextureCache() consumes on it. Plain data, no VkApp/Vulkan
+    // dependency, so it's safe to build on a worker thread.
+    struct DecodedTexturePixels
+    {
+        std::vector<uint8_t> rgba;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+
     // Structure to hold mesh data
     struct RiggedMesh
     {

@@ -385,6 +385,24 @@ namespace lightGraphics
 	}
 
 
+	namespace
+	{
+		// Instance buffers used to be recreated at the exact byte size needed on every
+		// single growth step (see ensureInstanceBufferSizeForFrame()/updateInstanceData()
+		// below). For a scene built one object at a time -- a tatami floor grid or a
+		// ragdoll debug-shape pool, both added via repeated addObject() calls -- that
+		// meant one vkDestroyBuffer/vkFreeMemory/vkCreateBuffer/vkAllocateMemory cycle
+		// per object, and hundreds of those compounds into seconds of driver overhead
+		// for what should be a near-instant scene rebuild. Geometric growth (at least
+		// doubling the previous capacity) turns that into O(log n) reallocations instead
+		// of O(n), the same technique std::vector uses for push_back.
+		VkDeviceSize growInstanceBufferCapacity(VkDeviceSize currentCapacity, VkDeviceSize requiredSize)
+		{
+			VkDeviceSize const grown = currentCapacity > 0 ? currentCapacity * 2 : requiredSize;
+			return std::max(grown, requiredSize);
+		}
+	}
+
 	uint32_t VkApp::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags props)
 	{
 		VkPhysicalDeviceMemoryProperties mp{};
@@ -401,6 +419,9 @@ namespace lightGraphics
 	{
 		if (instanceBufferSizes_[frameIndex] < requiredSize)
 		{
+			VkDeviceSize const newCapacity =
+				growInstanceBufferCapacity(instanceBufferSizes_[frameIndex], requiredSize);
+
 			// Clean up old buffer if it exists
 			if (instanceBufs_[frameIndex].buffer != VK_NULL_HANDLE)
 			{
@@ -415,13 +436,13 @@ namespace lightGraphics
 			}
 
 			// Create new larger buffer for this frame
-			createBuffer(requiredSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			createBuffer(newCapacity, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 						instanceBufs_[frameIndex]);
 
 			// Map the buffer persistently
-			VK_CHECK(vkMapMemory(device_, instanceBufs_[frameIndex].memory, 0, requiredSize, 0, &instanceBufferMappedPerFrame_[frameIndex]));
-			instanceBufferSizes_[frameIndex] = requiredSize;
+			VK_CHECK(vkMapMemory(device_, instanceBufs_[frameIndex].memory, 0, newCapacity, 0, &instanceBufferMappedPerFrame_[frameIndex]));
+			instanceBufferSizes_[frameIndex] = newCapacity;
 		}
 	}
 
@@ -535,15 +556,19 @@ namespace lightGraphics
 		// Update the instance buffer
 		VkDeviceSize instBytes = sizeof(Instance) * instances.size();
 
-		// If the buffer is too small, recreate it
+		// If the buffer is too small, recreate it -- with headroom (see
+		// growInstanceBufferCapacity()) so building a scene via many addObject() calls
+		// (a floor grid, a debug-shape pool) doesn't pay a full buffer
+		// destroy/reallocate for every single one of them.
 		if (instanceBuf.size < instBytes)
 		{
+			VkDeviceSize const newCapacity = growInstanceBufferCapacity(instanceBuf.size, instBytes);
 			if (instanceBuf.buffer != VK_NULL_HANDLE)
 			{
 				vkDestroyBuffer(device_, instanceBuf.buffer, nullptr);
 				vkFreeMemory(device_, instanceBuf.memory, nullptr);
 			}
-			createBuffer(instBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+			createBuffer(newCapacity, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 						VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
 						instanceBuf);
 		}

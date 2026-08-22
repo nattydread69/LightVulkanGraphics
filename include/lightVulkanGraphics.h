@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include "FBXLoader.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "LightVulkanGraphicsVersion.h"
 #include "RotationGlyph.h"
@@ -26,6 +27,7 @@
 #include <string>
 #include <vector>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 namespace lightGraphics
@@ -61,6 +63,18 @@ namespace lightGraphics
         size_t addRiggedObject(const std::shared_ptr<RiggedObject>& riggedObject)
         {
             return VkApp::addRiggedObject(riggedObject);
+        }
+        // Safe to call off the render thread while it keeps running -- see
+        // VkApp::prefetchModelTextures()'s doc comment.
+        std::unordered_map<std::string, DecodedTexturePixels> prefetchModelTextures(
+            const RiggedModel& model) const
+        {
+            return VkApp::prefetchModelTextures(model);
+        }
+        // Main-thread-only -- see VkApp::primeTextureCache()'s doc comment.
+        void primeTextureCache(const std::unordered_map<std::string, DecodedTexturePixels>& decoded)
+        {
+            VkApp::primeTextureCache(decoded);
         }
         SceneGraph& sceneGraph() { return VkApp::sceneGraph(); }
         const SceneGraph& sceneGraph() const { return VkApp::sceneGraph(); }

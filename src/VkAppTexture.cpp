@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 
@@ -52,6 +53,49 @@ namespace lightGraphics
 			message << "Vulkan call failed (" << static_cast<int>(result) << "): "
 			        << expression << " at " << file << ":" << line;
 			throw std::runtime_error(message.str());
+		}
+
+		// Pure CPU decode -- no VkApp/Vulkan touch, safe to call from a worker thread
+		// (see VkApp::prefetchModelTextures()). createTextureFromFile()/
+		// createTextureFromEmbedded() below call these too, so the synchronous,
+		// main-thread-only path behaves exactly as before this was split out.
+		std::optional<DecodedTexturePixels> decodeTextureFromFile(const std::string& path)
+		{
+			int texWidth = 0;
+			int texHeight = 0;
+			int texChannels = 0;
+			stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+			if (!pixels)
+			{
+				return std::nullopt;
+			}
+
+			DecodedTexturePixels decoded;
+			decoded.width = static_cast<uint32_t>(texWidth);
+			decoded.height = static_cast<uint32_t>(texHeight);
+			decoded.rgba.assign(pixels, pixels + (static_cast<size_t>(texWidth) * texHeight * 4));
+			stbi_image_free(pixels);
+			return decoded;
+		}
+
+		std::optional<DecodedTexturePixels> decodeTextureFromMemory(const uint8_t* data, size_t size)
+		{
+			int texWidth = 0;
+			int texHeight = 0;
+			int texChannels = 0;
+			stbi_uc* pixels = stbi_load_from_memory(
+				data, static_cast<int>(size), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
+			if (!pixels)
+			{
+				return std::nullopt;
+			}
+
+			DecodedTexturePixels decoded;
+			decoded.width = static_cast<uint32_t>(texWidth);
+			decoded.height = static_cast<uint32_t>(texHeight);
+			decoded.rgba.assign(pixels, pixels + (static_cast<size_t>(texWidth) * texHeight * 4));
+			stbi_image_free(pixels);
+			return decoded;
 		}
 	}
 
@@ -463,11 +507,8 @@ namespace lightGraphics
 
 	std::shared_ptr<Texture> VkApp::createTextureFromFile(const std::string& path)
 	{
-		int texWidth = 0;
-		int texHeight = 0;
-		int texChannels = 0;
-		stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-		if (!pixels)
+		std::optional<DecodedTexturePixels> decoded = decodeTextureFromFile(path);
+		if (!decoded)
 		{
 			logMessage(LogLevel::Warning, "Failed to load texture: " + path);
 			return nullptr;
@@ -476,12 +517,10 @@ namespace lightGraphics
 		if (debugOutput)
 		{
 			std::ostringstream message;
-			message << "[Texture] Loaded '" << path << "' (" << texWidth << "x" << texHeight
-			        << ", channels=" << texChannels << ")";
+			message << "[Texture] Loaded '" << path << "' (" << decoded->width << "x" << decoded->height << ")";
 			logMessage(LogLevel::Debug, message.str());
 		}
-		auto texture = createTextureFromPixels(pixels, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		stbi_image_free(pixels);
+		auto texture = createTextureFromPixels(decoded->rgba.data(), decoded->width, decoded->height);
 		if (texture)
 		{
 			texture->path = path;
@@ -510,26 +549,15 @@ namespace lightGraphics
 			return nullptr;
 		}
 
-		int texWidth = 0;
-		int texHeight = 0;
-		int texChannels = 0;
-		stbi_uc* pixels = stbi_load_from_memory(
-			source.data.data(),
-			static_cast<int>(source.data.size()),
-			&texWidth,
-			&texHeight,
-			&texChannels,
-			STBI_rgb_alpha
-		);
-
-		if (!pixels)
+		std::optional<DecodedTexturePixels> decoded =
+			decodeTextureFromMemory(source.data.data(), source.data.size());
+		if (!decoded)
 		{
 			logMessage(LogLevel::Warning, "Failed to decode embedded texture data");
 			return nullptr;
 		}
 
-		auto texture = createTextureFromPixels(pixels, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		stbi_image_free(pixels);
+		auto texture = createTextureFromPixels(decoded->rgba.data(), decoded->width, decoded->height);
 		if (texture)
 		{
 			texture->path = cacheKey;
@@ -563,6 +591,87 @@ namespace lightGraphics
 		}
 		textureCache_[path] = texture;
 		return texture;
+	}
+
+	std::unordered_map<std::string, DecodedTexturePixels> VkApp::prefetchModelTextures(
+		const RiggedModel& model) const
+	{
+		std::unordered_map<std::string, DecodedTexturePixels> decoded;
+
+		for (const RiggedMesh& mesh : model.meshes)
+		{
+			// Mirrors addRiggedObject()'s texture-resolution order (VkAppRigged.cpp):
+			// a non-empty diffuseTexturePath is tried first, keyed by that path --
+			// same as getOrCreateTexture()'s cache key.
+			if (!mesh.diffuseTexturePath.empty() && !decoded.count(mesh.diffuseTexturePath))
+			{
+				if (auto pixels = decodeTextureFromFile(mesh.diffuseTexturePath))
+				{
+					decoded.emplace(mesh.diffuseTexturePath, std::move(*pixels));
+					continue;
+				}
+			}
+
+			if (!mesh.embeddedTexture)
+			{
+				continue;
+			}
+
+			// Same cacheKey derivation as addRiggedObject(): embeddedTextureKey first,
+			// falling back to diffuseTexturePath. When BOTH are empty, addRiggedObject()
+			// deliberately decodes that mesh's embedded texture fresh every time without
+			// caching it (see the comment there) -- there is no key to prime under, so
+			// skip it here too rather than priming under a shared placeholder key that
+			// nothing will ever look up.
+			const std::string cacheKey = !mesh.embeddedTextureKey.empty()
+				? mesh.embeddedTextureKey
+				: mesh.diffuseTexturePath;
+			if (cacheKey.empty() || decoded.count(cacheKey))
+			{
+				continue;
+			}
+
+			const EmbeddedTextureData& source = *mesh.embeddedTexture;
+			if (source.isRawPixels)
+			{
+				if (!source.data.empty() && source.width > 0 && source.height > 0)
+				{
+					DecodedTexturePixels pixels;
+					pixels.width = source.width;
+					pixels.height = source.height;
+					pixels.rgba = source.data;
+					decoded.emplace(cacheKey, std::move(pixels));
+				}
+			}
+			else if (!source.data.empty())
+			{
+				if (auto pixels = decodeTextureFromMemory(source.data.data(), source.data.size()))
+				{
+					decoded.emplace(cacheKey, std::move(*pixels));
+				}
+			}
+		}
+
+		return decoded;
+	}
+
+	void VkApp::primeTextureCache(const std::unordered_map<std::string, DecodedTexturePixels>& decoded)
+	{
+		assertOwnerThread("primeTextureCache");
+		for (const auto& entry : decoded)
+		{
+			if (textureCache_.count(entry.first))
+			{
+				continue;
+			}
+			const DecodedTexturePixels& pixels = entry.second;
+			auto texture = createTextureFromPixels(pixels.rgba.data(), pixels.width, pixels.height);
+			if (texture)
+			{
+				texture->path = entry.first;
+				textureCache_[entry.first] = texture;
+			}
+		}
 	}
 
 	void VkApp::destroyTexture(Texture& texture)

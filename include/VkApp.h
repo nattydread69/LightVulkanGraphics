@@ -161,6 +161,8 @@ namespace lightGraphics
 	class SceneGraph;
 	struct EmbeddedTextureData;
 	struct RiggedMesh;
+	struct RiggedModel;
+	struct DecodedTexturePixels;
 
 	struct ObjectTag;
 	struct LightTag;
@@ -271,6 +273,21 @@ namespace lightGraphics
 		bool isRiggedObjectHandleValid(RiggedObjectHandle handle) const noexcept;
 		size_t resolveRiggedObjectHandle(RiggedObjectHandle handle) const;
 		RiggedObjectHandle riggedObjectHandleAt(size_t index) const;
+
+		// Decodes (but does not upload) every texture a model's meshes reference,
+		// mirroring addRiggedObject()'s own texture-resolution order/keys exactly so a
+		// primed entry is a guaranteed cache hit there. Pure CPU (stb_image decode
+		// only) and touches no VkApp state -- unlike every other method on this class,
+		// safe to call from a background thread while the main thread keeps rendering.
+		// Pair with primeTextureCache() (main-thread-only) before addRiggedObject().
+		std::unordered_map<std::string, DecodedTexturePixels> prefetchModelTextures(
+			const RiggedModel& model) const;
+		// Main-thread-only (see VkApp class doc comment) — uploads each already-decoded
+		// entry and inserts it into the texture cache under the same key
+		// prefetchModelTextures() used, so addRiggedObject()'s existing
+		// getOrCreateTexture()/createTextureFromEmbedded() calls need no changes at
+		// all: a primed key is just a cache hit, skipping decode entirely.
+		void primeTextureCache(const std::unordered_map<std::string, DecodedTexturePixels>& decoded);
 		// ==================== LIGHTS ====================
 
 		// Main-thread-only — see the VkApp class doc comment.
