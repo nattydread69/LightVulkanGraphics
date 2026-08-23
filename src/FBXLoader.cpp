@@ -183,37 +183,58 @@ namespace lightGraphics
         // plane. Unskinned props never hit the bug this exists to fix, so excluding
         // them entirely removes that false positive instead of chasing a better
         // threshold.
-        void correctImplausibleFileScale(aiScene* scene)
+        // Only FBX files have the raw-centimeter-scale ambiguity this corrects (glTF's
+        // spec mandates meters as the canonical unit, so a legitimately large glTF
+        // rig -- a >20m creature or vehicle, entirely plausible in that format -- must
+        // never be second-guessed by this heuristic).
+        void correctImplausibleFileScale(aiScene* scene, bool isFbxSource)
         {
-            if (!scene || !scene->mRootNode)
+            if (!scene || !scene->mRootNode || !isFbxSource)
             {
                 return;
             }
 
-            bool hasSkinnedMesh = false;
+            // Distinct from loadModel()'s own later hasSkinnedMesh (built from the
+            // processed RiggedModel, after node-hierarchy baking) -- this one only
+            // decides whether to measure/rescale here, on the raw aiScene.
+            bool sceneHasSkinnedMesh = false;
             for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
             {
                 if (scene->mMeshes[m]->mNumBones > 0)
                 {
-                    hasSkinnedMesh = true;
+                    sceneHasSkinnedMesh = true;
                     break;
                 }
             }
-            if (!hasSkinnedMesh)
+            if (!sceneHasSkinnedMesh)
             {
                 return;
             }
 
+            // Measured from skinned meshes only: a multi-node static scene mixed in
+            // alongside them (e.g. leftover unskinned reference geometry -- see the
+            // "Dropped N unskinned mesh(es)" handling below, which discards exactly
+            // this case) is modeled near its own local origin per mesh, so folding its
+            // vertices into this bounding box would grossly misjudge the character's
+            // true size against a mesh that's about to be discarded anyway.
             glm::vec3 minBounds(std::numeric_limits<float>::max());
             glm::vec3 maxBounds(std::numeric_limits<float>::lowest());
             bool hasVertex = false;
             for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
             {
                 const aiMesh* mesh = scene->mMeshes[m];
+                if (mesh->mNumBones == 0)
+                {
+                    continue;
+                }
                 for (unsigned int v = 0; v < mesh->mNumVertices; ++v)
                 {
-                    hasVertex = true;
                     const aiVector3D& p = mesh->mVertices[v];
+                    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+                    {
+                        continue;
+                    }
+                    hasVertex = true;
                     minBounds.x = std::min(minBounds.x, p.x);
                     minBounds.y = std::min(minBounds.y, p.y);
                     minBounds.z = std::min(minBounds.z, p.z);
@@ -235,10 +256,21 @@ namespace lightGraphics
                 return;
             }
 
+            consoleErrorStream()
+                << "[FBXLoader] Raw geometry measures " << maxExtent
+                << " units across (skinned meshes only) -- implausible for a"
+                   " single character at meter scale, so treating it as centimeter-"
+                   " authored and rescaling by " << kLegacyCentimeterCorrectionFactor
+                << "." << std::endl;
+
             float const factor = kLegacyCentimeterCorrectionFactor;
             for (unsigned int m = 0; m < scene->mNumMeshes; ++m)
             {
                 aiMesh* mesh = scene->mMeshes[m];
+                if (mesh->mNumBones == 0)
+                {
+                    continue;
+                }
                 for (unsigned int v = 0; v < mesh->mNumVertices; ++v)
                 {
                     mesh->mVertices[v] *= factor;
@@ -357,8 +389,17 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     // (nothing has read from it yet besides the validity check above), so patching
     // it in place before any further processing is safe -- see
     // correctImplausibleFileScale()'s comment for why this is necessary and why it
-    // must run this early.
-    correctImplausibleFileScale(const_cast<aiScene*>(scene));
+    // must run this early. Extension lowercased the same way loadModel()'s own
+    // later isGltfSource is (line ~470) -- computed separately here rather than
+    // hoisting that later computation up, since it feeds currentModelDirectory_/
+    // embeddedTextures_ setup that would need auditing to move safely too.
+    std::string earlyExtension = std::filesystem::path(filePath).extension().string();
+    for (char& c : earlyExtension)
+    {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    bool const isFbxSource = earlyExtension == ".fbx";
+    correctImplausibleFileScale(const_cast<aiScene*>(scene), isFbxSource);
 
     // Everything below can throw (checkedSizeToInt on overflow, glm::inverse on a
     // singular matrix producing non-finite results propagated later, etc.), but this

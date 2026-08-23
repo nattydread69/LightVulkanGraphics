@@ -303,9 +303,13 @@ namespace {
 	// ---- RadioButton -----------------------------------------------------------
 
 	void testRadioButtonExclusiveSelectionCannotToggleOff() {
+		// RadioGroup must outlive every RadioButton constructed against it (see
+		// RadioButton.h) -- declared first (and so destroyed last, after ctx and the
+		// panel-owned buttons below) rather than after ctx, which would destroy it
+		// before those buttons and use-after-free in their destructors.
+		lvgui::RadioGroup group;
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
 		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 200.0f });
-		lvgui::RadioGroup group;
 		auto* r0 = panel->add<lvgui::RadioButton>("A", &group, 0);
 		auto* r1 = panel->add<lvgui::RadioButton>("B", &group, 1);
 

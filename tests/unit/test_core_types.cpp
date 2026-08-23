@@ -666,7 +666,8 @@ namespace
 	}
 
 	// FBXLoader::loadModel's documented contract is "return nullptr + set lastError
-	// on failure, never throw" (see FBXLoader.cpp:182 onward). These three cover the
+	// on failure, never throw" (see its own doc comment in FBXLoader.cpp, above the
+	// try/catch wrapping most of its body). These three cover the
 	// negative paths: a nonexistent file, a file that isn't FBX/any known format at
 	// all, and a real FBX file truncated mid-stream. All three currently fail via
 	// Assimp's own import-failure early return rather than the try/catch added around
