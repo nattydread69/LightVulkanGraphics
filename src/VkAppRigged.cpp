@@ -589,6 +589,10 @@ namespace lightGraphics
 
 			RiggedInstanceRenderData instanceData;
 			instanceData.object = riggedObject;
+			// Pin the model this registration actually built `meshes` against (see
+			// RiggedInstanceRenderData::model's comment) -- riggedObject->getModel()
+			// is deliberately not re-fetched later for this purpose.
+			instanceData.model = model;
 			instanceData.activeAnimationIndex = riggedObject->getCurrentAnimationIndex();
 			instanceData.animationLoop = riggedObject->getAnimationLooping();
 
@@ -924,7 +928,12 @@ namespace lightGraphics
 				continue;
 			}
 
-			auto model = riggedObject->getModel();
+			// Use the model pinned at registration time, not riggedObject->getModel() --
+			// meshData.mesh below points into that pinned model's own mesh vector, and
+			// re-fetching here would desync model/mesh (and use-after-free the mesh
+			// pointers) if the object's model was swapped after registration. See
+			// RiggedInstanceRenderData::model's comment.
+			const std::shared_ptr<RiggedModel>& model = instance.model;
 			if (!model)
 			{
 				continue;

@@ -801,6 +801,15 @@ namespace lightGraphics
 		struct RiggedInstanceRenderData
 		{
 			std::shared_ptr<RiggedObject> object;
+				// The RiggedModel actually used to build `meshes` below, pinned at
+				// registration time -- each RiggedMeshRenderData::mesh is a raw pointer
+				// into this model's own mesh vector. object->getModel() can be
+				// reassigned later (RiggedObject::setModel()/loadModel()), which would
+				// otherwise free the model those raw pointers point into out from under
+				// this instance; keeping our own shared_ptr here is what keeps them
+				// valid for this instance's whole lifetime regardless of what `object`
+				// does afterward.
+				std::shared_ptr<RiggedModel> model;
 			detail::Buffer instanceBuffers[MAX_FRAMES_IN_FLIGHT]{};
 			detail::Buffer instanceUploadBuffers[MAX_FRAMES_IN_FLIGHT]{};
 			void* instanceUploadMapped[MAX_FRAMES_IN_FLIGHT]{};

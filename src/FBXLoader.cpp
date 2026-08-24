@@ -385,6 +385,15 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         return nullptr;
     }
 
+    // Everything below can throw (checkedSizeToInt on overflow, glm::inverse on a
+    // singular matrix producing non-finite results propagated later, etc. --
+    // including, now, std::filesystem::path construction/.string() just below on an
+    // exotic-encoding path, which is exactly this sort of thing), but this
+    // function's documented contract is "return nullptr + set lastError on failure" —
+    // matching the early-return above for a bad file. Keep that contract uniform so
+    // callers (e.g. RiggedObject's constructor) never need to handle an exception.
+    try
+    {
     // Assimp's importer keeps exclusive ownership of the scene for this scope
     // (nothing has read from it yet besides the validity check above), so patching
     // it in place before any further processing is safe -- see
@@ -401,13 +410,6 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
     bool const isFbxSource = earlyExtension == ".fbx";
     correctImplausibleFileScale(const_cast<aiScene*>(scene), isFbxSource);
 
-    // Everything below can throw (checkedSizeToInt on overflow, glm::inverse on a
-    // singular matrix producing non-finite results propagated later, etc.), but this
-    // function's documented contract is "return nullptr + set lastError on failure" —
-    // matching the early-return above for a bad file. Keep that contract uniform so
-    // callers (e.g. RiggedObject's constructor) never need to handle an exception.
-    try
-    {
     // Create the model
     auto model = std::make_shared<RiggedModel>();
     glm::mat4 rootTransform = aiMatrix4x4ToGlm(scene->mRootNode->mTransformation);
