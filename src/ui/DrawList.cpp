@@ -138,14 +138,14 @@ std::uint32_t DrawList::packColor(Color c) const {
 
 void DrawList::updateCurrentCommandIndexCount() {
 	if (!m_commands.empty()) {
-		m_commands.back().indexCount = m_indices.size() - m_commands.back().indexOffset;
+		m_commands.back().indexCount = static_cast<std::uint32_t>(m_indices.size() - m_commands.back().indexOffset);
 	}
 }
 
 void DrawList::ensureCommand(TextureId textureId) {
 	if (m_commands.empty()) {
 		DrawCmd cmd{};
-		cmd.indexOffset = m_indices.size();
+		cmd.indexOffset = static_cast<std::uint32_t>(m_indices.size());
 		cmd.indexCount = 0;
 		cmd.clipRect = getCurrentClipRect();
 		cmd.textureId = textureId;
@@ -166,10 +166,10 @@ void DrawList::ensureCommand(TextureId textureId) {
 	}
 
 	if (needsNewCommand) {
-		cmd.indexCount = m_indices.size() - cmd.indexOffset;
+		cmd.indexCount = static_cast<std::uint32_t>(m_indices.size() - cmd.indexOffset);
 		if (cmd.indexCount > 0) {
 			DrawCmd newCmd{};
-			newCmd.indexOffset = m_indices.size();
+			newCmd.indexOffset = static_cast<std::uint32_t>(m_indices.size());
 			newCmd.indexCount = 0;
 			newCmd.clipRect = currentClip;
 			newCmd.textureId = textureId;
@@ -267,7 +267,7 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 
 	if (rounding <= 0.0f) {
 		std::uint32_t col = packColor(color);
-		std::uint32_t idx = m_vertices.size();
+		std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
 		Vec2 tl = snapToPixel(rect.min());
 		Vec2 br = snapToPixel({ rect.right(), rect.bottom() });
@@ -296,7 +296,7 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 		std::vector<Vec2> perimeter;
 		buildRoundedRectPerimeter(rect, rounding, perimeter);
 
-		std::uint32_t baseIdx = m_vertices.size();
+		std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 		for (const Vec2& p : perimeter) {
 			Vec2 pos = snapToPixel(p);
 			m_vertices.push_back(UiVertex(glm::vec2(pos.x, pos.y), wuv, col));
@@ -344,7 +344,7 @@ void DrawList::addRectFilledMultiColor(const Rect& rect, Color tl, Color tr, Col
 	std::uint32_t br_col = packColor(br);
 	std::uint32_t bl_col = packColor(bl);
 
-	std::uint32_t idx = m_vertices.size();
+	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
 	Vec2 min = snapToPixel(rect.min());
 	Vec2 max = snapToPixel({ rect.right(), rect.bottom() });
@@ -368,7 +368,7 @@ void DrawList::addImage(TextureId textureId, const Rect& rect, Vec2 uv0, Vec2 uv
 	ensureCommand(textureId);
 
 	std::uint32_t col = packColor(tint);
-	std::uint32_t idx = m_vertices.size();
+	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
 	Vec2 tl = snapToPixel(rect.min());
 	Vec2 br = snapToPixel({ rect.right(), rect.bottom() });
@@ -398,7 +398,7 @@ void DrawList::addTriangleFilled(Vec2 a, Vec2 b, Vec2 c, Color color) {
 	glm::vec2 wuv(m_whitePixelUV.x, m_whitePixelUV.y);
 
 	std::uint32_t col = packColor(color);
-	std::uint32_t idx = m_vertices.size();
+	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
 	Vec2 sa = snapToPixel(a);
 	Vec2 sb = snapToPixel(b);
@@ -425,7 +425,7 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 	glm::vec2 wuv(m_whitePixelUV.x, m_whitePixelUV.y);
 
 	std::uint32_t col = packColor(color);
-	std::uint32_t baseIdx = m_vertices.size();
+	std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
 	for (int i = 0; i <= segments; ++i) {
 		float angle = (i / static_cast<float>(segments)) * 6.28318530718f;
@@ -435,7 +435,7 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 	}
 
 	Vec2 snappedCentre = snapToPixel(centre);
-	std::uint32_t centreIdx = m_vertices.size();
+	std::uint32_t centreIdx = static_cast<std::uint32_t>(m_vertices.size());
 	m_vertices.push_back(UiVertex(glm::vec2(snappedCentre.x, snappedCentre.y), wuv, col));
 
 	// Fan from the centre through each consecutive pair of perimeter points. The
@@ -465,7 +465,7 @@ void DrawList::addConvexPolyFilled(const Vec2* pts, int count, Color color) {
 	glm::vec2 wuv(m_whitePixelUV.x, m_whitePixelUV.y);
 
 	std::uint32_t col = packColor(color);
-	std::uint32_t baseIdx = m_vertices.size();
+	std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
 	for (int i = 0; i < count; ++i) {
 		Vec2 p = snapToPixel(pts[i]);
@@ -515,7 +515,7 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 
 		Vec2 perp = { -dir.y * halfThick, dir.x * halfThick };
 
-		std::uint32_t baseIdx = m_vertices.size();
+		std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
 		Vec2 v0 = snapToPixel({ a.x - perp.x, a.y - perp.y });
 		Vec2 v1 = snapToPixel({ a.x + perp.x, a.y + perp.y });
@@ -549,7 +549,7 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 
 			Vec2 perp = { -dir.y * halfThick, dir.x * halfThick };
 
-			std::uint32_t baseIdx = m_vertices.size();
+			std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
 			Vec2 cv0 = snapToPixel({ a.x - perp.x, a.y - perp.y });
 			Vec2 cv1 = snapToPixel({ a.x + perp.x, a.y + perp.y });
@@ -649,7 +649,7 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 			tl = snapToPixel(tl);
 			br = snapToPixel(br);
 
-			std::uint32_t idx = m_vertices.size();
+			std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 			m_vertices.push_back(UiVertex({ tl.x, tl.y }, { glyph.uv0.x, glyph.uv0.y }, col));
 			m_vertices.push_back(UiVertex({ br.x, tl.y }, { glyph.uv1.x, glyph.uv0.y }, col));
 			m_vertices.push_back(UiVertex({ br.x, br.y }, { glyph.uv1.x, glyph.uv1.y }, col));

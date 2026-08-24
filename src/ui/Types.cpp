@@ -32,9 +32,9 @@ Rect Rect::intersect(const Rect& other) const {
 	float right = std::min(this->right(), other.right());
 	float bottom = std::min(this->bottom(), other.bottom());
 
-	float w = std::max(0.0f, right - left);
-	float h = std::max(0.0f, bottom - top);
-	return { left, top, w, h };
+	float width = std::max(0.0f, right - left);
+	float height = std::max(0.0f, bottom - top);
+	return { left, top, width, height };
 }
 
 Rect Rect::inset(float amount) const {

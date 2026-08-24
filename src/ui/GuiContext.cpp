@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -34,6 +35,28 @@
 namespace lightGraphics::ui {
 
 namespace {
+	// std::getenv is a hard MSVC error under this project's /WX (C4996, "may be
+	// unsafe") -- mirrors the identical _dupenv_s/getenv split already used for
+	// this in VkAppRigged.cpp/VkAppUi.cpp (this library cannot call into those,
+	// core -> UI only, so it needs its own copy).
+	std::optional<std::string> getEnvironmentVariable(const char* name) {
+#if defined(_WIN32)
+		char* value = nullptr;
+		std::size_t length = 0;
+		if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
+			return std::nullopt;
+		}
+		std::string result(value);
+		free(value);
+		return result;
+#else
+		if (const char* value = std::getenv(name)) {
+			return std::string(value);
+		}
+		return std::nullopt;
+#endif
+	}
+
 	struct RequiredGlyph {
 		std::uint32_t codepoint;
 		const char* usedFor;
@@ -92,9 +115,9 @@ namespace {
 	std::string findBundledFontPath(std::ostringstream& tried) {
 		std::vector<std::filesystem::path> searchRoots;
 
-		if (const char* envPath = std::getenv("LIGHT_VULKAN_GRAPHICS_FONT_PATH")) {
-			if (envPath[0] != '\0') {
-				searchRoots.emplace_back(envPath);
+		if (auto envPath = getEnvironmentVariable("LIGHT_VULKAN_GRAPHICS_FONT_PATH")) {
+			if (!envPath->empty()) {
+				searchRoots.emplace_back(*envPath);
 			}
 		}
 

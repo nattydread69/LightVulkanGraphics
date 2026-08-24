@@ -36,11 +36,40 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <vector>
 
 namespace lightGraphics
 {
+	namespace
+	{
+		// std::getenv is a hard MSVC error under this project's /WX (C4996, "may be
+		// unsafe"). Same _dupenv_s/getenv split as VkAppRigged.cpp's identical helper
+		// (kept as its own copy here rather than shared -- neither file includes the
+		// other).
+		std::optional<std::string> getEnvironmentVariable(const char* name)
+		{
+#if defined(_WIN32)
+			char* value = nullptr;
+			std::size_t length = 0;
+			if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+			{
+				return std::nullopt;
+			}
+			std::string result(value);
+			free(value);
+			return result;
+#else
+			if (const char* value = std::getenv(name))
+			{
+				return std::string(value);
+			}
+			return std::nullopt;
+#endif
+		}
+	}
+
 	// Minimal font-payload search, deliberately mirroring the order that
 	// findShaderPath() uses for spv/. Still to be formalised (install rules,
 	// FONT_PATHS.md, and the relocated-install test); until then this is enough to
@@ -49,11 +78,11 @@ namespace lightGraphics
 	{
 		std::vector<std::filesystem::path> searchRoots;
 
-		if (const char* envPath = std::getenv("LIGHT_VULKAN_GRAPHICS_FONT_PATH"))
+		if (auto envPath = getEnvironmentVariable("LIGHT_VULKAN_GRAPHICS_FONT_PATH"))
 		{
-			if (envPath[0] != '\0')
+			if (!envPath->empty())
 			{
-				searchRoots.emplace_back(envPath);
+				searchRoots.emplace_back(*envPath);
 			}
 		}
 

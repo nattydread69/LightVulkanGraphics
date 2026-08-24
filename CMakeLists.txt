@@ -149,12 +149,27 @@ set(GLFW_LIB_TARGET "")
 # exported either the plain 'glfw' target or the namespaced 'glfw::glfw' target
 # depending on version/distro (this system's apt package exports plain 'glfw'), so
 # whichever one we actually found here is exactly what a downstream consumer's own
-# find_dependency(glfw3 CONFIG) will produce too. Only the FetchContent fallback
-# needs an explicit guess (a FetchContent'd target lives only in this build and
-# cannot itself be put in our install(EXPORT) set -- CMake error: "requires target
-# glfw that is not in any export set" -- so the installed package instead expects
-# consumers to have their own findable glfw3 CONFIG package, same as it already
-# does for glm via LVG_GLM_BUILD_TARGET/glm::glm).
+# find_dependency(glfw3 CONFIG) will produce too, for the first two (imported-target)
+# branches below.
+#
+# The FetchContent fallback branch is different and needs an explicit, DIFFERENT
+# guess: FetchContent_MakeAvailable(glfw) builds glfw's own CMakeLists.txt, which
+# creates a real, local, non-imported target literally named 'glfw' -- and CMake's
+# install(EXPORT) validator resolves any name in an exported interface against every
+# target that exists ANYWHERE in this build, not just the branch that produced the
+# string. So using that same bare 'glfw' string here (even wrapped in
+# $<INSTALL_INTERFACE:...>, which only controls WHEN the string is used, not whether
+# it's checked) still collides with that real local target and fails with "requires
+# target glfw that is not in any export set" -- $<BUILD_INTERFACE:>/
+# $<INSTALL_INTERFACE:> splitting alone does not dodge this, unlike for an IMPORTED
+# target (which is unconditionally exempt from the check). The fix mirrors glm's own
+# FetchContent fallback just above (LVG_GLM_BUILD_TARGET='lvg_glm_headers', a name
+# with no '::' that deliberately avoids colliding with 'glm::glm'): guess the
+# namespaced 'glfw::glfw' instead of plain 'glfw' for this branch only. Nothing in
+# this build is ever named 'glfw::glfw' (only plain 'glfw' exists locally), so the
+# validator finds no matching local target and passes the string through unchecked,
+# exactly as intended for a name meant to be resolved later on the consumer's own
+# system.
 set(LVG_GLFW_INSTALL_TARGET "")
 find_package(glfw3 CONFIG QUIET)            # exports glfw::glfw or plain glfw
 if (TARGET glfw::glfw)
@@ -184,7 +199,9 @@ else()
 		set(GLFW_INSTALL        OFF CACHE BOOL "" FORCE)
 		FetchContent_MakeAvailable(glfw)
 		set(GLFW_LIB_TARGET glfw)
-		set(LVG_GLFW_INSTALL_TARGET glfw)   # matches glfw's own upstream Config package target name
+		# NOT 'glfw' -- see the comment above this if/else chain: that would collide
+		# with this branch's own local 'glfw' target and fail install(EXPORT).
+		set(LVG_GLFW_INSTALL_TARGET glfw::glfw)
 	endif()
 endif()
 
