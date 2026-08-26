@@ -299,17 +299,39 @@ void RiggedObject::resetBoneTransforms()
     {
         const Bone& bone = model->bones[i];
 
-        glm::mat4 translation = glm::translate(glm::mat4(1.0f), bone.bindPosition);
-        glm::mat4 rotationMatrix = glm::mat4_cast(glm::normalize(bone.bindRotation));
-        glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), bone.bindScale);
-
-        glm::mat4 transform = translation * rotationMatrix * scaleMatrix;
-
-        if (bone.parentIndex >= 0 &&
-            bone.parentIndex < static_cast<int>(i) &&
-            bone.parentIndex < static_cast<int>(boneTransforms.size()))
+        // Bones with skin-cluster data (Bone::hasSkinBindTransform) can have a
+        // node-hierarchy bind pose (bindPosition/bindRotation/bindScale, walked
+        // below) that disagrees with the FBX/glTF file's own authoritative
+        // skin-cluster bind pose -- sometimes by a large margin, and the
+        // disagreement compounds down the chain (see FBXLoader::loadModel's
+        // "node-hierarchy bind pose... disagrees with... skin-cluster bind
+        // pose" diagnostic). RiggedSkinning.h's buildRiggedFinalBoneMatrix
+        // already prefers skinningGlobalBindTransform for exactly this reason,
+        // which is why the rendered mesh looks correct even when this function
+        // used to reconstruct a different, distorted rest skeleton. Anything
+        // that reads getBoneTransforms() for its own CPU-side math (IK solving,
+        // physics/debug-shape overlays) was working from that distorted
+        // skeleton -- mirror HumanoidPhysicalBody::computeBindPose()'s
+        // preference for the skin-cluster bind so both agree with the renderer.
+        glm::mat4 transform;
+        if (bone.hasSkinBindTransform)
         {
-            transform = boneTransforms[bone.parentIndex] * transform;
+            transform = bone.skinningGlobalBindTransform;
+        }
+        else
+        {
+            glm::mat4 translation = glm::translate(glm::mat4(1.0f), bone.bindPosition);
+            glm::mat4 rotationMatrix = glm::mat4_cast(glm::normalize(bone.bindRotation));
+            glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), bone.bindScale);
+
+            transform = translation * rotationMatrix * scaleMatrix;
+
+            if (bone.parentIndex >= 0 &&
+                bone.parentIndex < static_cast<int>(i) &&
+                bone.parentIndex < static_cast<int>(boneTransforms.size()))
+            {
+                transform = boneTransforms[bone.parentIndex] * transform;
+            }
         }
 
         boneTransforms[i] = transform;

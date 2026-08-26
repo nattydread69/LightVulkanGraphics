@@ -244,8 +244,20 @@ namespace
 		require(maxExtent(combinedBounds) < 2.5f,
 		        "Worker bind pose produced implausibly large bounds: " +
 		        boundsSummary(combinedBounds));
-		require(horizontalExtentX(combinedBounds) < 0.9f,
-		        "Worker bind pose stayed in the source T-pose arm span");
+		// RiggedObject::resetBoneTransforms() now sets each skin-cluster-bound
+		// bone to its authoritative skinningGlobalBindTransform (see
+		// FBXLoader::loadModel's "node-hierarchy bind pose... disagrees with...
+		// skin-cluster bind pose" diagnostic), matching what
+		// buildRiggedFinalBoneMatrix already used at render time. That makes the
+		// reset pose mathematically reproduce the file's own bind pose exactly --
+		// for Worker.fbx, an arms-out T-pose -- rather than the previous, buggy
+		// behaviour where the reset pose used an uncorrected node-hierarchy walk
+		// that disagreed with the render-time skin, and happened to fold the arms
+		// in as a side effect. A tight horizontal span here would mean that
+		// agreement has silently regressed.
+		require(horizontalExtentX(combinedBounds) > 1.2f,
+		        "Worker bind pose no longer reproduces the source T-pose arm span: " +
+		        boundsSummary(combinedBounds));
 
 		for (size_t meshIndex = 0; meshIndex < model->meshes.size(); ++meshIndex)
 		{
