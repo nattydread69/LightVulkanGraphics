@@ -122,10 +122,17 @@ namespace lightGraphics
 		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
 		objectSlotForIndex_.push_back(slot);
 
-		if (sceneFinalized_)
-		{
-			updateInstanceData(); // Update rendering data only if scene is finalized
-		}
+		// Rendering data is already up to date for the next frame without an
+		// eager rebuild here: the dirty-tracking above (dirtyObjects_.push_back(true),
+		// instanceDataDirty_ = true) is exactly what updateInstanceDataOptimized()
+		// needs, and that already runs unconditionally every frame from
+		// drawFrame() before any command buffer is recorded. Calling the
+		// non-optimized updateInstanceData() here instead recomputed every
+		// existing object's instance data and re-uploaded the whole buffer on
+		// every single addObject() call -- O(N) work per call, O(N^2) total for
+		// a scene built one object at a time (e.g. a tatami floor grid), which
+		// is exactly what made switching to the two-character model freeze the
+		// app for whole seconds.
 
 		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
@@ -144,10 +151,8 @@ namespace lightGraphics
 		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
 		objectSlotForIndex_.push_back(slot);
 
-		if (sceneFinalized_)
-		{
-			updateInstanceData();
-		}
+		// See the pObject* overload above's comment: dirty-tracking alone is
+		// sufficient here, no eager rebuild needed.
 
 		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
@@ -168,10 +173,8 @@ namespace lightGraphics
 		const std::uint32_t slot = allocateHandleSlot(objectSlots_, freeObjectSlots_, newIndex);
 		objectSlotForIndex_.push_back(slot);
 
-		if (sceneFinalized_)
-		{
-			updateInstanceData();
-		}
+		// See the pObject* overload above's comment: dirty-tracking alone is
+		// sufficient here, no eager rebuild needed.
 
 		return ObjectHandle{slot, objectSlots_[slot].generation};
 	}
@@ -429,10 +432,15 @@ namespace lightGraphics
 		}
 		sceneGraph_->onObjectRemoved(index);
 		instanceDataDirty_ = true;
-		if (sceneFinalized_)
-		{
-			updateInstanceData();
-		}
+		// No eager updateInstanceData() here (see addObject()'s comment for why
+		// that was O(N) per call): dirtyObjects_/instanceDataCache_ were just
+		// erase()'d in lockstep with _objects_ above, so they stay correctly
+		// index-aligned with the shifted objects even though nothing here marks
+		// any individual index dirty. updateInstanceDataOptimized() (run
+		// automatically every frame) still needs to know the instance *count*
+		// changed, though, since a plain "was anything marked dirty" check would
+		// otherwise skip the GPU buffer memcpy entirely and leave it holding the
+		// pre-removal layout -- see its own "countChanged" check.
 	}
 
 	void VkApp::removeObject(ObjectHandle handle)

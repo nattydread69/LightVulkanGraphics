@@ -463,6 +463,16 @@ namespace lightGraphics
 			return;
 		}
 
+		// A removal shifts dirtyObjects_/instanceDataCache_ in lockstep with
+		// _objects_ (see removeObject()), so the cache stays index-correct for
+		// every surviving object without any of them needing to be marked
+		// dirty -- but that also means the anyDirty loop below would see
+		// nothing dirty and skip the GPU memcpy entirely, leaving the buffer
+		// holding the pre-removal instance count/layout. Catch that case by its
+		// only visible symptom here: the instance count no longer matches what
+		// the GPU buffers were last synced to.
+		bool const countChanged = instanceCount_ != static_cast<uint32_t>(_objects_.size());
+
 		// Update instance count
 		instanceCount_ = static_cast<uint32_t>(_objects_.size());
 
@@ -491,7 +501,7 @@ namespace lightGraphics
 			}
 		}
 
-		if (!anyDirty)
+		if (!anyDirty && !countChanged)
 		{
 			instanceDataDirty_ = false;
 			return;
