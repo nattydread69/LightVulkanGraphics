@@ -817,6 +817,18 @@ namespace lightGraphics
 			// know it's safe to reuse skinnedVertices as-is when the instance's pose
 			// hasn't changed since last frame, skipping the per-vertex skin blend.
 			bool hasValidSkinnedVertices = false;
+			// Per frame-in-flight index: whether that index's GPU vertex buffer still
+			// needs a copy of the current skinnedVertices. Set for every index
+			// whenever skinnedVertices actually changes, cleared only for the one
+			// index updateRiggedInstances() actually uploads into this call -- same
+			// shape as instanceBufferNeedsSync_ (see its own comment), except there's
+			// no cross-frame race to fix here (this function only ever touches
+			// [currentFrame_]'s own buffers already): this flag exists purely to skip
+			// re-uploading a vertex buffer that hasn't changed, which otherwise
+			// happens every single frame forever for a mesh that's never animated
+			// (e.g. a static background mesh loaded via the rigged-object path) or
+			// simply held in a static pose.
+			bool vertexBufferNeedsSync[MAX_FRAMES_IN_FLIGHT]{};
 			uint32_t indexCount = 0;
 			std::shared_ptr<detail::Texture> texture;
 		};

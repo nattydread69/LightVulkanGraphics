@@ -1062,12 +1062,19 @@ namespace lightGraphics
 				}
 
 				meshData.hasValidSkinnedVertices = true;
+				// skinnedVertices just changed: every frame-in-flight buffer's
+				// existing copy of it is now stale, not just currentFrame_'s.
+				for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+				{
+					meshData.vertexBufferNeedsSync[i] = true;
+				}
 				} // !canSkipSkinning
 
 				detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[frameIndex];
 				detail::Buffer& frameVertexUploadBuffer = meshData.vertexUploadBuffers[frameIndex];
 				void* frameVertexMapped = meshData.vertexUploadMapped[frameIndex];
-				if (!meshData.skinnedVertices.empty() &&
+				if (meshData.vertexBufferNeedsSync[frameIndex] &&
+				    !meshData.skinnedVertices.empty() &&
 				    frameVertexBuffer.buffer != VK_NULL_HANDLE &&
 				    frameVertexUploadBuffer.memory != VK_NULL_HANDLE)
 				{
@@ -1084,6 +1091,7 @@ namespace lightGraphics
 						vkUnmapMemory(device_, frameVertexUploadBuffer.memory);
 					}
 					recordUploadCopy(frameVertexUploadBuffer, frameVertexBuffer, vbSize);
+					meshData.vertexBufferNeedsSync[frameIndex] = false;
 				}
 			}
 
