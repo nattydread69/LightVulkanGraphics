@@ -106,12 +106,16 @@ namespace lightGraphics::detail
 		glm::mat4 lightViewProj;
 	};
 
-	// Bound before each (shape type, texture) draw batch in the flexible-shape
-	// pass; see ObjectDescription::textureTiling. xy = repeat count, zw unused
-	// (kept for std140-friendly 16-byte alignment across drivers).
+	// Bound before each (shape type, texture[, opacity]) draw batch in the
+	// flexible-shape pass; see ObjectDescription::textureTiling. xy = repeat
+	// count. z = opacity (0..1), consumed only by flexibleShapeTransparentPipeline_
+	// (see its own comment) -- the opaque and overlay passes always push 1.0
+	// here regardless of what an individual object's own alpha is, since
+	// only the transparent pass's objects are drawn with blending enabled.
+	// w unused (kept for std140-friendly 16-byte alignment across drivers).
 	struct FlexibleShapeTexturePushConstants
 	{
-		glm::vec4 tiling{1.0f, 1.0f, 0.0f, 0.0f};
+		glm::vec4 tiling{1.0f, 1.0f, 1.0f, 0.0f};
 	};
 
 	struct Texture
@@ -592,6 +596,16 @@ namespace lightGraphics
 		// Multiple pipelines for different rendering modes
 		VkPipeline flexibleShapePipeline_ = VK_NULL_HANDLE;
 		VkPipeline flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
+		// Alpha-blended variant of flexibleShapePipeline_: any object whose own
+		// colour alpha is below 1.0 draws through this pipeline instead of the
+		// opaque one -- see recordCommandBuffer's transparent-object pass and
+		// its own doc comment there. Depth-tested against the opaque scene
+		// (unlike the overlay pipeline, which disables depth testing entirely)
+		// so a transparent object is properly hidden behind real geometry, but
+		// does not write depth itself and does not cull back faces, so it
+		// stays visible from either side and never blocks other transparent
+		// draws behind it.
+		VkPipeline flexibleShapeTransparentPipeline_ = VK_NULL_HANDLE;
 		VkPipelineLayout flexibleShapePipelineLayout_ = VK_NULL_HANDLE;
 		VkPipeline wireframePipeline_ = VK_NULL_HANDLE;
 		VkPipeline unlitPipeline_ = VK_NULL_HANDLE;
@@ -778,6 +792,14 @@ namespace lightGraphics
 		detail::Buffer instanceBufs_[MAX_FRAMES_IN_FLIGHT]{};
 		void* instanceBufferMappedPerFrame_[MAX_FRAMES_IN_FLIGHT]{}; // Persistently mapped per frame
 		VkDeviceSize instanceBufferSizes_[MAX_FRAMES_IN_FLIGHT]{}; // Size per frame
+		// Set for every frame index whenever instanceDataCache_ changes, cleared only
+		// for the one index updateInstanceDataOptimized() actually memcpy's into this
+		// call -- see that function's own comment for why a global instanceDataDirty_
+		// flag alone isn't enough: it would either skip syncing a sibling frame's
+		// buffer entirely, or (the bug this replaced) write into that sibling's
+		// buffer immediately, racing whatever still-in-flight command buffer might
+		// still be reading it.
+		bool instanceBufferNeedsSync_[MAX_FRAMES_IN_FLIGHT]{};
 		std::vector<detail::Instance> instanceDataCache_; // Cache for instance data
 		struct RiggedMeshRenderData
 		{

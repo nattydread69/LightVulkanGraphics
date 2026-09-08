@@ -377,6 +377,22 @@ namespace lightGraphics
 			throw std::runtime_error("createCommandBuffers: allocation failed");
 		}
 
+		// drawFrame() always calls updateInstanceDataOptimized() (and
+		// updateRiggedInstances()) immediately before recordCommandBuffer(), so
+		// every per-frame-in-flight instance buffer is guaranteed sized/mapped
+		// for the scene's current object count before anything reads from it.
+		// This function's own recordCommandBuffer() calls below bypass that --
+		// callers include addRiggedObject()/addRiggedObjectHandle() re-recording
+		// live (post-sceneFinalized_) via their own "if (sceneFinalized_)
+		// { createCommandBuffers(); }" -- so without repeating that same sync
+		// here, a frame-in-flight slot that's never been sized/mapped yet falls
+		// through writeInstancesToBuffer() to vkMapMemory() on a null memory
+		// handle: undefined behaviour that, under a permissive software
+		// implementation, doesn't error loudly but silently corrupts whatever
+		// GPU memory the driver hands back instead.
+		updateInstanceDataOptimized();
+		updateRiggedInstances();
+
 		// Record each command buffer
 		for (uint32_t i = 0; i < static_cast<uint32_t>(commandBuffers_.size()); i++)
 		{
@@ -455,10 +471,20 @@ namespace lightGraphics
 			dirtyObjects_.clear();
 			instanceDataCache_.clear();
 			instanceDataDirty_ = false;
+			for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+			{
+				instanceBufferNeedsSync_[i] = false;
+			}
 			return;
 		}
 
-		if (!instanceDataDirty_)
+		// currentFrame_'s buffer can still be stale (instanceBufferNeedsSync_[currentFrame_])
+		// even when instanceDataDirty_ is already false: instanceDataDirty_ only tracks
+		// whether instanceDataCache_ itself is up to date, not whether every
+		// individual frame-in-flight GPU buffer has actually received a copy of
+		// it yet -- see instanceBufferNeedsSync_'s own comment for why those are
+		// tracked separately.
+		if (!instanceDataDirty_ && !instanceBufferNeedsSync_[currentFrame_])
 		{
 			return;
 		}
@@ -501,31 +527,91 @@ namespace lightGraphics
 			}
 		}
 
-		if (!anyDirty && !countChanged)
+		if (anyDirty || countChanged)
 		{
-			instanceDataDirty_ = false;
+			// instanceDataCache_ just changed, so every frame-in-flight buffer's
+			// existing copy of it is now stale, not just currentFrame_'s -- mark
+			// all of them. Only currentFrame_'s buffer actually gets written
+			// below, though (see instanceBufferNeedsSync_'s own declaration
+			// comment for why): a sibling frame's flag stays set until that
+			// sibling is itself currentFrame_ on some later drawFrame() call,
+			// at which point drawFrame()'s own fence wait has actually verified
+			// its buffer is idle.
+			for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
+			{
+				instanceBufferNeedsSync_[i] = true;
+			}
+		}
+		instanceDataDirty_ = false;
+
+		if (!instanceBufferNeedsSync_[currentFrame_])
+		{
 			return;
 		}
 
-		// Every frame-in-flight buffer must be resized here, not just
-		// currentFrame_'s: recordCommandBuffer is driven by the swapchain's
-		// imageIndex/currentFrame_ on whichever frame comes next, which may
-		// not be this one, and this function's dirty flag is cleared below
-		// so a later call may not revisit an under-sized sibling buffer
-		// before it's used -- leaving it undersized causes an out-of-bounds
-		// write (and a segfault) the next time that frame is drawn.
+		// Every frame-in-flight buffer must be kept appropriately *sized* here,
+		// not just currentFrame_'s: recordCommandBuffer is driven by the
+		// swapchain's imageIndex/currentFrame_ on whichever frame comes next,
+		// which may not be this one, and an under-sized sibling buffer causes
+		// an out-of-bounds write (and a segfault) the next time that frame is
+		// drawn. Writing this call's actual *data* into it is a separate
+		// question, handled below.
 		VkDeviceSize instBytes = sizeof(Instance) * _objects_.size();
+
+		// drawFrame() only waits on currentFrame_'s own fence before calling
+		// this function -- but when growth is needed below, resizing touches
+		// the instance buffer for EVERY frame-in-flight index, including
+		// sibling frames whose fences were never waited on here. A sibling
+		// frame's command buffer, submitted by a previous drawFrame() call and
+		// still executing on the GPU, can still hold a live
+		// vkCmdBindVertexBuffers reference to that buffer -- destroying it out
+		// from under the GPU is a genuine use-after-free. Only the growth path
+		// needs the extra wait; the common case (memcpy into an
+		// already-adequately-sized buffer) is already covered by
+		// currentFrame_'s own fence wait in drawFrame().
+		bool needsResize = false;
 		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 		{
-			ensureInstanceBufferSizeForFrame(frameIndex, instBytes);
-			void* mapped = instanceBufferMappedPerFrame_[frameIndex];
-			if (mapped)
+			if (instanceBufferSizes_[frameIndex] < instBytes)
 			{
-				std::memcpy(mapped, instanceDataCache_.data(), (size_t)instBytes);
+				needsResize = true;
+				break;
+			}
+		}
+		if (needsResize && device_ != VK_NULL_HANDLE)
+		{
+			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+			{
+				if (inFlight_[frameIndex] != VK_NULL_HANDLE)
+				{
+					vkWaitForFences(device_, 1, &inFlight_[frameIndex], VK_TRUE, UINT64_MAX);
+				}
 			}
 		}
 
-		instanceDataDirty_ = false;
+		for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
+		{
+			ensureInstanceBufferSizeForFrame(frameIndex, instBytes);
+		}
+
+		// Only ever memcpy into currentFrame_'s own buffer: it's the only one
+		// this drawFrame() call's fence wait has actually verified is idle. A
+		// sibling frame's buffer might still be actively read by a
+		// still-in-flight command buffer from a previous drawFrame() call --
+		// host-coherent memory guarantees the write eventually becomes
+		// visible, but gives no ordering guarantee against a concurrent GPU
+		// read, so writing fresh data into it here would be a genuine,
+		// non-deterministic race (observed as random per-frame garbage --
+		// wrong texture/tiling on some instances, degenerate geometry on
+		// others -- appearing only once frames were being submitted back to
+		// back fast enough for a previous frame's command buffer to still be
+		// executing when this one raced ahead of it).
+		void* mapped = instanceBufferMappedPerFrame_[currentFrame_];
+		if (mapped)
+		{
+			std::memcpy(mapped, instanceDataCache_.data(), (size_t)instBytes);
+		}
+		instanceBufferNeedsSync_[currentFrame_] = false;
 	}
 
 	void VkApp::flushPendingUpdates()

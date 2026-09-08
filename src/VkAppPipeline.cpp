@@ -513,6 +513,11 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, flexibleShapeOverlayPipeline_, nullptr);
 			flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
 		}
+		if (flexibleShapeTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, flexibleShapeTransparentPipeline_, nullptr);
+			flexibleShapeTransparentPipeline_ = VK_NULL_HANDLE;
+		}
 		if (flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipelineLayout(device_, flexibleShapePipelineLayout_, nullptr);
@@ -640,6 +645,37 @@ namespace lightGraphics
 		dsOverlay.depthWriteEnable = VK_FALSE;
 		gp.pDepthStencilState = &dsOverlay;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapeOverlayPipeline_));
+
+		// Transparent variant: any object whose own colour alpha is below 1.0
+		// draws through this pipeline instead (see recordCommandBuffer's
+		// transparent-object pass). Standard alpha blend (src_alpha,
+		// 1-src_alpha); depth-tested against the already-drawn opaque scene
+		// so it's properly hidden behind real geometry, but does not write
+		// depth (so it never occludes -- itself or anything drawn after it --
+		// the way an opaque object would), and does not cull back faces, so a
+		// single flat plane stays visible from either side instead of
+		// vanishing when viewed from "behind".
+		VkPipelineColorBlendAttachmentState cbaTransparent = cba;
+		cbaTransparent.blendEnable = VK_TRUE;
+		cbaTransparent.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		cbaTransparent.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cbaTransparent.colorBlendOp = VK_BLEND_OP_ADD;
+		cbaTransparent.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cbaTransparent.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cbaTransparent.alphaBlendOp = VK_BLEND_OP_ADD;
+		VkPipelineColorBlendStateCreateInfo cbTransparent = cb;
+		cbTransparent.pAttachments = &cbaTransparent;
+
+		VkPipelineRasterizationStateCreateInfo rsTransparent = rs;
+		rsTransparent.cullMode = VK_CULL_MODE_NONE;
+
+		VkPipelineDepthStencilStateCreateInfo dsTransparent = ds;
+		dsTransparent.depthWriteEnable = VK_FALSE;
+
+		gp.pColorBlendState = &cbTransparent;
+		gp.pRasterizationState = &rsTransparent;
+		gp.pDepthStencilState = &dsTransparent;
+		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapeTransparentPipeline_));
 
 		vkDestroyShaderModule(device_, vs, nullptr);
 		vkDestroyShaderModule(device_, fs, nullptr);

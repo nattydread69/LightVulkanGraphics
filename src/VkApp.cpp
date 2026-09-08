@@ -2864,7 +2864,12 @@ namespace lightGraphics
 					continue;
 				}
 				const std::string name = _objects_[i].getName();
-				if (isDebugOverlayObjectName(name))
+				// Overlay-registered objects were already excluded from shadow
+				// casting; semi-transparent objects (alpha < 1, e.g. debug
+				// reference planes) shouldn't cast a full solid shadow of
+				// themselves either -- checked directly on alpha rather than
+				// requiring every such object to also be overlay-registered.
+				if (isDebugOverlayObjectName(name) || _objects_[i].getColour().a < (1.0f - 1e-3f))
 				{
 					continue;
 				}
@@ -3101,6 +3106,14 @@ namespace lightGraphics
 		std::vector<std::vector<size_t>> overlayShapeGroups(8); // debug overlay shapes (drawn on top)
 		uint32_t overlayBaseFirstInstance = 0;
 		bool hasOverlayObjects = false;
+		// Any object whose own colour alpha is below 1.0 -- see
+		// flexibleShapeTransparentPipeline_'s own comment. Checked ahead of
+		// isDebugOverlayObjectName below, so a transparent object always
+		// draws through the transparent pass even if its name would also
+		// match a registered overlay substring.
+		std::vector<std::vector<size_t>> transparentShapeGroups(8);
+		uint32_t transparentBaseFirstInstance = 0;
+		bool hasTransparentObjects = false;
 
 		auto writeInstancesToBuffer = [&](VkDeviceSize offsetBytes, const Instance* instances, VkDeviceSize bytes)
 		{
@@ -3138,12 +3151,27 @@ namespace lightGraphics
 				{
 					// Objects matching isDebugOverlayObjectName are treated as debug
 					// overlays and rendered in a second pass with depth testing disabled.
+					// Checked ahead of the alpha/transparency test below: several
+					// existing overlay shapes (e.g. the simplified ragdoll/physics
+					// capsules) carry a partial-alpha colour purely for a stylised
+					// look under the overlay pipeline, which has never done alpha
+					// blending -- their alpha was simply ignored. Letting alpha win
+					// here would silently reroute them into the real-blending
+					// transparent pipeline instead (different culling and depth-write
+					// behaviour), which is not what those pre-existing overlays want
+					// and is not visually equivalent on every driver.
 					std::string name = _objects_[i].getName();
 					bool isOverlay = isDebugOverlayObjectName(name);
+					bool isTransparent = _objects_[i].getColour().a < (1.0f - 1e-3f);
 					if (isOverlay)
 					{
 						overlayShapeGroups[shapeType].push_back(i);
 						hasOverlayObjects = true;
+					}
+					else if (isTransparent)
+					{
+						transparentShapeGroups[shapeType].push_back(i);
+						hasTransparentObjects = true;
 					}
 					else
 					{
@@ -3248,7 +3276,7 @@ namespace lightGraphics
 					}
 
 					detail::FlexibleShapeTexturePushConstants push{};
-					push.tiling = glm::vec4(batch.tiling, 0.0f, 0.0f);
+					push.tiling = glm::vec4(batch.tiling, 1.0f, 0.0f);
 					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
 						0, sizeof(push), &push);
 
@@ -3287,6 +3315,13 @@ namespace lightGraphics
 				vkCmdDraw(cmd, vertexCount, 1, 0, 0);
 			}
 		}
+
+		// Default starting point for the transparent pass's own instance
+		// range: wherever the overlay pass would start from too (i.e. right
+		// after the regular objects just drawn above). Overwritten below with
+		// the overlay pass's own actual final count if it ran and had
+		// anything in it -- see that pass's own end.
+		transparentBaseFirstInstance = overlayBaseFirstInstance;
 
 		// Draw rigged meshes
 		if (!riggedInstances_.empty() && riggedPipeline_ != VK_NULL_HANDLE)
@@ -3472,7 +3507,133 @@ namespace lightGraphics
 					}
 
 					detail::FlexibleShapeTexturePushConstants push{};
-					push.tiling = glm::vec4(batch.tiling, 0.0f, 0.0f);
+					push.tiling = glm::vec4(batch.tiling, 1.0f, 0.0f);
+					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+						0, sizeof(push), &push);
+
+					vkCmdDrawIndexed(cmd,
+						shapeGeo.indexCount,
+						batch.count,
+						shapeGeo.indexOffset,
+						0,
+						batch.first);
+				}
+
+				runningFirst += countForShape;
+			}
+
+			transparentBaseFirstInstance = runningFirst;
+		}
+
+		// Draw semi-transparent shapes (e.g. debug reference planes) last, with
+		// alpha blending on and depth-write off, so they composite correctly
+		// over everything drawn so far without occluding what's behind them.
+		if (indexed && useInstancing && hasTransparentObjects && flexibleShapeTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeTransparentPipeline_);
+
+			// flexibleShapeTransparentPipeline_ shares flexibleShapePipelineLayout_
+			// (set 1 = shape texture, plus the tiling/opacity push constant) --
+			// bind against that, not pipelineLayout_, for the same reason as the
+			// main flexible-shape pass above.
+			if (!descriptorSets_.empty() && flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
+			{
+				if (imageIndex >= descriptorSets_.size())
+				{
+					throw std::runtime_error("recordCommandBuffer: descriptorSets_ size mismatch");
+				}
+				vkCmdBindDescriptorSets(
+					cmd,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					flexibleShapePipelineLayout_,
+					0,
+					1,
+					&descriptorSets_[imageIndex],
+					0,
+					nullptr
+				);
+			}
+
+			if (vbCount > 0)
+			{
+				vkCmdBindVertexBuffers(cmd, 0, vbCount, vbs.data(), offs.data());
+			}
+			vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+
+			uint32_t runningFirst = transparentBaseFirstInstance;
+			for (int shapeType = 0; shapeType < 8; ++shapeType)
+			{
+				if (transparentShapeGroups[shapeType].empty()) continue;
+
+				const auto& shapeGeo = shapeGeometries_[shapeType];
+				uint32_t countForShape = static_cast<uint32_t>(transparentShapeGroups[shapeType].size());
+
+				std::vector<Instance> tmp(countForShape);
+				for (uint32_t k = 0; k < countForShape; ++k)
+				{
+					size_t objIndex = transparentShapeGroups[shapeType][k];
+					tmp[k] = makeInstanceForObject(objIndex);
+				}
+
+				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
+				VkDeviceSize bytes = sizeof(Instance) * countForShape;
+
+				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
+
+				// Batch by (texture, tiling, alpha) -- transparent objects can
+				// differ in opacity even when they share a shape type and
+				// texture, and alpha rides the same push constant as tiling
+				// (see FlexibleShapeTexturePushConstants), so a change in
+				// either one requires a new batch/push.
+				struct TextureBatch
+				{
+					std::string texturePath;
+					glm::vec2 tiling{1.0f, 1.0f};
+					float alpha = 1.0f;
+					uint32_t first = 0;
+					uint32_t count = 0;
+				};
+				std::vector<TextureBatch> batches;
+				for (uint32_t k = 0; k < countForShape; ++k)
+				{
+					size_t objIndex = transparentShapeGroups[shapeType][k];
+					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
+					float const alpha = _objects_[objIndex].getColour().a;
+					if (!batches.empty() &&
+						batches.back().texturePath == texturePath &&
+						batches.back().tiling == tiling &&
+						batches.back().alpha == alpha)
+					{
+						batches.back().count++;
+						continue;
+					}
+					batches.push_back({texturePath, tiling, alpha, runningFirst + k, 1});
+				}
+
+				for (const TextureBatch& batch : batches)
+				{
+					std::shared_ptr<detail::Texture> const texture =
+						batch.texturePath.empty() ? nullptr : getOrCreateTexture(batch.texturePath);
+					VkDescriptorSet textureSet = (texture && texture->descriptor != VK_NULL_HANDLE)
+						? texture->descriptor
+						: (defaultTexture_ ? defaultTexture_->descriptor : VK_NULL_HANDLE);
+					if (textureSet != VK_NULL_HANDLE)
+					{
+						vkCmdBindDescriptorSets(
+							cmd,
+							VK_PIPELINE_BIND_POINT_GRAPHICS,
+							flexibleShapePipelineLayout_,
+							1,
+							1,
+							&textureSet,
+							0,
+							nullptr
+						);
+					}
+
+					detail::FlexibleShapeTexturePushConstants push{};
+					push.tiling = glm::vec4(batch.tiling, batch.alpha, 0.0f);
 					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
 						0, sizeof(push), &push);
 

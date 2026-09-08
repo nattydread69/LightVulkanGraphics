@@ -34,6 +34,7 @@ layout(location=1) out vec3 vColor;
 layout(location=2) out vec3 vPosWS;
 layout(location=3) out float vShapeType;
 layout(location=4) out vec2 vTexCoord;
+layout(location=5) out float vOpacity;
 
 void main() 
 {
@@ -128,6 +129,10 @@ void main()
     }
 
     vTexCoord *= texturePush.tiling.xy;
+
+    // z is opacity (0..1), bound per (shape type, texture) draw batch same as
+    // tiling.xy above -- see FlexibleShapeTexturePushConstants's own comment.
+    vOpacity = texturePush.tiling.z;
 
     // Final position
     gl_Position = U.uProj * U.uView * posWS;
