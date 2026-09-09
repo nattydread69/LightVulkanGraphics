@@ -19,6 +19,7 @@
 #pragma once
 
 #include "FBXLoader.h"
+#include "FlatPolygon.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "LightVulkanGraphicsVersion.h"
 #include "RotationGlyph.h"
