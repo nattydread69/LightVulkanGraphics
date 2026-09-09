@@ -357,12 +357,25 @@ endif()
 # correct on Windows without depending on CMake's forward-slash normalization, and
 # unlike a regex such as "/src/ui/", it cannot accidentally swallow an unrelated future
 # directory (e.g. src/ui_platform/) just because its name shares a prefix.
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
+#
+# Deliberately NOT CONFIGURE_DEPENDS: that flag makes Ninja re-run CMake's own
+# configure step (rewriting build.ninja/.ninja_log/CMakeFiles/*) whenever it
+# suspects the glob results might have changed -- including as the first step of
+# a plain `sudo make install`/`sudo ninja install`/`sudo cmake --install`, since
+# those depend on the build being current. Since that whole invocation runs as
+# root, the regenerated files come out root-owned, silently breaking the next
+# ordinary (non-sudo) build with "Permission denied" until someone chowns the
+# build directory back. Without CONFIGURE_DEPENDS, adding/removing a source
+# file just needs one manual reconfigure (`cmake .` in the build directory, or
+# any `cmake --build`/`cmake --install` after touching CMakeLists.txt itself)
+# to pick it up -- a small, occasional manual step traded for never having a
+# routine sudo install corrupt build-directory ownership.
+file(GLOB_RECURSE SOURCES
 	"${PROJECT_SOURCE_DIR}/src/*.cpp"
 	"${PROJECT_SOURCE_DIR}/src/*.cxx"
 	"${PROJECT_SOURCE_DIR}/src/*.cc"
 )
-file(GLOB_RECURSE LVGUI_EXCLUDED_SOURCES CONFIGURE_DEPENDS
+file(GLOB_RECURSE LVGUI_EXCLUDED_SOURCES
 	"${PROJECT_SOURCE_DIR}/src/ui/*.cpp"
 	"${PROJECT_SOURCE_DIR}/src/ui/*.cxx"
 	"${PROJECT_SOURCE_DIR}/src/ui/*.cc"

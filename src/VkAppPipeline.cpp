@@ -691,6 +691,11 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, riggedPipeline_, nullptr);
 			riggedPipeline_ = VK_NULL_HANDLE;
 		}
+		if (riggedTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, riggedTransparentPipeline_, nullptr);
+			riggedTransparentPipeline_ = VK_NULL_HANDLE;
+		}
 		if (riggedPipelineLayout_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipelineLayout(device_, riggedPipelineLayout_, nullptr);
@@ -806,6 +811,24 @@ namespace lightGraphics
 		if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &riggedPipeline_) != VK_SUCCESS)
 		{
 			throw std::runtime_error("Failed to create rigged graphics pipeline");
+		}
+
+		// Identical pipeline except back-face culling, for any rigged instance
+		// whose current opacity is < 1.0 -- see riggedTransparentPipeline_'s own
+		// comment (VkApp.h) for why. Depth test/write stay exactly the same as
+		// the opaque pipeline (ds, unmodified): that's what keeps a genuinely
+		// separate mesh at a different depth -- e.g. a dogi mesh layered over the
+		// body mesh underneath it -- correctly ordered relative to each other
+		// while translucent, the same as while opaque. Shares
+		// riggedPipelineLayout_ (same descriptor sets and push constant range),
+		// so switching between the two pipelines mid-command-buffer doesn't
+		// require rebinding descriptor sets.
+		VkPipelineRasterizationStateCreateInfo rsTransparent = rs;
+		rsTransparent.cullMode = VK_CULL_MODE_BACK_BIT;
+		gp.pRasterizationState = &rsTransparent;
+		if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &riggedTransparentPipeline_) != VK_SUCCESS)
+		{
+			throw std::runtime_error("Failed to create rigged transparent graphics pipeline");
 		}
 
 		vkDestroyShaderModule(device_, vs, nullptr);

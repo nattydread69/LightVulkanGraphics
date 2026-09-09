@@ -739,6 +739,11 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, riggedPipeline_, nullptr);
 			riggedPipeline_ = VK_NULL_HANDLE;
 		}
+		if (riggedTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, riggedTransparentPipeline_, nullptr);
+			riggedTransparentPipeline_ = VK_NULL_HANDLE;
+		}
 		if (shadowPipeline_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipeline(device_, shadowPipeline_, nullptr);
@@ -3344,10 +3349,9 @@ namespace lightGraphics
 		transparentBaseFirstInstance = overlayBaseFirstInstance;
 
 		// Draw rigged meshes
-		if (!riggedInstances_.empty() && riggedPipeline_ != VK_NULL_HANDLE)
+		if (!riggedInstances_.empty() && riggedPipeline_ != VK_NULL_HANDLE &&
+		    riggedTransparentPipeline_ != VK_NULL_HANDLE)
 		{
-			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, riggedPipeline_);
-
 			if (!descriptorSets_.empty())
 			{
 				if (imageIndex >= descriptorSets_.size())
@@ -3373,6 +3377,14 @@ namespace lightGraphics
 				// 1.0 for every rigged object except while CharacterModel's stability
 				// display has set a lower alpha via RiggedObject::setColour().
 				float const riggedOpacity = riggedInstance.object ? riggedInstance.object->getColour().a : 1.0f;
+				// riggedTransparentPipeline_ (depth write off) for any instance below
+				// full opacity -- see its own comment (VkApp.h) for why depth write
+				// otherwise makes a translucent character look patchy rather than
+				// uniformly see-through. Descriptor sets stay bound across this
+				// switch: both pipelines share riggedPipelineLayout_.
+				bool const isTransparentInstance = riggedOpacity < 1.0f;
+				vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+					isTransparentInstance ? riggedTransparentPipeline_ : riggedPipeline_);
 				vkCmdPushConstants(cmd, riggedPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
 					0, sizeof(float), &riggedOpacity);
 				for (const auto& meshData : riggedInstance.meshes)

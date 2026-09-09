@@ -611,6 +611,29 @@ namespace lightGraphics
 		VkPipeline unlitPipeline_ = VK_NULL_HANDLE;
 		VkPipeline linePipeline_ = VK_NULL_HANDLE;
 		VkPipeline riggedPipeline_ = VK_NULL_HANDLE;
+		// Same shaders/layout/blend/depth state as riggedPipeline_, but with
+		// back-face culling enabled -- used instead of riggedPipeline_ for any
+		// rigged instance whose current colour alpha is < 1.0 (see the opacity
+		// push constant and CharacterModel's stability-display feature, the only
+		// thing that sets this today). riggedPipeline_ itself uses
+		// VK_CULL_MODE_NONE (both faces of every triangle render), which is
+		// harmless while opaque -- depth write correctly resolves which face is
+		// nearest -- but while translucent it means the FAR side of a closed
+		// mesh's own volume (e.g. the inside of a sleeve, or the back of a
+		// torso) blends in on top of the near side, reading as a patchy,
+		// inconsistent transparency rather than a uniform see-through look.
+		// Depth test/write stay exactly as they are for the opaque pipeline
+		// (unmodified): a first attempt at fixing this instead disabled depth
+		// write, which fixed the patchiness but broke ordering *between*
+		// genuinely separate meshes at different depths on the same character
+		// (e.g. a dogi mesh layered over the body mesh underneath), since with
+		// nothing writing depth, which one reads as "on top" degenerated into
+		// whichever happened to draw later -- visible as the body showing
+		// through the dogi instead of the dogi correctly layering over it.
+		// Culling the far side instead avoids that: two genuinely different
+		// meshes still resolve correctly via ordinary depth test/write, the same
+		// as while opaque.
+		VkPipeline riggedTransparentPipeline_ = VK_NULL_HANDLE;
 		VkPipelineLayout riggedPipelineLayout_ = VK_NULL_HANDLE;
 
 	private:
