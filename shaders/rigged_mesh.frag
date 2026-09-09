@@ -18,6 +18,11 @@ layout(set = 0, binding = 0) uniform UBO
 
 layout(set = 1, binding = 0) uniform sampler2D textureSampler;
 
+layout(push_constant) uniform Push
+{
+    float opacity;
+} push;
+
 const float specularPower = 32.0;
 const float diffuseWrap = 0.2;
 const int LVG_MAX_LIGHTS = 16;
@@ -166,5 +171,5 @@ void main()
         viewDir,
         baseColor,
         roughness);
-    outColor = vec4(finalColor, texSample.a);
+    outColor = vec4(finalColor, texSample.a * push.opacity);
 }

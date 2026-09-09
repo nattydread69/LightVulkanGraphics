@@ -1183,9 +1183,21 @@ namespace lightGraphics
 			VkPipelineLayout layout);
 		void createVolumeDescriptor(VolumeResource& volume);
 		void rebuildOrderedDrawResources();
+		// onlyOverlayAndAbove selects which half of orderedDrawResources_ (already
+		// sorted by RenderLayer ordinal, see rebuildOrderedDrawResources()) to
+		// draw: false draws everything below RenderLayer::Overlay, true draws
+		// RenderLayer::Overlay and above. recordCommandBuffer() calls this twice
+		// around the ragdoll/collision-capsule debug overlay's own draw (see its
+		// own comment) so RenderLayer::Overlay resources like ScreenText -- whose
+		// whole point is staying visible over everything, the debug overlay
+		// included -- aren't drawn before it and then covered by it, while
+		// resources below that layer (regular custom meshes, volumes) still draw
+		// before the debug overlay's depth-clear, so they keep testing against
+		// the opaque scene's real depth.
 		void drawOrderedCustomResources(
 			VkCommandBuffer commandBuffer,
-			std::uint32_t imageIndex);
+			std::uint32_t imageIndex,
+			bool onlyOverlayAndAbove);
 		void drawCustomMeshRequest(
 			VkCommandBuffer commandBuffer,
 			std::uint32_t imageIndex,

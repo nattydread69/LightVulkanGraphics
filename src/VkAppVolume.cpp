@@ -1091,19 +1091,33 @@ void VkApp::rebuildOrderedDrawResources()
 
 void VkApp::drawOrderedCustomResources(
 	VkCommandBuffer commandBuffer,
-	std::uint32_t imageIndex)
+	std::uint32_t imageIndex,
+	bool onlyOverlayAndAbove)
 {
+	std::uint32_t const overlayOrdinal = renderLayerOrdinal(RenderLayer::Overlay);
 	for (const OrderedDrawResource& resource : orderedDrawResources_)
 	{
 		if (resource.kind == OrderedDrawKind::Mesh &&
 			resource.index < meshDrawRequests_.size())
 		{
+			bool const isOverlayAndAbove = renderLayerOrdinal(
+				meshDrawRequests_[resource.index].drawOptions.layer) >= overlayOrdinal;
+			if (isOverlayAndAbove != onlyOverlayAndAbove)
+			{
+				continue;
+			}
 			drawCustomMeshRequest(
 				commandBuffer, imageIndex, meshDrawRequests_[resource.index]);
 		}
 		else if (resource.kind == OrderedDrawKind::Volume &&
 			resource.index < volumes_.size())
 		{
+			bool const isOverlayAndAbove = renderLayerOrdinal(
+				volumes_[resource.index].drawOptions.layer) >= overlayOrdinal;
+			if (isOverlayAndAbove != onlyOverlayAndAbove)
+			{
+				continue;
+			}
 			drawVolumeResource(commandBuffer, imageIndex, volumes_[resource.index]);
 		}
 	}

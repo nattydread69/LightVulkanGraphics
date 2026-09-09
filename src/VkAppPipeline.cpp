@@ -634,16 +634,19 @@ namespace lightGraphics
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapePipeline_));
 
 		// Overlay debug drawing (e.g. collision capsules, mass shapes) must
-		// always be visible on top of the scene mesh -- depth testing is off
-		// entirely here rather than relying on a mid-frame depth clear, the
-		// same choice ScreenText's material makes for the same reason. This
-		// gives up self-occlusion between overlapping overlay shapes (later
-		// submission order always wins), an acceptable trade for a debug
-		// overlay that must never be hidden by the mesh it's inspecting.
-		VkPipelineDepthStencilStateCreateInfo dsOverlay = ds;
-		dsOverlay.depthTestEnable = VK_FALSE;
-		dsOverlay.depthWriteEnable = VK_FALSE;
-		gp.pDepthStencilState = &dsOverlay;
+		// always be visible on top of the scene mesh, but also needs to
+		// self-occlude correctly between overlapping overlay shapes (e.g. a
+		// ragdoll's near leg correctly hiding its far leg) -- depth testing
+		// alone can't give both at once (test-off draws in submission order
+		// regardless of depth; test-on would let the scene mesh's own depth
+		// occlude the overlay). recordCommandBuffer() resolves this instead
+		// by clearing the depth attachment (vkCmdClearAttachments) right
+		// before this pass, so this pipeline can use the same depth
+		// test-and-write state as the main pass -- overlay shapes then
+		// self-occlude against each other correctly, while never being
+		// occluded by the mesh, since the mesh's own depth values were just
+		// wiped from the buffer this pass reads/writes.
+		gp.pDepthStencilState = &ds;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &flexibleShapeOverlayPipeline_));
 
 		// Transparent variant: any object whose own colour alpha is below 1.0
@@ -710,9 +713,15 @@ namespace lightGraphics
 		VkShaderModule vs = mkModule(vsCode), fs = mkModule(fsCode);
 
 		VkDescriptorSetLayout setLayouts[2] = { descriptorSetLayout_, textureSetLayout_ };
+		VkPushConstantRange opacityPushRange{};
+		opacityPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+		opacityPushRange.offset = 0;
+		opacityPushRange.size = sizeof(float);
 		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		plci.setLayoutCount = 2;
 		plci.pSetLayouts = setLayouts;
+		plci.pushConstantRangeCount = 1;
+		plci.pPushConstantRanges = &opacityPushRange;
 		VK_CHECK(vkCreatePipelineLayout(device_, &plci, nullptr, &riggedPipelineLayout_));
 
 		VkVertexInputBindingDescription binds[2]{};
@@ -760,6 +769,18 @@ namespace lightGraphics
 
 		VkPipelineColorBlendAttachmentState cba{};
 		cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT;
+		// Always enabled (not just for the "stability display" transparent case): with
+		// opacity 1.0 (the default for every rigged object outside that feature) this
+		// blends as a pure overwrite, identical to blending disabled -- see the opacity
+		// push constant below and CharacterModel's stability-display feature, which is
+		// the only thing that ever sets alpha < 1 on a rigged object today.
+		cba.blendEnable = VK_TRUE;
+		cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+		cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cba.colorBlendOp = VK_BLEND_OP_ADD;
+		cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+		cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+		cba.alphaBlendOp = VK_BLEND_OP_ADD;
 		VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
 		cb.attachmentCount = 1;
 		cb.pAttachments = &cba;

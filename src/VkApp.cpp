@@ -3115,6 +3115,26 @@ namespace lightGraphics
 		uint32_t transparentBaseFirstInstance = 0;
 		bool hasTransparentObjects = false;
 
+		// Overlay debug shapes must draw after (on top of) the transparent pass
+		// too -- their whole point is staying visible over everything else, planes
+		// included -- but the transparent pass still needs the *opaque* scene's
+		// real depth values to occlude correctly against walls/floor/mesh, which
+		// a depth-clear ahead of it would destroy. So the overlay pass's instance
+		// data still gets written at its usual point below (transparentBaseFirstInstance
+		// depends on that offset arithmetic having already run), but the actual
+		// draw commands -- pipeline bind, depth clear, vkCmdDrawIndexed -- are
+		// deferred into this list and replayed once, after the transparent pass.
+		struct DeferredOverlayBatch
+		{
+			uint32_t indexCount = 0;
+			uint32_t indexOffset = 0;
+			std::string texturePath;
+			glm::vec2 tiling{1.0f, 1.0f};
+			uint32_t first = 0;
+			uint32_t count = 0;
+		};
+		std::vector<DeferredOverlayBatch> deferredOverlayBatches;
+
 		auto writeInstancesToBuffer = [&](VkDeviceSize offsetBytes, const Instance* instances, VkDeviceSize bytes)
 		{
 			if (perFrameInstBuf != VK_NULL_HANDLE)
@@ -3349,6 +3369,12 @@ namespace lightGraphics
 			for (const auto& riggedInstance : riggedInstances_)
 			{
 				const detail::Buffer& frameInstanceBuffer = riggedInstance.instanceBuffers[currentFrame_];
+				// Per-instance opacity (see rigged_mesh.frag's Push block): defaults to
+				// 1.0 for every rigged object except while CharacterModel's stability
+				// display has set a lower alpha via RiggedObject::setColour().
+				float const riggedOpacity = riggedInstance.object ? riggedInstance.object->getColour().a : 1.0f;
+				vkCmdPushConstants(cmd, riggedPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+					0, sizeof(float), &riggedOpacity);
 				for (const auto& meshData : riggedInstance.meshes)
 				{
 					const detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[currentFrame_];
@@ -3404,41 +3430,13 @@ namespace lightGraphics
 			// No rigged pipeline available; skip rendering rigged meshes
 		}
 
-		// Draw overlay debug shapes (e.g. collision capsules) through scene
-		// meshes -- flexibleShapeOverlayPipeline_ has depth testing off, so
-		// no depth manipulation is needed here to guarantee they're visible.
+		// Overlay debug shapes (e.g. collision capsules) need their instance
+		// data written and transparentBaseFirstInstance's offset arithmetic
+		// resolved here, in place -- but the actual drawing is deferred until
+		// after the transparent pass (see deferredOverlayBatches's own
+		// declaration comment for why) and replayed further down.
 		if (indexed && useInstancing && hasOverlayObjects && flexibleShapeOverlayPipeline_ != VK_NULL_HANDLE)
 		{
-			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeOverlayPipeline_);
-
-			// flexibleShapeOverlayPipeline_ shares flexibleShapePipelineLayout_
-			// (set 1 = shape texture, plus the tiling push constant) -- bind
-			// against that, not pipelineLayout_, for the same reason as the
-			// main flexible-shape pass above.
-			if (!descriptorSets_.empty() && flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
-			{
-				if (imageIndex >= descriptorSets_.size())
-				{
-					throw std::runtime_error("recordCommandBuffer: descriptorSets_ size mismatch");
-				}
-				vkCmdBindDescriptorSets(
-					cmd,
-					VK_PIPELINE_BIND_POINT_GRAPHICS,
-					flexibleShapePipelineLayout_,
-					0,
-					1,
-					&descriptorSets_[imageIndex],
-					0,
-					nullptr
-				);
-			}
-
-			if (vbCount > 0)
-			{
-				vkCmdBindVertexBuffers(cmd, 0, vbCount, vbs.data(), offs.data());
-			}
-			vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
-
 			uint32_t runningFirst = overlayBaseFirstInstance;
 			for (int shapeType = 0; shapeType < 8; ++shapeType)
 			{
@@ -3462,61 +3460,22 @@ namespace lightGraphics
 				// pipeline layout still declares set 1 and the tiling push
 				// constant, so both must be bound before drawing -- see the
 				// main flexible-shape pass above for the full explanation.
-				struct TextureBatch
-				{
-					std::string texturePath;
-					glm::vec2 tiling{1.0f, 1.0f};
-					uint32_t first = 0;
-					uint32_t count = 0;
-				};
-				std::vector<TextureBatch> batches;
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = overlayShapeGroups[shapeType][k];
 					std::string const texturePath = _objects_[objIndex].getTexturePath();
 					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
-					if (!batches.empty() &&
-						batches.back().texturePath == texturePath &&
-						batches.back().tiling == tiling)
+					if (!deferredOverlayBatches.empty() &&
+						deferredOverlayBatches.back().texturePath == texturePath &&
+						deferredOverlayBatches.back().tiling == tiling &&
+						deferredOverlayBatches.back().indexCount == shapeGeo.indexCount &&
+						deferredOverlayBatches.back().indexOffset == shapeGeo.indexOffset)
 					{
-						batches.back().count++;
+						deferredOverlayBatches.back().count++;
 						continue;
 					}
-					batches.push_back({texturePath, tiling, runningFirst + k, 1});
-				}
-
-				for (const TextureBatch& batch : batches)
-				{
-					std::shared_ptr<detail::Texture> const texture =
-						batch.texturePath.empty() ? nullptr : getOrCreateTexture(batch.texturePath);
-					VkDescriptorSet textureSet = (texture && texture->descriptor != VK_NULL_HANDLE)
-						? texture->descriptor
-						: (defaultTexture_ ? defaultTexture_->descriptor : VK_NULL_HANDLE);
-					if (textureSet != VK_NULL_HANDLE)
-					{
-						vkCmdBindDescriptorSets(
-							cmd,
-							VK_PIPELINE_BIND_POINT_GRAPHICS,
-							flexibleShapePipelineLayout_,
-							1,
-							1,
-							&textureSet,
-							0,
-							nullptr
-						);
-					}
-
-					detail::FlexibleShapeTexturePushConstants push{};
-					push.tiling = glm::vec4(batch.tiling, 1.0f, 0.0f);
-					vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
-						0, sizeof(push), &push);
-
-					vkCmdDrawIndexed(cmd,
-						shapeGeo.indexCount,
-						batch.count,
-						shapeGeo.indexOffset,
-						0,
-						batch.first);
+					deferredOverlayBatches.push_back({shapeGeo.indexCount, shapeGeo.indexOffset,
+						texturePath, tiling, runningFirst + k, 1});
 				}
 
 				runningFirst += countForShape;
@@ -3649,8 +3608,106 @@ namespace lightGraphics
 			}
 		}
 
-		// Custom meshes and volumes share a stable application-controlled order.
-		drawOrderedCustomResources(cmd, imageIndex);
+		// Custom meshes and volumes share a stable application-controlled order --
+		// only layers below RenderLayer::Overlay draw here, since (like the
+		// transparent pass) they may depend on the opaque scene's real depth
+		// values for correct occlusion, which the overlay replay's depth-clear
+		// below destroys. RenderLayer::Overlay resources (e.g. ScreenText, whose
+		// whole point is staying visible over everything) are drawn separately,
+		// after the ragdoll/collision-capsule debug overlay replay -- otherwise
+		// that overlay draws on top of and covers them, since neither uses depth
+		// to arbitrate between themselves once submitted in the wrong order.
+		drawOrderedCustomResources(cmd, imageIndex, /*onlyOverlayAndAbove=*/false);
+
+		// Replay the overlay batches recorded above, now that everything else
+		// that still needed the opaque scene's real depth values has finished --
+		// clear the depth attachment so the mesh's own depth can't occlude the
+		// overlay, then let flexibleShapeOverlayPipeline_'s depth test/write
+		// (same state as the main pass, see its own creation comment) correctly
+		// self-occlude the overlay shapes against each other on this now-empty
+		// buffer.
+		if (!deferredOverlayBatches.empty() && flexibleShapeOverlayPipeline_ != VK_NULL_HANDLE)
+		{
+			VkClearAttachment depthClear{};
+			depthClear.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+			depthClear.clearValue.depthStencil = {1.0f, 0};
+			VkClearRect depthClearRect{};
+			depthClearRect.rect.offset = {0, 0};
+			depthClearRect.rect.extent = swapChainExtent_;
+			depthClearRect.baseArrayLayer = 0;
+			depthClearRect.layerCount = 1;
+			vkCmdClearAttachments(cmd, 1, &depthClear, 1, &depthClearRect);
+
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, flexibleShapeOverlayPipeline_);
+
+			// flexibleShapeOverlayPipeline_ shares flexibleShapePipelineLayout_
+			// (set 1 = shape texture, plus the tiling push constant) -- bind
+			// against that, not pipelineLayout_, for the same reason as the
+			// main flexible-shape pass above.
+			if (!descriptorSets_.empty() && flexibleShapePipelineLayout_ != VK_NULL_HANDLE)
+			{
+				if (imageIndex >= descriptorSets_.size())
+				{
+					throw std::runtime_error("recordCommandBuffer: descriptorSets_ size mismatch");
+				}
+				vkCmdBindDescriptorSets(
+					cmd,
+					VK_PIPELINE_BIND_POINT_GRAPHICS,
+					flexibleShapePipelineLayout_,
+					0,
+					1,
+					&descriptorSets_[imageIndex],
+					0,
+					nullptr
+				);
+			}
+
+			if (vbCount > 0)
+			{
+				vkCmdBindVertexBuffers(cmd, 0, vbCount, vbs.data(), offs.data());
+			}
+			vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
+
+			for (const DeferredOverlayBatch& batch : deferredOverlayBatches)
+			{
+				std::shared_ptr<detail::Texture> const texture =
+					batch.texturePath.empty() ? nullptr : getOrCreateTexture(batch.texturePath);
+				VkDescriptorSet textureSet = (texture && texture->descriptor != VK_NULL_HANDLE)
+					? texture->descriptor
+					: (defaultTexture_ ? defaultTexture_->descriptor : VK_NULL_HANDLE);
+				if (textureSet != VK_NULL_HANDLE)
+				{
+					vkCmdBindDescriptorSets(
+						cmd,
+						VK_PIPELINE_BIND_POINT_GRAPHICS,
+						flexibleShapePipelineLayout_,
+						1,
+						1,
+						&textureSet,
+						0,
+						nullptr
+					);
+				}
+
+				detail::FlexibleShapeTexturePushConstants push{};
+				push.tiling = glm::vec4(batch.tiling, 1.0f, 0.0f);
+				vkCmdPushConstants(cmd, flexibleShapePipelineLayout_, VK_SHADER_STAGE_VERTEX_BIT,
+					0, sizeof(push), &push);
+
+				vkCmdDrawIndexed(cmd,
+					batch.indexCount,
+					batch.count,
+					batch.indexOffset,
+					0,
+					batch.first);
+			}
+		}
+
+		// RenderLayer::Overlay (and above) custom resources -- ScreenText chief
+		// among them -- draw here, after the ragdoll/collision-capsule debug
+		// overlay above, so it can never cover them (see the first
+		// drawOrderedCustomResources() call's own comment).
+		drawOrderedCustomResources(cmd, imageIndex, /*onlyOverlayAndAbove=*/true);
 
 		// The UI draws after the scene, inside the same render pass, immediately
 		// before it ends -- opening a second pass would cost a full attachment
