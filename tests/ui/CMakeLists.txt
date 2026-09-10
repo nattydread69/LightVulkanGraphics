@@ -218,6 +218,20 @@ target_compile_definitions(lvgui_modal_tests PRIVATE
 
 add_test(NAME lvgui_modal_tests COMMAND lvgui_modal_tests)
 
+# SaveFileDialog (TextBox/ListBox/Button composed inside a Modal panel) -- headless,
+# same pattern as tests above. Exercises real directory scanning against a temp
+# directory it creates/removes itself, so it needs <filesystem> but no Vulkan device.
+add_executable(lvgui_savefiledialog_tests
+	test_savefiledialog.cpp
+)
+target_link_libraries(lvgui_savefiledialog_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_savefiledialog_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_savefiledialog_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_savefiledialog_tests COMMAND lvgui_savefiledialog_tests)
+
 # MenuBar -- headless, same pattern as tests above.
 add_executable(lvgui_menubar_tests
 	test_menubar.cpp
