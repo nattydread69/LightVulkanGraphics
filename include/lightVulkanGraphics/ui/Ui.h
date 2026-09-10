@@ -62,3 +62,4 @@
 #include "widgets/ContextMenu.h"
 #include "widgets/LogView.h"
 #include "widgets/SaveFileDialog.h"
+#include "widgets/OpenFileDialog.h"

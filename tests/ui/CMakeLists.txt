@@ -232,6 +232,20 @@ target_compile_definitions(lvgui_savefiledialog_tests PRIVATE
 
 add_test(NAME lvgui_savefiledialog_tests COMMAND lvgui_savefiledialog_tests)
 
+# OpenFileDialog -- headless, same pattern as tests above. SaveFileDialog's
+# counterpart; exercises real directory scanning against a temp directory it
+# creates/removes itself.
+add_executable(lvgui_openfiledialog_tests
+	test_openfiledialog.cpp
+)
+target_link_libraries(lvgui_openfiledialog_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_openfiledialog_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_openfiledialog_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_openfiledialog_tests COMMAND lvgui_openfiledialog_tests)
+
 # MenuBar -- headless, same pattern as tests above.
 add_executable(lvgui_menubar_tests
 	test_menubar.cpp
