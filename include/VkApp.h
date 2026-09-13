@@ -231,6 +231,12 @@ namespace lightGraphics
 		// exhausted" from createTextureFromPixels/createSolidColorTexture.
 		void setMaxTextureCount(uint32_t count) { maxTextureDescriptorCount_ = count; }
 		uint32_t getMaxTextureCount() const { return maxTextureDescriptorCount_; }
+		// Solid color the swapchain is cleared to before drawing each frame --
+		// what shows through wherever no geometry (floor, walls, skybox, etc.)
+		// covers the view. Alpha is ignored (the swapchain has no alpha channel);
+		// takes effect on the next recorded frame, no re-init needed.
+		void setClearColor(const glm::vec4& color) { clearColor_ = color; }
+		glm::vec4 getClearColor() const { return clearColor_; }
 
 		// ==================== OBJECTS ====================
 
@@ -525,6 +531,7 @@ namespace lightGraphics
 		bool debugOutput = false;
 		LogCallback logCallback_;
 		uint32_t maxTextureDescriptorCount_ = 256;
+		glm::vec4 clearColor_{0.0f, 0.05f, 0.08f, 1.0f};
 		// Window
 		GLFWwindow* window_ = nullptr;
 		bool manageGlfwLifecycle_ = true;
