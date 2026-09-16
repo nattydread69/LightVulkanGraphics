@@ -247,6 +247,34 @@ namespace {
 		std::cout << "✓ testEscapeAlsoFiresOnCancel\n";
 	}
 
+	// The dialog has to own the keyboard for its whole lifetime, not just while
+	// its filename field happens to be focused: an application polling its own
+	// shortcuts asks wantsKeyboard() (or VkApp::pollKey()) to know whether to
+	// stay out of the way. A consumer whose "r" key reloaded the scene lost the
+	// pose its user was editing to a filename with an "r" in it.
+	void testOpenDialogOwnsTheKeyboardForAppShortcuts() {
+		TempDir dir;
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::SaveFileDialog dlg(ctx, dir.path.string(), ".pose.json");
+		step(ctx);
+		assert(!ctx.wantsKeyboard());   // nothing open: shortcuts belong to the app
+
+		dlg.open();
+		step(ctx);
+		assert(ctx.wantsKeyboard());    // open, nothing focused yet: still ours
+
+		clickAt(ctx, centre(filenameField(dlg)));
+		step(ctx);
+		assert(ctx.wantsKeyboard());    // and with the field focused
+
+		pressKey(ctx, lvgui::Key::Escape);
+		step(ctx);
+		assert(!dlg.isOpen());
+		assert(!ctx.wantsKeyboard());   // closed again: the app gets its keys back
+
+		std::cout << "✓ testOpenDialogOwnsTheKeyboardForAppShortcuts\n";
+	}
+
 	void testReopenRefreshesFileListing() {
 		TempDir dir;
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
@@ -279,6 +307,7 @@ int main() {
 	testCancelClosesAndFiresOnCancelNotOnConfirm();
 	testEscapeAlsoFiresOnCancel();
 	testReopenRefreshesFileListing();
+	testOpenDialogOwnsTheKeyboardForAppShortcuts();
 
 	std::cout << "\n✅ All SaveFileDialog tests passed!\n";
 	return 0;

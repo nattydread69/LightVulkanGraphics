@@ -455,9 +455,12 @@ private:
 			return;
 		}
 
+		// pollKey() rather than glfwGetKey(): every shortcut below would
+		// otherwise fire while a TextBox or a modal dialog has the keyboard --
+		// see docs/gui/04, "Application shortcuts".
 		for (int key = 0; key <= GLFW_KEY_LAST; ++key)
 		{
-			const bool isPressed = glfwGetKey(window_, key) == GLFW_PRESS;
+			const bool isPressed = app_.pollKey(key) == GLFW_PRESS;
 			keysJustPressed_[key] = isPressed && !keysPressed_[key];
 			keysJustReleased_[key] = !isPressed && keysPressed_[key];
 			keysPressed_[key] = isPressed;

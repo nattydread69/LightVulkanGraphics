@@ -265,6 +265,31 @@ namespace lightGraphics::ui::Key {
 Translation from GLFW happens in layer 5. This keeps layers 1–3 free of GLFW and makes
 the test harness able to synthesise keystrokes without linking a windowing library.
 
+## Application shortcuts
+
+The camera is not the only thing that reads the keyboard. An application's own
+shortcuts need the same guard, and forgetting it is worse than a stuttering camera:
+a consumer whose `R` key reloaded the scene lost a pose its user was editing every
+time they typed a filename with an "r" in it into a Save As dialog, and the dialog
+went down with the reload. `wantsKeyboard()` is true both while a TextBox has focus
+and while any modal panel is open, so the dialog is covered for its whole lifetime,
+not only while the field happens to be focused.
+
+Poll through `VkApp::pollKey()` rather than `glfwGetKey()` and this is handled:
+
+```cpp
+if (app.pollKey(GLFW_KEY_R) == GLFW_PRESS) { reloadScene(); }
+```
+
+It reports a held key as *released* while the GUI owns the keyboard, rather than
+skipping the read. That difference matters for the usual `isDown && !wasDown` edge
+tracking: skipping leaves `wasDown` stale, so the shortcut fires the moment focus
+returns; reporting released walks the state machine down cleanly and nothing fires
+on the way out either.
+
+`uiWantsKeyboard()`, `uiWantsMouse()` and `uiWantsScroll()` are public for consumers
+that would rather gate a whole input block themselves.
+
 ## The camera hand-off
 
 This belongs in the core library's per-frame update, wherever the camera is currently

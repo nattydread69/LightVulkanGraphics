@@ -479,8 +479,13 @@ namespace lightGraphics
 			return;
 		}
 
-		bool nextDown = (glfwGetKey(window_, GLFW_KEY_N) == GLFW_PRESS) ||
-						(glfwGetKey(window_, GLFW_KEY_RIGHT) == GLFW_PRESS);
+		// Polled through pollKey() rather than glfwGetKey() so these shortcuts
+		// go quiet while the GUI owns the keyboard: N/P/O are ordinary letters,
+		// and typing a filename into a Save As dialog was stepping through the
+		// animation list behind it. See docs/gui/04, "Application shortcuts".
+
+		bool nextDown = (pollKey(GLFW_KEY_N) == GLFW_PRESS) ||
+						(pollKey(GLFW_KEY_RIGHT) == GLFW_PRESS);
 		if (nextDown && !riggedNextKeyDown_)
 		{
 			for (auto& instance : riggedInstances_)
@@ -517,8 +522,8 @@ namespace lightGraphics
 		}
 		riggedNextKeyDown_ = nextDown;
 
-		bool prevDown = (glfwGetKey(window_, GLFW_KEY_P) == GLFW_PRESS) ||
-						(glfwGetKey(window_, GLFW_KEY_LEFT) == GLFW_PRESS);
+		bool prevDown = (pollKey(GLFW_KEY_P) == GLFW_PRESS) ||
+						(pollKey(GLFW_KEY_LEFT) == GLFW_PRESS);
 		if (prevDown && !riggedPrevKeyDown_)
 		{
 			for (auto& instance : riggedInstances_)
@@ -555,7 +560,7 @@ namespace lightGraphics
 		}
 		riggedPrevKeyDown_ = prevDown;
 
-		bool stopDown = (glfwGetKey(window_, GLFW_KEY_O) == GLFW_PRESS);
+		bool stopDown = (pollKey(GLFW_KEY_O) == GLFW_PRESS);
 		if (stopDown && !riggedStopKeyDown_)
 		{
 			for (auto& instance : riggedInstances_)

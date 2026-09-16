@@ -704,9 +704,15 @@ namespace lightGraphics
 		// !guiContext_->hasHeadingFont(). See docs/gui/03-text-and-fonts.md, "Headings".
 		void registerHeadingFontTexture();
 
-		// The camera hand-off guard (docs/gui/04, "The camera hand-off"). Defined
-		// out-of-line in VkAppUi.cpp -- inline bodies here would give every translation
-		// unit that includes VkApp.h a reason to recompile whenever GuiContext's own
+	public:
+		// The input hand-off guards (docs/gui/04, "The camera hand-off" and
+		// "Application shortcuts"). Public because an application's own shortcuts need
+		// the same answer the camera does: while a TextBox has focus or a modal is up,
+		// the GUI owns the keyboard, and a shortcut firing under a Save As dialog can
+		// do real damage -- one consumer's "r" shortcut reloaded its whole scene as the
+		// user typed a filename, discarding their unsaved work. Defined out-of-line in
+		// VkAppUi.cpp -- inline bodies here would give every translation unit that
+		// includes VkApp.h a reason to recompile whenever GuiContext's own
 		// implementation (not just its interface) changes.
 		bool uiWantsMouse() const;
 		bool uiWantsKeyboard() const;
@@ -716,6 +722,14 @@ namespace lightGraphics
 		// open popup), so hovering a panel with nothing to scroll doesn't also blind the
 		// camera's zoom/dolly.
 		bool uiWantsScroll() const;
+
+		// GLFW_PRESS/GLFW_RELEASE for `key`, reported as RELEASE whenever the GUI owns
+		// the keyboard (and when there is no window). This is what application shortcuts
+		// should poll instead of glfwGetKey(): a key held while a text field has focus
+		// reads as released, so a shortcut can neither fire while someone is typing nor
+		// fire again on the way back out -- held/released edge tracking stays consistent
+		// across the transition, which skipping the poll entirely would not give you.
+		int pollKey(int key) const;
 
 	public:
 		// Configure the GUI before init() brings it up -- same "must be called before
