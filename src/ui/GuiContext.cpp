@@ -320,6 +320,28 @@ Widget* GuiContext::hitTestWidgets(Panel& panel, Vec2 p) const {
 	return nullptr;
 }
 
+Widget* GuiContext::findWidgetInVisiblePanels(WidgetId id) const {
+	if (id == kInvalidWidgetId) {
+		return nullptr;
+	}
+	for (auto& panelPtr : m_panels) {
+		Panel& panel = *panelPtr;
+		if (!panel.visible()) {
+			continue;
+		}
+		for (std::size_t i = 0; i < panel.widgetCount(); ++i) {
+			Widget* w = panel.widgetAt(i);
+			if (w->id() == id) {
+				return w;
+			}
+			if (Widget* found = w->findDescendant(id)) {
+				return found;
+			}
+		}
+	}
+	return nullptr;
+}
+
 Widget* GuiContext::findWidget(WidgetId id) const {
 	if (id == kInvalidWidgetId) {
 		return nullptr;
@@ -562,6 +584,18 @@ void GuiContext::update() {
 			// A click on the scene, outside every panel.
 			m_focusedId = kInvalidWidgetId;
 		}
+	}
+
+	// Focus must not outlive the panel that holds it. A dialog closed while its text
+	// field still had focus (Escape, Cancel, the title-bar X -- all of which just hide
+	// the panel) left m_focusedId pointing into a hidden panel, and since that widget
+	// still reports wantsTextInput(), wantsKeyboard() stayed true indefinitely: the
+	// application never got its own keyboard shortcuts back after using a Save As
+	// dialog once. Hidden panels don't update, so nothing else was ever going to clear
+	// it -- checked here, once per frame, rather than at every call site that can hide
+	// a panel.
+	if (m_focusedId != kInvalidWidgetId && !findWidgetInVisiblePanels(m_focusedId)) {
+		m_focusedId = kInvalidWidgetId;
 	}
 
 	updateFocusNavigation();

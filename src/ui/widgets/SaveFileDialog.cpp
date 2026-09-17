@@ -75,6 +75,10 @@ SaveFileDialog::SaveFileDialog(GuiContext& context, std::string directory, std::
 	});
 
 	m_filenameField = m_panel->add<TextBox>("Filename");
+	// Enter in the filename field saves, the way every native Save As does. onSubmit
+	// rather than onCommit: onCommit also fires on focus loss, so the file would be
+	// written the moment the user clicked across to the existing-files list.
+	m_filenameField->setOnSubmit([this](std::string_view) { confirm(); });
 
 	m_statusLabel = m_panel->add<Label>("");
 

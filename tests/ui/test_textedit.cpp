@@ -450,6 +450,31 @@ namespace {
 
 }
 
+	// A password field's buffer is the real secret even though the glyphs are
+	// bullets: Ctrl+C would hand it to every other process via the system
+	// clipboard, so copy and cut are refused outright, as native password
+	// fields refuse them.
+	void testPasswordFieldRefusesCopyAndCut() {
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::Panel* panel = ctx.createPanel("p", {0, 0, 300, 200});
+		lvgui::TextBox* box = panel->add<lvgui::TextBox>("Password");
+		box->setPasswordMode(true);
+		box->setText("hunter2");
+		box->selectAll();
+		step(ctx);
+
+		assert(box->copy().empty());
+		assert(box->cut().empty());
+		assert(box->text() == "hunter2");   // cut refused: nothing deleted either
+
+		box->setPasswordMode(false);
+		box->selectAll();
+		assert(box->copy() == "hunter2");   // an ordinary field still copies
+
+		std::cout << "✓ testPasswordFieldRefusesCopyAndCut\n";
+	}
+
+
 int main() {
 	testInsertBackspaceDeleteAtStartMiddleEnd();
 	testBackspaceDeletesWholeMultibyteCodepoint();
@@ -466,6 +491,7 @@ int main() {
 	testPasswordModeCaretMatchesDisplayedBulletString();
 	testFocusedTextBoxClaimsKeyboardSoWasdDoesNotReachCamera();
 
+	testPasswordFieldRefusesCopyAndCut();
 	std::cout << "\n✅ All TextBox tests passed!\n";
 	return 0;
 }

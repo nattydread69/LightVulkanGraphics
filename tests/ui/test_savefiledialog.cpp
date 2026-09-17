@@ -53,6 +53,13 @@ namespace {
 		step(ctx);
 	}
 
+	void typeAscii(lvgui::GuiContext& ctx, std::string_view ascii) {
+		for (char c : ascii) {
+			ctx.injectChar(static_cast<unsigned char>(c));
+		}
+		step(ctx);
+	}
+
 	void pressKey(lvgui::GuiContext& ctx, int key, int mods = 0) {
 		ctx.injectKey(key, mods, true, false);
 		step(ctx);
@@ -252,6 +259,70 @@ namespace {
 	// shortcuts asks wantsKeyboard() (or VkApp::pollKey()) to know whether to
 	// stay out of the way. A consumer whose "r" key reloaded the scene lost the
 	// pose its user was editing to a filename with an "r" in it.
+	// Enter is how a Save As dialog is finished everywhere else, and it has to be
+	// Enter alone: onCommit would also fire when the user clicked from the filename
+	// field across to the file list, writing the file behind their back.
+	void testEnterInTheFilenameFieldSaves() {
+		TempDir dir;
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::SaveFileDialog dlg(ctx, dir.path.string(), ".pose.json");
+		bool confirmed = false;
+		std::string confirmedPath;
+		dlg.setOnConfirm([&](const std::string& p) { confirmed = true; confirmedPath = p; });
+
+		dlg.open();
+		step(ctx);
+		clickAt(ctx, centre(filenameField(dlg)));
+		typeAscii(ctx, "typed_by_hand");
+		pressKey(ctx, lvgui::Key::Enter);
+
+		std::filesystem::path const expected = dir.path / "typed_by_hand.pose.json";
+		assert(confirmed);
+		assert(confirmedPath == expected.string());
+		assert(!dlg.isOpen());
+
+		std::cout << "✓ testEnterInTheFilenameFieldSaves\n";
+	}
+
+	void testEnterWithAnEmptyFilenameDoesNothing() {
+		TempDir dir;
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::SaveFileDialog dlg(ctx, dir.path.string(), ".pose.json");
+		bool confirmed = false;
+		dlg.setOnConfirm([&](const std::string&) { confirmed = true; });
+
+		dlg.open();
+		step(ctx);
+		clickAt(ctx, centre(filenameField(dlg)));
+		pressKey(ctx, lvgui::Key::Enter);
+
+		assert(!confirmed);
+		assert(dlg.isOpen());
+
+		std::cout << "✓ testEnterWithAnEmptyFilenameDoesNothing\n";
+	}
+
+	// The other half of choosing onSubmit over onCommit.
+	void testClickingAwayFromTheFilenameFieldDoesNotSave() {
+		TempDir dir;
+		dir.touch("existing.pose.json");
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::SaveFileDialog dlg(ctx, dir.path.string(), ".pose.json");
+		bool confirmed = false;
+		dlg.setOnConfirm([&](const std::string&) { confirmed = true; });
+
+		dlg.open();
+		step(ctx);
+		clickAt(ctx, centre(filenameField(dlg)));
+		typeAscii(ctx, "half_typed");
+		clickAt(ctx, rowCentre(ctx, fileList(dlg), 0));   // focus leaves the field
+
+		assert(!confirmed);
+		assert(dlg.isOpen());
+
+		std::cout << "✓ testClickingAwayFromTheFilenameFieldDoesNotSave\n";
+	}
+
 	void testOpenDialogOwnsTheKeyboardForAppShortcuts() {
 		TempDir dir;
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
@@ -273,6 +344,29 @@ namespace {
 		assert(!ctx.wantsKeyboard());   // closed again: the app gets its keys back
 
 		std::cout << "✓ testOpenDialogOwnsTheKeyboardForAppShortcuts\n";
+	}
+
+	// Escape is not the only way out: Cancel and the title-bar X hide the panel the
+	// same way, and focus left inside a hidden panel used to keep wantsKeyboard() true
+	// forever -- the application's shortcuts never came back after one Save As.
+	void testCancellingWithTheFieldFocusedReleasesTheKeyboard() {
+		TempDir dir;
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::SaveFileDialog dlg(ctx, dir.path.string(), ".pose.json");
+
+		dlg.open();
+		step(ctx);
+		clickAt(ctx, centre(filenameField(dlg)));
+		typeAscii(ctx, "abandoned");
+		assert(ctx.wantsKeyboard());
+
+		clickAt(ctx, centre(cancelButton(dlg)));
+		step(ctx);
+
+		assert(!dlg.isOpen());
+		assert(!ctx.wantsKeyboard());
+
+		std::cout << "✓ testCancellingWithTheFieldFocusedReleasesTheKeyboard\n";
 	}
 
 	void testReopenRefreshesFileListing() {
@@ -308,6 +402,10 @@ int main() {
 	testEscapeAlsoFiresOnCancel();
 	testReopenRefreshesFileListing();
 	testOpenDialogOwnsTheKeyboardForAppShortcuts();
+	testEnterInTheFilenameFieldSaves();
+	testEnterWithAnEmptyFilenameDoesNothing();
+	testClickingAwayFromTheFilenameFieldDoesNotSave();
+	testCancellingWithTheFieldFocusedReleasesTheKeyboard();
 
 	std::cout << "\n✅ All SaveFileDialog tests passed!\n";
 	return 0;

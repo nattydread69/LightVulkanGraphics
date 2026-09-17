@@ -529,6 +529,7 @@ public:
 
     void setOnChange(std::function<void(std::string_view)>);  // every keystroke
     void setOnCommit(std::function<void(std::string_view)>);  // Enter or focus loss
+    void setOnSubmit(std::function<void(std::string_view)>);  // Enter only
     void setValidator(std::function<bool(std::string_view)>); // red border when false
 
     bool acceptsFocus()   const override { return true; }
@@ -562,8 +563,9 @@ Implement each as a small named method so they can be unit-tested directly:
 | `moveCaretWord(dir, select)` | Ctrl+Arrow | Skip whitespace, then skip word characters |
 | `moveHome/End(select)` | Home/End | |
 | `selectAll()` | Ctrl+A | |
-| `copy()` / `cut()` / `paste()` | Ctrl+C/X/V | Paste strips control characters and newlines |
+| `copy()` / `cut()` / `paste()` | Ctrl+C/X/V | Paste strips control characters and newlines; copy and cut both refuse a password field (see `setPasswordMode` below) |
 | `commit()` | Enter, focus loss | Fire `onCommit`, keep text |
+| `onSubmit` | Enter only | Fire `setOnSubmit`, after `commit()` |
 | `revert()` | Escape | Restore `m_textBeforeEdit`, clear focus |
 
 **The collapse rule catches people out.** Pressing Right with an active selection and no
@@ -612,7 +614,10 @@ Scroll: after any caret move, if `offsetAtIndex(caret) - scrollX` falls outside
 `[0, boxWidth - padding]`, adjust `scrollX` to bring it just inside. Do this in one place,
 called at the end of every editing operation.
 
-`setPasswordMode` renders `•` (U+2022) per codepoint but must measure the *displayed*
+`setPasswordMode` also refuses `copy()` and `cut()` outright: the glyphs on screen are
+bullets, but the buffer behind them is the real secret, and Ctrl+C would hand it to every
+other process on the system clipboard. The cut is refused with the copy, since deleting
+on cut would leak the length of what was there. It renders `•` (U+2022) per codepoint but must measure the *displayed*
 string for caret positioning, not the source. Easy to get wrong.
 
 ---

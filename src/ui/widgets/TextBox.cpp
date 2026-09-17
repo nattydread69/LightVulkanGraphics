@@ -235,10 +235,23 @@ void TextBox::selectAll() {
 }
 
 std::string TextBox::copy() const {
+	// Never off a password field. The glyphs on screen are bullets, but the buffer
+	// behind them is the real secret, and Ctrl+C would put it on the system clipboard
+	// for every other process to read -- which is why native password fields refuse
+	// copy outright rather than copying the bullets.
+	if (m_passwordMode) {
+		return {};
+	}
 	return m_text.substr(selectionStart(), selectionEnd() - selectionStart());
 }
 
 std::string TextBox::cut() {
+	// Cut is copy plus delete, so it is refused on the same grounds -- including the
+	// delete, which would otherwise be a silent way to tell a password field's
+	// contents apart by length.
+	if (m_passwordMode) {
+		return {};
+	}
 	std::string s = copy();
 	if (!m_readOnly && hasSelection()) {
 		eraseSelection();
@@ -483,6 +496,9 @@ bool TextBox::handleKeyboard(GuiContext& ctx, bool isEmbedded) {
 		} else if (ev.key == Key::Enter) {
 			if (!isEmbedded) {
 				commit();
+				if (m_onSubmit) {
+					m_onSubmit(m_text);
+				}
 			}
 		} else if (ev.key == Key::Escape) {
 			if (!isEmbedded) {

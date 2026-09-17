@@ -64,6 +64,11 @@ public:
 
 	void setOnChange(std::function<void(std::string_view)> onChange) { m_onChange = std::move(onChange); }
 	void setOnCommit(std::function<void(std::string_view)> onCommit) { m_onCommit = std::move(onCommit); }
+	// Enter alone, unlike onCommit, which is Enter *or* focus loss (see the trigger
+	// table in docs/gui/05). A dialog that saves on Enter needs the distinction:
+	// wiring its filename field's onCommit to "save" would also save the instant the
+	// user clicked away to something else in the same dialog.
+	void setOnSubmit(std::function<void(std::string_view)> onSubmit) { m_onSubmit = std::move(onSubmit); }
 	void setValidator(std::function<bool(std::string_view)> validator) { m_validator = std::move(validator); }
 
 	// ---- editing operations (docs/gui/05, "Editing operations") ----
@@ -134,6 +139,7 @@ private:
 	std::string m_textBeforeEdit;   // for Escape revert / focus-loss commit
 
 	std::string m_placeholder;
+	std::function<void(std::string_view)> m_onSubmit;
 	std::size_t m_maxLength = 0;   // codepoints, 0 = unlimited
 	TextFilter  m_filter = TextFilter::None;
 	bool m_readOnly = false;

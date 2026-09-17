@@ -283,3 +283,18 @@ if (TARGET LightVulkanGraphicsExamples)
 		add_dependencies(LightVulkanGraphicsExamples ${_lvgui_test_targets})
 	endif()
 endif()
+
+# Keep assert() live in every suite here, whatever the build type. These tests check
+# with assert(), and NDEBUG -- which RelWithDebInfo and Release both define -- compiles
+# those checks out entirely: the binaries still run, and still report success, without
+# evaluating a single one. That is not hypothetical. A genuinely failing assertion in
+# test_savefiledialog.cpp sailed through CI's own sanitizer job (RelWithDebInfo) and was
+# caught only by the one job that happens to configure with no build type at all.
+get_property(lvgui_test_targets DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY BUILDSYSTEM_TARGETS)
+foreach(lvgui_test_target IN LISTS lvgui_test_targets)
+	if (MSVC)
+		target_compile_options(${lvgui_test_target} PRIVATE /UNDEBUG)
+	else()
+		target_compile_options(${lvgui_test_target} PRIVATE -UNDEBUG)
+	endif()
+endforeach()

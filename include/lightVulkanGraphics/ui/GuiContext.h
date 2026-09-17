@@ -214,6 +214,9 @@ public:
 	void setActiveId(WidgetId);
 	void clearActiveId();
 	Widget* findWidget(WidgetId) const;
+	// Like findWidget(), but only through panels that are currently visible: used once
+	// per frame to drop focus a closing panel would otherwise keep hold of.
+	Widget* findWidgetInVisiblePanels(WidgetId) const;
 	void bringPanelToFront(Panel*);
 
 	// ---- popup (docs/gui/05-widgets.md, "DropDown") ----
