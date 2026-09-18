@@ -48,7 +48,16 @@ void PlotLine::setValues(std::span<const float> values) {
 			m_samples.pop_front();
 		}
 	}
+	m_revealFraction = 1.0f;
 	updateAutoScale();
+}
+
+void PlotLine::setRevealFraction(float fraction) {
+	m_revealFraction = std::isnan(fraction) ? 1.0f : std::clamp(fraction, 0.0f, 1.0f);
+}
+
+void PlotLine::setPlayheadFraction(float fraction) {
+	m_playheadFraction = fraction;
 }
 
 void PlotLine::setRange(float lo, float hi) {
@@ -137,16 +146,23 @@ void PlotLine::draw(DrawList& dl, const GuiContext& ctx) const {
 		return;
 	}
 
-	// Build polyline points from samples
+	// Build polyline points from samples -- only the first revealCount of
+	// them when m_revealFraction < 1, but still mapped across the X range
+	// the FULL sample count implies (see setRevealFraction's own comment),
+	// so a partial reveal stops partway across the plot instead of being
+	// rescaled to fill it.
+	size_t const revealCount =
+		std::clamp(static_cast<size_t>(std::ceil(m_revealFraction * static_cast<float>(m_samples.size()))),
+		           size_t(1), m_samples.size());
 	std::vector<Vec2> points;
-	points.reserve(m_samples.size());
+	points.reserve(revealCount);
 
 	float range = m_rangeMax - m_rangeMin;
 	if (range < 1e-6f) {
 		range = 1.0f;  // Avoid division by zero
 	}
 
-	for (size_t i = 0; i < m_samples.size(); ++i) {
+	for (size_t i = 0; i < revealCount; ++i) {
 		float sample = m_samples[i];
 
 		// Map sample value to plot rect
@@ -164,6 +180,14 @@ void PlotLine::draw(DrawList& dl, const GuiContext& ctx) const {
 	// Draw the polyline
 	if (points.size() > 1) {
 		dl.addPolyline(points.data(), static_cast<int>(points.size()), th.accent, 1.0f, false);
+	}
+
+	// Playhead: a moving "where is now" marker, independent of how much of
+	// the curve is actually drawn.
+	if (!std::isnan(m_playheadFraction) && m_playheadFraction >= 0.0f) {
+		float const clampedPlayhead = std::clamp(m_playheadFraction, 0.0f, 1.0f);
+		float const playheadX = plotRect.x + clampedPlayhead * plotRect.w;
+		dl.addLine(Vec2(playheadX, plotRect.y), Vec2(playheadX, plotRect.y + plotRect.h), th.text, 1.0f);
 	}
 
 	// Draw latest value text if requested

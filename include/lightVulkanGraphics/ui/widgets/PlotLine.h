@@ -39,6 +39,18 @@ public:
 	void setRange(float lo, float hi);         // NaN, NaN = auto-scale
 	void setHeight(float px);
 	void setShowLatestValue(bool show);
+	// Only the first `fraction` (0..1, clamped) of the current samples are
+	// drawn -- the X mapping still spans the FULL sample count, so a partial
+	// reveal stops partway across the plot rather than being rescaled to
+	// fill it (a curve "growing in" from the left as a caller advances this
+	// in step with some external clock). Reset to 1.0 (show everything, the
+	// original behaviour) by setValues().
+	void setRevealFraction(float fraction);
+	// Draws a vertical line at this fraction (0..1) across the plot's full
+	// height, in a colour distinct from the polyline itself -- a moving
+	// "where is `now`" marker over an otherwise fully-visible curve.
+	// Negative or NaN (the default) hides it.
+	void setPlayheadFraction(float fraction);
 
 	Vec2 preferredSize(const GuiContext& ctx) const override;
 	void draw(DrawList&, const GuiContext&) const override;
@@ -55,6 +67,8 @@ private:
 	bool m_autoScale = true;
 	float m_height = 40.0f;
 	bool m_showLatestValue = false;
+	float m_revealFraction = 1.0f;
+	float m_playheadFraction = -1.0f;
 };
 
 } // namespace lightGraphics::ui
