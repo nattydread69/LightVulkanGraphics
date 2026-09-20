@@ -370,14 +370,21 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
 
     Assimp::Importer importer;
 
-    // Import the scene with specific post-processing flags for rigged models
+    // Import the scene with specific post-processing flags for rigged models.
+    // aiProcess_ValidateDataStructure is deliberately NOT included: assimp's glTF2
+    // importer flags a false positive on any material using KHR_materials_specular
+    // with a specularColorTexture ("Specular #1 is set, but there are only 1
+    // Specular textures"), which is a legitimate, fully spec-compliant construct --
+    // hit in practice by a Blender-exported background scene (Dojo.glb) that
+    // otherwise loads and renders correctly. The remaining flags below still fully
+    // process the scene; the incomplete-scene/root-node check just below catches
+    // genuinely unusable files without this extra, overly strict pass.
     const aiScene* scene = importer.ReadFile(filePath,
         aiProcess_Triangulate |
         aiProcess_FlipUVs |
         aiProcess_CalcTangentSpace |
         aiProcess_GenSmoothNormals |
-        aiProcess_RemoveRedundantMaterials |
-        aiProcess_ValidateDataStructure);
+        aiProcess_RemoveRedundantMaterials);
 
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
     {
@@ -679,8 +686,11 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
 
 bool FBXLoader::isValidFBXFile(const std::string& filePath)
 {
+    // See the loadModel() comment above: aiProcess_ValidateDataStructure rejects
+    // otherwise-valid glTF files using KHR_materials_specular's specularColorTexture,
+    // so this check must stay in sync with the flags loadModel() actually uses.
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(filePath, aiProcess_ValidateDataStructure);
+    const aiScene* scene = importer.ReadFile(filePath, 0);
     return (scene != nullptr && !(scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE));
 }
 
