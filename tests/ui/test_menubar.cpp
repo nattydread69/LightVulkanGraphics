@@ -262,11 +262,11 @@ namespace {
 		std::cout << "✓ testClearEmptiesTheBarAndClosesAnyOpenMenu\n";
 	}
 
-	// Regression test: this is exactly the bug a real consumer hit (takemusuAiki)
-	// rebuilding the bar every frame via clear() to refresh item labels with live
-	// state -- clear() also resets openIndex(), so the menu the user just opened
-	// closed again before the next frame ever drew it open. clearKeepingOpenMenu()
-	// is the fix: same rebuild, but the open menu survives it.
+	// Regression test: this is exactly the bug a real consumer hit rebuilding the bar
+	// every frame via clear() to refresh item labels with live state -- clear() also
+	// resets openIndex(), so the menu the user just opened closed again before the
+	// next frame ever drew it open. clearKeepingOpenMenu() is the fix: same rebuild,
+	// but the open menu survives it.
 	void testClearKeepingOpenMenuPreservesOpenIndexAcrossARebuild() {
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
 		auto file = ctx.menuBar().addMenu("File");
@@ -298,8 +298,8 @@ namespace {
 		std::cout << "✓ testClearKeepingOpenMenuPreservesOpenIndexAcrossARebuild\n";
 	}
 
-	// If a rebuild ever DOES shrink the bar below the preserved open index (unlike
-	// takemusuAiki's fixed-shape rebuild), nothing should crash or read out of bounds.
+	// If a rebuild ever DOES shrink the bar below the preserved open index (unlike the
+	// fixed-shape rebuild above), nothing should crash or read out of bounds.
 	void testClearKeepingOpenMenuIsSafeIfRebuildIsSmaller() {
 		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
 		ctx.menuBar().addMenu("File").addItem("New", [] {});

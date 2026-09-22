@@ -22,12 +22,4 @@
 #ifndef LIGHT_VULKAN_GRAPHICS_PHEADERS_H
 #define LIGHT_VULKAN_GRAPHICS_PHEADERS_H
 
-namespace neoAetherPhysics
-{
-	// Choice of precision here
-	using pReal = double;
-	//using pReal = float;
-
-	pReal constexpr PI = 3.141592654;
-}
 #endif // LIGHT_VULKAN_GRAPHICS_PHEADERS_H

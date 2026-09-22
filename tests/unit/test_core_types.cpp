@@ -16,7 +16,9 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+#include "Camera.h"
 #include "FBXLoader.h"
+#include "Frustum.h"
 #include "RiggedObject.h"
 #include "RotationGlyph.h"
 #include "SceneGraph.h"
@@ -140,6 +142,57 @@ namespace
 		const lightGraphics::Transform decomposed = lightGraphics::Transform::fromMatrix(matrix);
 		require(nearlyEqual(decomposed.matrix(), matrix),
 		        "Transform::fromMatrix should round-trip translation, rotation, and scale");
+	}
+
+	void testViewFrustumCulling()
+	{
+		// The exact matrix construction VkApp::recordCommandBuffer() uses for culling and
+		// VkApp::updateUniformBuffer() uses for rendering -- a real Camera, not a
+		// hand-built projection, so this exercises the same Vulkan clip-space convention
+		// (see Frustum.h's fromViewProj() comment) the renderer actually gets.
+		Camera camera;
+		camera.position = glm::vec3(0.0f, 0.0f, 0.0f);
+		camera.yaw = -90.0f; // faces -Z, matching Camera::view()'s own default derivation
+		camera.pitch = 0.0f;
+		camera.fov = 60.0f;
+		camera.zNear = 1.0f;
+		camera.zFar = 100.0f;
+		const glm::mat4 viewProj = camera.proj(1.0f) * camera.view();
+		const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(viewProj);
+
+		require(frustum.sphereIntersects({ 0.0f, 0.0f, -10.0f }, 0.1f),
+		        "a small sphere directly ahead, well within range, should be inside the frustum");
+		require(frustum.sphereIntersects({ 0.0f, 0.0f, -50.0f }, 0.1f),
+		        "a small sphere directly ahead, mid-range, should be inside the frustum");
+
+		require(!frustum.sphereIntersects({ -20.0f, 0.0f, -10.0f }, 0.1f),
+		        "a small sphere far to the left of a 60 degree FOV should be culled");
+		require(!frustum.sphereIntersects({ 20.0f, 0.0f, -10.0f }, 0.1f),
+		        "a small sphere far to the right of a 60 degree FOV should be culled");
+		require(!frustum.sphereIntersects({ 0.0f, 20.0f, -10.0f }, 0.1f),
+		        "a small sphere far above a 60 degree FOV should be culled");
+		require(!frustum.sphereIntersects({ 0.0f, -20.0f, -10.0f }, 0.1f),
+		        "a small sphere far below a 60 degree FOV should be culled");
+
+		require(!frustum.sphereIntersects({ 0.0f, 0.0f, -0.1f }, 0.05f),
+		        "a small sphere nearer than zNear should be culled");
+		require(!frustum.sphereIntersects({ 0.0f, 0.0f, -500.0f }, 0.1f),
+		        "a small sphere far beyond zFar should be culled");
+		require(!frustum.sphereIntersects({ 0.0f, 0.0f, 10.0f }, 0.1f),
+		        "a small sphere behind the camera should be culled");
+
+		// A sphere whose CENTER is outside a side plane, but whose radius reaches back
+		// into the frustum, must still be kept -- this is what makes bounding-sphere
+		// culling conservative (never culls something actually visible) rather than an
+		// exact point test.
+		require(frustum.sphereIntersects({ -12.0f, 0.0f, -10.0f }, 8.0f),
+		        "a large sphere straddling the left plane should not be culled");
+
+		// A point just inside the near plane (not pinned to the exact boundary -- floating
+		// point there is one rounding error away from either answer, which is a fragile
+		// thing to assert and not the point of this check) should count as inside.
+		require(frustum.sphereIntersects({ 0.0f, 0.0f, -1.01f }, 0.0f),
+		        "a point just past the near plane should count as inside");
 	}
 
 	void testSceneNodeHandleBasics()
@@ -1158,6 +1211,7 @@ int main()
 	{
 		testTransformIdentity();
 		testTransformRoundTrip();
+		testViewFrustumCulling();
 		testSceneNodeHandleBasics();
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();

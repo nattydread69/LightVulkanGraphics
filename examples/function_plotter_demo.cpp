@@ -941,7 +941,7 @@ int main()
 		// submit) first. This is also this demo's most reliable path for scripted testing:
 		// `xdotool key Right` cycles the Examples dropdown where a synthetic click on a
 		// specific popup row is not.
-		app.setUpdateCallback([&gui, &state, &openDialog, &saveDialog, examplesDropdown, exprBox](float) {
+		app.setUpdateCallback([&gui, &openDialog, &saveDialog, examplesDropdown](float) {
 			if (gui.wantsKeyboard())
 			{
 				return;

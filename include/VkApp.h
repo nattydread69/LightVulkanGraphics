@@ -19,6 +19,7 @@
 #pragma once
 
 #include "Camera.h"
+#include "Frustum.h"
 #include "Light.h"
 #include "VolumeRendering.h"
 #include "pObject.h"
@@ -339,6 +340,24 @@ namespace lightGraphics
 		glm::vec3 getAmbientLight() const { return ambientLight_; }
 		void setShadowRenderingEnabled(bool enabled) { shadowRenderingEnabled_ = enabled; }
 		bool getShadowRenderingEnabled() const { return shadowRenderingEnabled_; }
+
+		// View-frustum culling for the flexible-shape instanced draw (SPHERE/CUBE/CONE/
+		// CYLINDER/CAPSULE/ARROW/LINE/HEX; see ShapeType) -- objects whose bounding sphere
+		// falls entirely outside the camera's current view are skipped before they reach
+		// the instance buffer or a draw call at all. On by default: it is a pure
+		// performance win with no behavioural change for anything actually visible (the
+		// bounding-sphere test is deliberately conservative -- see Frustum.h's
+		// sphereIntersects() comment). Does not affect the shadow pass (a shadow caster
+		// outside the camera's view can still cast a visible shadow, so camera-frustum
+		// culling would be wrong to apply there) or rigged/mesh objects (ShapeType::MESH/
+		// HUMAN), which this pass doesn't draw.
+		void setFrustumCullingEnabled(bool enabled) { frustumCullingEnabled_ = enabled; }
+		bool getFrustumCullingEnabled() const { return frustumCullingEnabled_; }
+		// Counts from the most recent recordCommandBuffer() call, for a consumer's own
+		// performance overlay -- see examples/perf_overlay_demo.cpp. Both are the total
+		// object count when culling is off (nothing was tested, so nothing was excluded).
+		size_t getLastFrustumCulledCount() const { return lastFrustumCulledCount_; }
+		size_t getLastFrustumVisibleCount() const { return lastFrustumVisibleCount_; }
 		// True once init() has created a Vulkan device. Scene-building APIs
 		// (objects, lights, rigged objects) are safe to call before that: no
 		// GLFW window or Vulkan device is required to build up and inspect
@@ -547,6 +566,11 @@ namespace lightGraphics
 		// Scene state
 		bool sceneFinalized_ = false;
 		bool shadowRenderingEnabled_ = true;
+		bool frustumCullingEnabled_ = true;
+		// Updated once per recordCommandBuffer() call; see getLastFrustumCulledCount()'s
+		// own comment.
+		size_t lastFrustumCulledCount_ = 0;
+		size_t lastFrustumVisibleCount_ = 0;
 
 		// Camera and input
 		Camera camera_;
@@ -1275,6 +1299,16 @@ namespace lightGraphics
 			uint32_t vertexCount;
 			uint32_t indexOffset;
 			uint32_t indexCount;
+			// Local-space bounding-sphere radius (distance from the origin to the
+			// farthest vertex of this shape's reference mesh, e.g. 0.5 for the unit
+			// sphere) -- computed once in storeShapeGeometryOffsets() from the actual
+			// generated vertices, not hand-derived per shape, so it tracks the real
+			// geometry if that generation ever changes. Used by the frustum-culling
+			// check in recordCommandBuffer(): worldRadius = boundingRadius * (the
+			// object's largest scale-matrix column length), see that check's own
+			// comment for why the column-length bound is safe for a rotated/non-
+			// uniformly-scaled instance.
+			float boundingRadius = 0.0f;
 		};
 		std::vector<ShapeGeometry> shapeGeometries_;
 	};

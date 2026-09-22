@@ -148,6 +148,7 @@ struct BenchmarkScene
 	// Widgets this struct needs to push data into.
 	lvgui::Label* liveCountLabel = nullptr;
 	lvgui::Label* statsLabel = nullptr;
+	lvgui::Label* cullingLabel = nullptr;
 	lvgui::ProgressBar* budgetBar = nullptr;
 	lvgui::PlotLine* frameTimePlot = nullptr;
 
@@ -200,6 +201,15 @@ struct BenchmarkScene
 		float distance = std::max(6.0f, halfExtent * 1.6f);
 		glm::vec3 eye(distance * 0.6f, distance * 0.75f, distance * 0.6f);
 		app.setCameraLookAt(eye, glm::vec3(0.0f));
+		// Camera::zFar defaults to 50 (Camera.h) -- comfortably enough for the default
+		// grid, but eye-to-origin distance grows with instance count (see `distance`
+		// above) and exceeds that default well before 50,000 instances. Once the camera
+		// itself sits beyond its own far clip plane, the whole grid is behind zFar and
+		// gets discarded regardless of frustum culling being on or off -- not a culling
+		// bug, but this demo's own camera framing needs to keep the far plane ahead of
+		// wherever it just placed the eye.
+		float eyeDistance = glm::length(eye);
+		app.setCameraPlanes(0.1f, std::max(50.0f, eyeDistance + halfExtent + 10.0f));
 	}
 
 	// Adds/removes handles to reach `targetCount` (growing/shrinking only the delta, not
@@ -306,6 +316,23 @@ struct BenchmarkScene
 				" ms, min " + formatFloat(lo, 2) + ", max " + formatFloat(hi, 2) +
 				" (last " + std::to_string(frameTimesMs.size()) + " frames)");
 		}
+		if (cullingLabel)
+		{
+			// One frame behind (setUpdateCallback runs before this frame's own
+			// recordCommandBuffer()), same as every other reading on this panel -- a lag
+			// of one frame is imperceptible and not worth a special first-frame case.
+			std::size_t visible = app.getLastFrustumVisibleCount();
+			std::size_t culled = app.getLastFrustumCulledCount();
+			if (app.getFrustumCullingEnabled())
+			{
+				cullingLabel->setText(std::to_string(visible) + " visible, " + std::to_string(culled) +
+					" culled (" + std::to_string(visible + culled) + " total)");
+			}
+			else
+			{
+				cullingLabel->setText(std::to_string(visible + culled) + " total, culling off");
+			}
+		}
 	}
 };
 
@@ -390,6 +417,15 @@ int main()
 		shadowCheckbox->bind(&shadowsState);
 		shadowCheckbox->setOnChange([&app](bool v) { app.setShadowRenderingEnabled(v); });
 
+		static bool frustumCullState = app.getFrustumCullingEnabled();
+		auto* frustumCullCheckbox = sceneSection->add<lvgui::Checkbox>("Frustum culling", frustumCullState);
+		frustumCullCheckbox->bind(&frustumCullState);
+		frustumCullCheckbox->setTooltip("Skip instances whose bounding sphere falls entirely outside the "
+			"camera's view before they reach the instance buffer or a draw call. Toggle off to compare -- "
+			"the Visible/Culled readout below shows the effect directly. Only affects the flexible-shape "
+			"pass this demo exercises, not shadow casters.");
+		frustumCullCheckbox->setOnChange([&app](bool v) { app.setFrustumCullingEnabled(v); });
+
 		sceneSection->add<lvgui::Separator>("Render mode");
 		static lvgui::RadioGroup renderModeGroup;
 		sceneSection->add<lvgui::RadioButton>("Flexible shapes (lit)", &renderModeGroup, 0);
@@ -418,6 +454,7 @@ int main()
 
 		auto* perfSection = panel->add<lvgui::CollapsingSection>("Performance", true);
 		scene.statsLabel = perfSection->add<lvgui::Label>("-- FPS");
+		scene.cullingLabel = perfSection->add<lvgui::Label>("");
 		scene.budgetBar = perfSection->add<lvgui::ProgressBar>("Frame budget");
 		scene.frameTimePlot = perfSection->add<lvgui::PlotLine>("Frame time (ms)", 300);
 		scene.frameTimePlot->setHeight(60.0f);

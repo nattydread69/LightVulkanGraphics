@@ -2795,6 +2795,17 @@ namespace lightGraphics
 			shapeGeometries_[i].indexOffset = indexOffset;
 			shapeGeometries_[i].indexCount = static_cast<uint32_t>(tempIndices[i].size());
 
+			// Bounding-sphere radius for frustum culling (see ShapeGeometry::
+			// boundingRadius's own comment): the farthest any vertex of this shape's
+			// reference mesh sits from the local origin, computed from the actual
+			// generated geometry rather than assumed per shape type.
+			float boundingRadius = 0.0f;
+			for (const Vertex& vertex : tempVertices[i])
+			{
+				boundingRadius = std::max(boundingRadius, glm::length(vertex.pos));
+			}
+			shapeGeometries_[i].boundingRadius = boundingRadius;
+
 			vertexOffset += static_cast<uint32_t>(tempVertices[i].size());
 			indexOffset += static_cast<uint32_t>(tempIndices[i].size());
 
@@ -2802,7 +2813,8 @@ namespace lightGraphics
 			{
 				std::ostringstream message;
 				message << "Shape " << i << ": " << shapeGeometries_[i].vertexCount
-				        << " vertices, " << shapeGeometries_[i].indexCount << " indices";
+				        << " vertices, " << shapeGeometries_[i].indexCount << " indices"
+				        << ", boundingRadius " << shapeGeometries_[i].boundingRadius;
 				logMessage(LogLevel::Debug, message.str());
 			}
 		}
@@ -3198,11 +3210,50 @@ namespace lightGraphics
 			// Group objects by shape type for efficient rendering
 			std::vector<std::vector<size_t>> shapeGroups(8); // 8 shape types
 
+			// View-frustum culling (see setFrustumCullingEnabled()'s own comment for
+			// scope: this pass only -- not the shadow pass, not rigged/mesh objects).
+			// Built once per recordCommandBuffer() call from the SAME camera this frame's
+			// UBO uses (updateUniformBuffer() computes the identical view/proj earlier the
+			// same frame), so a culled object is always one the vertex shader would have
+			// received an off-screen clip-space position for anyway.
+			const float aspect = swapChainExtent_.height > 0
+				? swapChainExtent_.width / static_cast<float>(swapChainExtent_.height)
+				: 1.0f;
+			const lightGraphics::ViewFrustum frustum =
+				lightGraphics::ViewFrustum::fromViewProj(camera_.proj(aspect) * camera_.view());
+			lastFrustumCulledCount_ = 0;
+			lastFrustumVisibleCount_ = 0;
+
 			for (size_t i = 0; i < _objects_.size(); ++i)
 			{
 				int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType >= 0 && shapeType < 8)
 				{
+					if (frustumCullingEnabled_)
+					{
+						// World-space bounding sphere: the shape's local bounding radius
+						// (ShapeGeometry::boundingRadius, see its own comment) scaled by
+						// this object's largest model-matrix column length. Rotation
+						// alone (an orthonormal linear part) preserves column lengths, so
+						// this is exact for the common translate*rotate*scale(size) case
+						// and a safe upper bound under the sheared/non-uniform matrices a
+						// scene-graph parent or setObjectModelMatrixOverride() can
+						// introduce -- see sphereIntersects()'s own comment on why an
+						// oversized bound is the safe direction to err in, never an
+						// undersized one.
+						const glm::mat4 model = getObjectModelMatrix(i);
+						const glm::vec3 center(model[3]);
+						const float scale = std::max({ glm::length(glm::vec3(model[0])),
+							glm::length(glm::vec3(model[1])), glm::length(glm::vec3(model[2])) });
+						const float radius = shapeGeometries_[static_cast<size_t>(shapeType)].boundingRadius * scale;
+						if (!frustum.sphereIntersects(center, radius))
+						{
+							++lastFrustumCulledCount_;
+							continue;
+						}
+					}
+					++lastFrustumVisibleCount_;
+
 					// Objects matching isDebugOverlayObjectName are treated as debug
 					// overlays and rendered in a second pass with depth testing disabled.
 					// Checked ahead of the alpha/transparency test below: several
