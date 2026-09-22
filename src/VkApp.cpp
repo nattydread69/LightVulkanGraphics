@@ -1805,9 +1805,20 @@ namespace lightGraphics
 		{
 			for(int x = 0; x < slices; ++x)
 			{
+				// Wound so each triangle is front-facing (counter-clockwise as
+				// seen from outside the sphere, looking toward the centre) to
+				// match VK_FRONT_FACE_COUNTER_CLOCKWISE/VK_CULL_MODE_BACK_BIT,
+				// the convention every other shape (see makeHexahedral's
+				// outward-normal-ordered corners) already follows. Wound the
+				// other way, back-face culling on an opaque draw discards the
+				// near hemisphere instead of the far one -- invisible against
+				// a matching-colour background, but any opaque object in
+				// front of the sphere (e.g. a held target sphere in front of
+				// the face) then wrongly draws over it, since the only
+				// hemisphere left has the far side's much greater depth.
 				uint32_t i0=id(y,x), i1=id(y+1,x), i2=id(y+1,x+1), i3=id(y,x+1);
-				idx.push_back(i0); idx.push_back(i1); idx.push_back(i2);
-				idx.push_back(i0); idx.push_back(i2); idx.push_back(i3);
+				idx.push_back(i0); idx.push_back(i2); idx.push_back(i1);
+				idx.push_back(i0); idx.push_back(i3); idx.push_back(i2);
 			}
 		}
 	}

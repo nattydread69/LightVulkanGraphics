@@ -134,6 +134,16 @@ namespace lightGraphics
         bool isAnimating() const { return isPlaying && currentAnimationIndex >= 0; }
         int getCurrentAnimationIndex() const { return currentAnimationIndex; }
         bool getAnimationLooping() const { return loopAnimation; }
+        /**
+         * Check if playback is currently paused (pauseAnimation()/resumeAnimation()).
+         * isAnimating() alone can't answer this: it only tracks whether a clip is
+         * loaded and playback hasn't been stopped, not the separate pause flag, so it
+         * stays true across a pause/resume cycle. A caller driving a Play/Pause toggle
+         * off isAnimating() alone finds pauseAnimation() fires every time and
+         * resumeAnimation() is never reached.
+         * @return True if paused
+         */
+        bool isAnimationPaused() const { return isPaused; }
 
         // Model access
         /**

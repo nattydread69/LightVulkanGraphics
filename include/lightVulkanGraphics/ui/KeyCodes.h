@@ -40,6 +40,13 @@ namespace Key {
 		Backspace, Delete, Tab, Enter, Escape, Space,
 		Left, Right, Up, Down, Home, End, PageUp, PageDown,
 		A, C, V, X, Z, Y,          // for the standard editing shortcuts
+		O, R, S,                   // for consumer-level Open/Reload/Save menu accelerators
+		                           // (docs/gui/05-widgets.md, "MenuBar": shortcutHint is
+		                           // display-only -- a consumer wires the actual key itself
+		                           // via GuiContext::input().keyQueue, same as any other
+		                           // global shortcut; these three exist because that's
+		                           // common enough menu-accelerator vocabulary to be worth
+		                           // mirroring, not because the GUI itself consumes them)
 		Count
 	};
 }

@@ -294,7 +294,12 @@ mesh API, so it needs no Vulkan device to build or test. See
 - `simple_fbx_loader_example`: basic FBX inspection example
 - `fbx_rigged_example`: rigged-model rendering example
 - `rotation_glyph_example`: angular velocity/momentum/torque rotation-ring glyphs alongside the conventional axial arrow (see `docs/rotation_glyphs.md`)
-- `gui_demo`: every LVGUI widget in one running app (panels, sliders, dropdowns, color pickers, plots, and more) — see [GUI (LVGUI)](#gui-lvgui) above and `docs/gui_usage.md`; only built when `LVG_BUILD_UI` is on (the default)
+- `gui_demo`: every LVGUI widget in one running app (panels, sliders, dropdowns, color pickers, plots, and more) — see [GUI (LVGUI)](#gui-lvgui) above and `docs/gui_usage.md`
+- `fbx_model_inspector`: browse and inspect a loaded FBX file's meshes/bones/materials/animations through LVGUI (see below)
+- `perf_overlay_demo`: an instance-count/render-mode benchmark scene with a live performance overlay (see below)
+- `function_plotter_demo`: a 2D math-function plotter with CSV load/save (see below)
+
+The last three are only built when `LVG_BUILD_UI` is on (the default).
 
 Build the bundled demo after configuring the project:
 
@@ -314,6 +319,56 @@ To build all bundled examples together:
 
 ```bash
 cmake --build build --target LightVulkanGraphicsExamples -j
+```
+
+### FBX Model Inspector
+Load an FBX file and browse its meshes, bone hierarchy, materials and animation clips
+through LVGUI, right beside the live 3D view. `ListBox`es pick a mesh/bone/material to
+inspect (vertex/triangle/bone counts, bind pose, parent/children, diffuse colour and
+texture path); a `DropDown` picks the animation clip, with play/pause, a scrub slider,
+and a rolling timeline plot. `File > Open...` browses `assets/*.fbx` for another model to
+load, swapping it into the live scene in place. Doubles as an asset-debugging tool for
+your own FBX files.
+
+![FBX Model Inspector: mesh list, material list, and animation transport controls beside a loaded rigged character](assets/screenshots/fbx_model_inspector_demo.png)
+
+```bash
+cmake --build build --target fbx_model_inspector -j
+./build/fbx_model_inspector
+```
+
+### Performance Overlay
+An instance-count/render-mode benchmark scene: drag the (logarithmic) instance-count
+slider from 1 to 50,000 shapes, or jump straight there with the 100/1k/10k/50k presets.
+`Animate` toggles a per-frame position update across every live instance (via the batched
+`updateObjectPositions()` path) so you can separate the cost of the dirty-tracked
+per-frame update path from pure render cost, and the render-mode radio group swaps the
+whole scene between the flexible-shapes, wireframe, and unlit pipelines live. A rolling
+frame-time plot, a 60fps frame-budget bar, and an FPS/avg/min/max readout make the cost
+of each toggle immediately visible.
+
+![Performance Overlay: 1000 animated, colour-coded spheres in a grid, with instance-count, render-mode, and frame-time controls](assets/screenshots/perf_overlay_demo.png)
+
+```bash
+cmake --build build --target perf_overlay_demo -j
+./build/perf_overlay_demo
+```
+
+### Function Plotter
+A 2D math-function plotter with no 3D scene at all — a reminder that LVGUI's `DrawList`
+(lines, filled circles, polylines, clipped text) is a small general-purpose 2D vector
+canvas, not something that only ever draws widget chrome. Type an expression of `x` and
+press Enter (or click Plot) to graph it via a small built-in expression parser (`+-*/^`,
+parentheses, `sin`/`cos`/`sqrt`/`pow`/... and the constants `pi`/`e`); a domain error
+(e.g. `1/x` at `x=0`) breaks the curve into disconnected runs instead of drawing a stray
+line across the plot. Load scatter data from a CSV file to overlay against the curve, and
+export the currently-plotted curve back out to CSV.
+
+![Function Plotter: a sin(x) curve on a custom-drawn 2D graph, with an expression box, axis-range controls, and CSV load/save](assets/screenshots/function_plotter_demo.png)
+
+```bash
+cmake --build build --target function_plotter_demo -j
+./build/function_plotter_demo
 ```
 
 ## Bundled Assets

@@ -86,6 +86,9 @@ int translateKey(int glfwKey) {
 		case GLFW_KEY_X:          return Key::X;
 		case GLFW_KEY_Z:          return Key::Z;
 		case GLFW_KEY_Y:          return Key::Y;
+		case GLFW_KEY_O:          return Key::O;
+		case GLFW_KEY_R:          return Key::R;
+		case GLFW_KEY_S:          return Key::S;
 		default:                  return Key::Unknown;
 	}
 }

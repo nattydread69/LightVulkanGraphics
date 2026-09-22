@@ -739,6 +739,26 @@ if (LVG_BUILD_EXAMPLES)
 		add_executable(gui_demo examples/gui_demo.cpp)
 		lvg_configure_build_tree_example(gui_demo)
 		target_link_libraries(gui_demo PRIVATE LightVulkanGraphics::UI)
+
+		# Loads FBX files (RiggedObject/FBXLoader, from the core library) and browses/
+		# inspects them through LVGUI -- see the same LightVulkanGraphicsUI-linking
+		# rationale on gui_demo just above.
+		add_executable(fbx_model_inspector examples/fbx_model_inspector.cpp)
+		lvg_configure_build_tree_example(fbx_model_inspector)
+		target_link_libraries(fbx_model_inspector PRIVATE LightVulkanGraphics::UI)
+
+		# Instance-count/render-mode benchmark scene with an LVGUI performance overlay --
+		# see the same LightVulkanGraphicsUI-linking rationale on gui_demo just above.
+		add_executable(perf_overlay_demo examples/perf_overlay_demo.cpp)
+		lvg_configure_build_tree_example(perf_overlay_demo)
+		target_link_libraries(perf_overlay_demo PRIVATE LightVulkanGraphics::UI)
+
+		# 2D math-function plotter: a custom Widget (PlotCanvas) drawn directly with
+		# DrawList primitives, plus a small self-contained expression parser -- see the
+		# same LightVulkanGraphicsUI-linking rationale on gui_demo just above.
+		add_executable(function_plotter_demo examples/function_plotter_demo.cpp)
+		lvg_configure_build_tree_example(function_plotter_demo)
+		target_link_libraries(function_plotter_demo PRIVATE LightVulkanGraphics::UI)
 	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.
@@ -751,6 +771,14 @@ if (LVG_BUILD_EXAMPLES)
 				COMMENT "Copying ${ASSIMP_DLL} for ${_lvg_ex}"
 			)
 		endforeach()
+	endif()
+	if (WIN32 AND ASSIMP_DLL AND TARGET fbx_model_inspector)
+		add_custom_command(TARGET fbx_model_inspector POST_BUILD
+			COMMAND ${CMAKE_COMMAND} -E copy_if_different
+				"${ASSIMP_DLL}"
+				"$<TARGET_FILE_DIR:fbx_model_inspector>"
+			COMMENT "Copying ${ASSIMP_DLL} for fbx_model_inspector"
+		)
 	endif()
 
 	add_custom_target(LightVulkanGraphicsExamples
