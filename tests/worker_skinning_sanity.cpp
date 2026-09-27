@@ -416,6 +416,54 @@ namespace
 	}
 } // namespace
 
+namespace
+{
+	// selectRiggedSkinningModeIndex: which bind-correction mode a model is
+	// skinned with. Candidates in the same order VkAppRigged.cpp evaluates them:
+	// [0] offset-only, [1] mesh-bind, [2] mesh-bind-without-scale.
+	void testSkinningModeSelection()
+	{
+		using lightGraphics::detail::RiggedSkinningModeScore;
+		using lightGraphics::detail::selectRiggedSkinningModeIndex;
+		auto score = [](float extent, float edgeRatio)
+		{
+			RiggedSkinningModeScore s;
+			s.valid = true;
+			s.maxExtent = extent;
+			s.maxEdgeRatio = edgeRatio;
+			return s;
+		};
+		const float minimumExtent = 0.1f;
+
+		// Clean candidates: the original rule is unchanged.
+		require(selectRiggedSkinningModeIndex({score(1.9f, 4.6f), score(17.8f, 1.0f), score(17.8f, 1.0f)},
+		                                      minimumExtent, 1) == 0,
+		        "a default whose clean pose is nine times too big loses to the tight clean one");
+		require(selectRiggedSkinningModeIndex({score(1.9f, 4.6f), score(2.0f, 3.0f), score(5.0f, 2.0f)},
+		                                      minimumExtent, 1) == 1,
+		        "a clean default within 25% of the tightest extent is kept");
+
+		// Nothing clean -- the registration-pose case that rendered uke as
+		// spikes on a software rasterizer: pick the least distorted, not the
+		// per-device default.
+		require(selectRiggedSkinningModeIndex({score(1.8f, 14.9f), score(2.3f, 191.0f), score(2.2f, 150.0f)},
+		                                      minimumExtent, 1) == 0,
+		        "with no clean candidate, the least distorted wins over a spiky default");
+		require(selectRiggedSkinningModeIndex({score(1.8f, 14.9f), score(2.3f, 191.0f), score(2.2f, 150.0f)},
+		                                      minimumExtent, 0) == 0,
+		        "and that choice no longer depends on which default the device has");
+
+		// Nothing usable at all: only then fall back to the default.
+		RiggedSkinningModeScore broken;
+		broken.valid = true;
+		broken.nonFiniteVertices = 10;
+		broken.maxExtent = 2.0f;
+		RiggedSkinningModeScore collapsed = score(0.01f, 1.0f);
+		require(selectRiggedSkinningModeIndex({broken, collapsed, RiggedSkinningModeScore()}, minimumExtent, 2) == 2,
+		        "non-finite, collapsed or empty candidates fall back to the default");
+	}
+}
+
 int main()
 {
 	try
@@ -423,6 +471,7 @@ int main()
 		testWorkerBindPoseSkinning();
 		testWorkerAnimationBounds();
 		testWorkerWaveArmPose();
+		testSkinningModeSelection();
 	}
 	catch (const std::exception& error)
 	{
