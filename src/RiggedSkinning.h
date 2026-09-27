@@ -22,6 +22,7 @@
 
 #include <glm/glm.hpp>
 
+#include <cstddef>
 #include <vector>
 
 namespace lightGraphics::detail
@@ -32,6 +33,86 @@ namespace lightGraphics::detail
 		MeshBind,
 		MeshBindWithoutScale
 	};
+
+	// How one candidate bind-correction mode skinned a model's current pose:
+	// whether it produced anything, how many vertices went non-finite, the
+	// pose's largest bounding extent, and its worst triangle-edge stretch
+	// (1 = undistorted; large = vertices flung into long spikes).
+	struct RiggedSkinningModeScore
+	{
+		bool valid = false;
+		std::size_t nonFiniteVertices = 0;
+		float maxExtent = 0.0f;
+		float maxEdgeRatio = 0.0f;
+	};
+
+	// A candidate that is finite and not collapsed below minimumExtent: it can
+	// be compared against the others, even if it isn't clean.
+	inline bool isUsableRiggedSkinningScore(const RiggedSkinningModeScore& score, float minimumExtent)
+	{
+		return score.valid && score.nonFiniteVertices == 0 && score.maxExtent >= minimumExtent;
+	}
+
+	inline bool isPlausibleRiggedSkinningScore(const RiggedSkinningModeScore& score, float minimumExtent)
+	{
+		return isUsableRiggedSkinningScore(score, minimumExtent) && score.maxEdgeRatio < 8.0f;
+	}
+
+	// Which candidate to skin with (an index into `scores`).
+	//
+	// Among clean (plausible) candidates: the default when it is within 25% of
+	// the tightest extent, else the tightest -- the original rule, unchanged.
+	//
+	// When NO candidate is clean -- which happens when the pose the object is
+	// registered in is itself unusual (a second character added mid-setup, say)
+	// -- this used to fall straight back to defaultIndex, whose mode depends on
+	// the GPU type. That made the same model render correctly on a discrete GPU
+	// and as long spikes on a software rasterizer. Instead, take the candidate
+	// that distorts the mesh least: the relative ranking of the modes is still
+	// informative even when none of them is clean. defaultIndex is used only
+	// when nothing is even usable.
+	inline std::size_t selectRiggedSkinningModeIndex(const std::vector<RiggedSkinningModeScore>& scores,
+	                                                 float minimumExtent, std::size_t defaultIndex)
+	{
+		bool haveBest = false;
+		std::size_t best = 0;
+		for (std::size_t i = 0; i < scores.size(); ++i)
+		{
+			if (isPlausibleRiggedSkinningScore(scores[i], minimumExtent) &&
+			    (!haveBest || scores[i].maxExtent < scores[best].maxExtent))
+			{
+				best = i;
+				haveBest = true;
+			}
+		}
+		if (haveBest)
+		{
+			if (defaultIndex < scores.size() &&
+			    isPlausibleRiggedSkinningScore(scores[defaultIndex], minimumExtent))
+			{
+				float const tightest = scores[best].maxExtent;
+				float const allowance = tightest * 1.25f > tightest + 0.25f ? tightest * 1.25f : tightest + 0.25f;
+				if (scores[defaultIndex].maxExtent <= allowance)
+				{
+					return defaultIndex;
+				}
+			}
+			return best;
+		}
+
+		bool haveLeastDistorted = false;
+		std::size_t leastDistorted = 0;
+		for (std::size_t i = 0; i < scores.size(); ++i)
+		{
+			if (isUsableRiggedSkinningScore(scores[i], minimumExtent) &&
+			    (!haveLeastDistorted || scores[i].maxEdgeRatio < scores[leastDistorted].maxEdgeRatio))
+			{
+				leastDistorted = i;
+				haveLeastDistorted = true;
+			}
+		}
+		return haveLeastDistorted ? leastDistorted : defaultIndex;
+	}
 
 	inline glm::mat4 removeAffineScale(const glm::mat4& transform)
 	{

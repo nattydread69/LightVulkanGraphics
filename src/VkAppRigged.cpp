@@ -317,15 +317,6 @@ namespace lightGraphics
 			return stats;
 		}
 
-		bool isPlausibleRiggedPose(const RiggedSkinningPoseStats& stats,
-		                           float minimumExtent)
-		{
-			return stats.valid &&
-			       stats.nonFiniteVertices == 0 &&
-			       stats.maxExtent >= minimumExtent &&
-			       stats.maxEdgeRatio < 8.0f;
-		}
-
 		std::string riggedPoseStatsSummary(const RiggedSkinningPoseStats& stats)
 		{
 			std::ostringstream message;
@@ -352,45 +343,22 @@ namespace lightGraphics
 			    detail::RiggedSkinningBindCorrectionMode::MeshBindWithoutScale
 			};
 
-			std::array<RiggedSkinningPoseStats, modes.size()> stats{};
 			const RiggedSkinningPoseStats sourceStats = evaluateRiggedSourcePose(model);
 			const float minimumExtent = sourceStats.valid
 			    ? std::max(sourceStats.maxExtent * 0.05f, 1.0e-4f)
 			    : 1.0e-4f;
-			float smallestPlausibleExtent = std::numeric_limits<float>::max();
-			std::optional<size_t> bestIndex;
-			std::optional<size_t> defaultIndex;
+			std::vector<detail::RiggedSkinningModeScore> scores;
+			std::size_t defaultIndex = 0;
 			for (size_t i = 0; i < modes.size(); ++i)
 			{
-				stats[i] = evaluateRiggedSkinningPose(model, boneTransforms, modes[i]);
+				const RiggedSkinningPoseStats stats = evaluateRiggedSkinningPose(model, boneTransforms, modes[i]);
+				scores.push_back({stats.valid, stats.nonFiniteVertices, stats.maxExtent, stats.maxEdgeRatio});
 				if (modes[i] == defaultMode)
 				{
 					defaultIndex = i;
 				}
-
-				if (!isPlausibleRiggedPose(stats[i], minimumExtent))
-				{
-					continue;
-				}
-
-				if (!bestIndex || stats[i].maxExtent < smallestPlausibleExtent)
-				{
-					bestIndex = i;
-					smallestPlausibleExtent = stats[i].maxExtent;
-				}
 			}
-
-			if (defaultIndex &&
-			    isPlausibleRiggedPose(stats[*defaultIndex], minimumExtent) &&
-			    (!bestIndex ||
-			     stats[*defaultIndex].maxExtent <=
-			         std::max(smallestPlausibleExtent * 1.25f,
-			                  smallestPlausibleExtent + 0.25f)))
-			{
-				return defaultMode;
-			}
-
-			return bestIndex ? modes[*bestIndex] : defaultMode;
+			return modes[detail::selectRiggedSkinningModeIndex(scores, minimumExtent, defaultIndex)];
 		}
 	}
 
