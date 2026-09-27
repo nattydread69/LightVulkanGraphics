@@ -335,6 +335,7 @@ void validateVolumeRenderDescription(const VolumeRenderDescription& description)
 			"Volume referenceStepLength must be finite and positive");
 	}
 	(void)volumeOpacityModelName(description.opacityModel);
+	(void)volumeColorSourceName(description.colorSource);
 	validateClippingDescription(description.clipping);
 }
 
@@ -362,6 +363,32 @@ VolumeOpacityModel parseVolumeOpacityModel(const std::string& name)
 		return VolumeOpacityModel::ExponentialExtinction;
 	}
 	throw std::invalid_argument("Unknown volume opacity model: " + name);
+}
+
+const char* volumeColorSourceName(VolumeColorSource source)
+{
+	switch (source)
+	{
+	case VolumeColorSource::TransferFunction:
+		return "transferFunction";
+	case VolumeColorSource::TextureRgba:
+		return "textureRgba";
+	}
+	throw std::invalid_argument("Unknown VolumeColorSource");
+}
+
+VolumeColorSource parseVolumeColorSource(const std::string& name)
+{
+	const std::string normalized = normalizedName(name);
+	if (normalized == "transfer" || normalized == "transferfunction")
+	{
+		return VolumeColorSource::TransferFunction;
+	}
+	if (normalized == "texture" || normalized == "texturergba")
+	{
+		return VolumeColorSource::TextureRgba;
+	}
+	throw std::invalid_argument("Unknown volume color source: " + name);
 }
 
 const char* renderLayerName(RenderLayer layer)

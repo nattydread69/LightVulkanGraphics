@@ -18,6 +18,10 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   the core library so `-DLVG_BUILD_UI=OFF` reproduces the library exactly as it was
   before LVGUI existed. See `docs/gui/00-overview.md` for the design and
   `docs/gui_usage.md` for usage; `gui_demo` is the bundled example.
+- `VolumeColorSource::TextureRgba`: volumes can take their colour directly from an
+  RGBA8 3D texture, with the texture's alpha mapped to opacity through the transfer
+  function, so colour and opacity can show different quantities. The default,
+  `VolumeColorSource::TransferFunction`, keeps the existing behaviour.
 - Configurable CMake options for examples, compiler warnings, and sanitizers.
 - Generated public version header with compile-time version macros and constants.
 - `lightGraphics::LightVulkanGraphics` compatibility alias for the main application class.
