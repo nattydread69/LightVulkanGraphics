@@ -64,9 +64,17 @@ void main()
 		if (!clipped && all(greaterThanEqual(samplePosition, vec3(0.0))) &&
 			all(lessThanEqual(samplePosition, vec3(1.0))))
 		{
-			float scalar = clamp(texture(volumeTexture, samplePosition).r *
+			// Flag 6 (VolumeColorSource::TextureRgba): colour from the texture's
+			// RGB, and its alpha is the scalar the transfer function maps to opacity
+			vec4 texel = texture(volumeTexture, samplePosition);
+			bool textureColor = flagEnabled(6);
+			float scalar = clamp((textureColor ? texel.a : texel.r) *
 				volume.settings.x, 0.0, 1.0);
 			vec4 sampleColor = texture(transferFunction, vec2(scalar, 0.5));
+			if (textureColor)
+			{
+				sampleColor.rgb = texel.rgb;
+			}
 			if (flagEnabled(4))
 			{
 				float physicalStepLength = length(direction * extent * stepLength);

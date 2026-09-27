@@ -27,6 +27,14 @@ app.drawVolume(volume, {lightGraphics::RenderLayer::Volume, 0.0f});
 
 `LinearAlpha` preserves VOL-1 behavior: transfer alpha is multiplied by `opacityScale` once per sample. Its appearance therefore depends strongly on step count. Set `normalizeOpacityByStepLength = false` only when intentionally treating each sample as one reference interval.
 
+By default (`VolumeColorSource::TransferFunction`) the texture's red channel is the scalar, and the transfer function supplies both colour and opacity. Set `colorSource = VolumeColorSource::TextureRgba` to colour a volume by a second quantity: the texture must then be `RGBA8_UNORM`, its RGB is used directly as the colour, and its alpha is the scalar that (times `densityScale`) the transfer function maps to opacity. The transfer function's own colour is ignored in this mode. `createVolume` and `updateVolume` throw `std::invalid_argument` if the texture is not RGBA8.
+
+```cpp
+// Colour by speed, opacity by density: rgb = colour map(speed), a = density in 0..255
+textureDescription.format = lightGraphics::TextureFormat::RGBA8_UNORM;
+description.colorSource = lightGraphics::VolumeColorSource::TextureRgba;
+```
+
 `updateVolume` changes bounds, scaling, transfer/volume bindings, ray steps, and clipping. `hideVolume` stops submission without destroying resources.
 
 The clip plane is evaluated in world space and retains samples for which `dot(position, normal) <= offset`. The clip box uses normalized texture coordinates. Both can be enabled independently.
