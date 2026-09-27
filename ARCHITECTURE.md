@@ -1,6 +1,6 @@
 # LightVulkanGraphics Architecture
 
-## Version 2.1.0
+## Version 2.1.1
 
 ## Overview
 
@@ -170,10 +170,10 @@ LightVulkanGraphicsPublic.h (Facade)
 
 ### Version Format: MAJOR.MINOR.PATCH
 
-**2.1.0**
+**2.1.1**
 - **MAJOR (2)**: ABI compatibility breaking changes (rare)
 - **MINOR (1)**: New features, enhancements (backward compatible)
-- **PATCH (0)**: Bug fixes only
+- **PATCH (1)**: Bug fixes only
 
 ### Compatibility Guarantees
 
@@ -291,4 +291,4 @@ Use Pattern 3 with `LightVulkanGraphicsPublic.h` includes.
 
 ---
 
-**LightVulkanGraphics 2.1.0** — Well-architected, stable, and extensible.
+**LightVulkanGraphics 2.1.1** — Well-architected, stable, and extensible.
