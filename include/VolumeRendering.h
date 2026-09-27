@@ -184,6 +184,20 @@ enum class VolumeOpacityModel
 	ExponentialExtinction
 };
 
+// Where a volume's colour comes from. Opacity always comes from the transfer
+// function's alpha.
+//  - TransferFunction: the texture's red channel is the scalar, and the transfer
+//    function maps it to both colour and alpha.
+//  - TextureRgba: the texture must be RGBA8_UNORM. Its RGB is the colour, and its
+//    alpha is the scalar the transfer function maps to opacity (the transfer
+//    function's own colour is ignored). This lets colour show one quantity and
+//    opacity another, e.g. colour by speed and opacity by density.
+enum class VolumeColorSource
+{
+	TransferFunction,
+	TextureRgba
+};
+
 enum class RenderLayer
 {
 	Opaque,
@@ -220,6 +234,7 @@ struct VolumeRenderDescription
 	bool enableEarlyTermination = true;
 	ClippingDescription clipping;
 	VolumeOpacityModel opacityModel = VolumeOpacityModel::ExponentialExtinction;
+	VolumeColorSource colorSource = VolumeColorSource::TransferFunction;
 	float referenceStepLength = 1.0f;
 	bool normalizeOpacityByStepLength = true;
 };
@@ -254,6 +269,8 @@ void validateClippingDescription(const ClippingDescription& clipping);
 void validateVolumeRenderDescription(const VolumeRenderDescription& description);
 [[nodiscard]] const char* volumeOpacityModelName(VolumeOpacityModel model);
 [[nodiscard]] VolumeOpacityModel parseVolumeOpacityModel(const std::string& name);
+[[nodiscard]] const char* volumeColorSourceName(VolumeColorSource source);
+[[nodiscard]] VolumeColorSource parseVolumeColorSource(const std::string& name);
 [[nodiscard]] const char* renderLayerName(RenderLayer layer);
 [[nodiscard]] RenderLayer parseRenderLayer(const std::string& name);
 [[nodiscard]] std::uint32_t renderLayerOrdinal(RenderLayer layer);

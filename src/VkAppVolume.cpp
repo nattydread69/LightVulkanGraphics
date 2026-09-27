@@ -663,6 +663,11 @@ VolumeHandle VkApp::createVolume(const VolumeRenderDescription& description)
 	{
 		throw std::invalid_argument("Volume references an invalid transfer function");
 	}
+	if (description.colorSource == VolumeColorSource::TextureRgba &&
+		textures3D_[description.volumeTexture.index].description.format != TextureFormat::RGBA8_UNORM)
+	{
+		throw std::invalid_argument("VolumeColorSource::TextureRgba requires an RGBA8_UNORM texture");
+	}
 	MeshData cube;
 	const std::array<glm::vec3, 8> positions{{
 		{0, 0, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 0},
@@ -722,6 +727,11 @@ void VkApp::updateVolume(
 		transferFunctions_[description.transferFunction.index].generation != description.transferFunction.generation)
 	{
 		throw std::invalid_argument("Updated volume references a stale texture handle");
+	}
+	if (description.colorSource == VolumeColorSource::TextureRgba &&
+		textures3D_[description.volumeTexture.index].description.format != TextureFormat::RGBA8_UNORM)
+	{
+		throw std::invalid_argument("VolumeColorSource::TextureRgba requires an RGBA8_UNORM texture");
 	}
 	VolumeResource& volume = volumes_[handle.index];
 	volume.description = description;
@@ -1044,7 +1054,8 @@ void VkApp::drawVolumeResource(
 			(description.clipping.clipPlaneEnabled ? 4 : 0) |
 			(description.clipping.clipBoxEnabled ? 8 : 0) |
 			(description.opacityModel == VolumeOpacityModel::ExponentialExtinction ? 16 : 0) |
-			(description.normalizeOpacityByStepLength ? 32 : 0);
+			(description.normalizeOpacityByStepLength ? 32 : 0) |
+			(description.colorSource == VolumeColorSource::TextureRgba ? 64 : 0);
 		push.flags = glm::ivec4(flags, 0, 0, 0);
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, volumePipeline_);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,

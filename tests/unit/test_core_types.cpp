@@ -652,6 +652,9 @@ namespace
 			"new volumes should default to exponential extinction");
 		require(volume.normalizeOpacityByStepLength,
 			"new volumes should normalize opacity by physical step length");
+		require(volume.colorSource ==
+			lightGraphics::VolumeColorSource::TransferFunction,
+			"new volumes should take colour from the transfer function");
 		volume.referenceStepLength = 0.0f;
 		requireThrows<std::invalid_argument>(
 			[&volume]() { lightGraphics::validateVolumeRenderDescription(volume); },
@@ -671,6 +674,15 @@ namespace
 		require(lightGraphics::parseVolumeOpacityModel("Exponential Extinction") ==
 			lightGraphics::VolumeOpacityModel::ExponentialExtinction,
 			"opacity model parser should ignore case and separators");
+		require(std::string(lightGraphics::volumeColorSourceName(
+			lightGraphics::VolumeColorSource::TextureRgba)) == "textureRgba",
+			"texture colour source should have a stable public name");
+		require(lightGraphics::parseVolumeColorSource("Texture RGBA") ==
+			lightGraphics::VolumeColorSource::TextureRgba,
+			"colour source parser should ignore case and separators");
+		requireThrows<std::invalid_argument>(
+			[]() { (void)lightGraphics::parseVolumeColorSource("vertex"); },
+			"colour source parser should reject unknown names");
 		require(lightGraphics::parseRenderLayer("transparent") ==
 			lightGraphics::RenderLayer::Transparent,
 			"render layer parser should map public names");
