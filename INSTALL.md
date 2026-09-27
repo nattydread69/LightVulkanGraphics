@@ -1,6 +1,6 @@
 # LightVulkanGraphics Installation Guide
 
-## Version 2.1.0
+## Version 2.1.1
 
 LightVulkanGraphics is a high-performance Vulkan graphics library for real-time visualization.
 
