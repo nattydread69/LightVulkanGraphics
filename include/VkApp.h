@@ -1245,6 +1245,9 @@ namespace lightGraphics
 		void updateScreenTextMesh(ScreenTextResource& resource);
 		void rebuildScreenTextMeshes();
 		void destroyCustomResources();
+		// Waits for in-flight frames before a destroy*() call frees GPU resources
+		// they may still reference. No-op before finalizeScene().
+		void waitIdleBeforeResourceDestroy();
 		void rebuildCustomPipelines();
 		VkPipeline createMaterialPipeline(
 			const MaterialDescription& description,

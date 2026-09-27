@@ -275,6 +275,20 @@ void VkApp::clearMeshDraws()
 	rebuildOrderedDrawResources();
 }
 
+void VkApp::waitIdleBeforeResourceDestroy()
+{
+	// Same guard as removeRiggedObject(): frames still in flight may reference the
+	// resource, and freeing it under them is a use-after-free on the GPU.
+	if (sceneFinalized_ && device_ != VK_NULL_HANDLE)
+	{
+		const VkResult result = vkDeviceWaitIdle(device_);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("vkDeviceWaitIdle failed before destroying a resource");
+		}
+	}
+}
+
 void VkApp::destroyMesh(MeshHandle handle)
 {
 	if (handle.index >= customMeshes_.size())
@@ -286,6 +300,7 @@ void VkApp::destroyMesh(MeshHandle handle)
 	{
 		throw std::invalid_argument("Mesh handle is stale");
 	}
+	waitIdleBeforeResourceDestroy();
 	meshDrawRequests_.erase(
 		std::remove_if(meshDrawRequests_.begin(), meshDrawRequests_.end(),
 			[handle](const MeshDrawRequest& request)
@@ -360,6 +375,7 @@ void VkApp::destroyMaterial(MaterialHandle handle)
 	{
 		throw std::invalid_argument("Material handle is invalid or stale");
 	}
+	waitIdleBeforeResourceDestroy();
 	MaterialResource& material = materials_[handle.index];
 	meshDrawRequests_.erase(
 		std::remove_if(meshDrawRequests_.begin(), meshDrawRequests_.end(),
@@ -553,6 +569,7 @@ void VkApp::destroyTexture3D(Texture3DHandle handle)
 			throw std::logic_error("Texture3D is still referenced by a volume");
 		}
 	}
+	waitIdleBeforeResourceDestroy();
 	Texture3DResource& texture = textures3D_[handle.index];
 	const std::uint32_t nextGeneration = texture.generation + 1;
 	vkDestroySampler(device_, texture.sampler, nullptr);
@@ -619,6 +636,7 @@ void VkApp::destroyTransferFunction(TransferFunctionHandle handle)
 			throw std::logic_error("Transfer function is still referenced by a volume");
 		}
 	}
+	waitIdleBeforeResourceDestroy();
 	TransferFunctionResource& transfer = transferFunctions_[handle.index];
 	destroyTexture(*transfer.texture);
 	transfer.texture.reset();
@@ -750,6 +768,7 @@ void VkApp::destroyVolume(VolumeHandle handle)
 	{
 		throw std::invalid_argument("Volume handle is invalid or stale");
 	}
+	waitIdleBeforeResourceDestroy();
 	VolumeResource& volume = volumes_[handle.index];
 	if (volume.descriptor != VK_NULL_HANDLE)
 	{
