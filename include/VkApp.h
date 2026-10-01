@@ -129,6 +129,25 @@ namespace lightGraphics::detail
 		uint32_t width = 0;
 		uint32_t height = 0;
 		std::string path;
+		// True when a noticeable share of texels (see createTextureFromPixels) is
+		// see-through -- hair cards, eyelashes, a cornea shell. recordCommandBuffer
+		// draws a rigged object's submeshes with such textures after its solid ones,
+		// so their blended texels land on top of the body instead of the background.
+		bool hasTranslucentTexels = false;
+	};
+
+	// rigged_mesh.frag's push constant block (keep the two in sync). A texel is
+	// drawn only when alphaMin <= alpha < alphaMax; forceOpaque writes it at full
+	// alpha (a see-through submesh's dense core, drawn like a solid surface).
+	// roughness 1.0 switches specular off -- used for hair cards, whose flat
+	// card normals otherwise catch the light as pale streaks.
+	struct RiggedMeshPush
+	{
+		float opacity = 1.0f;
+		float alphaMin = 0.05f;
+		float alphaMax = 2.0f;
+		float forceOpaque = 0.0f;
+		float roughness = 0.4f;
 	};
 
 	// Maps a generation-checked handle to the current position of its object in a
@@ -665,6 +684,11 @@ namespace lightGraphics
 		// meshes still resolve correctly via ordinary depth test/write, the same
 		// as while opaque.
 		VkPipeline riggedTransparentPipeline_ = VK_NULL_HANDLE;
+		// Soft-edge pass for submeshes with see-through textures (hair cards,
+		// eyelashes): blends the texels below the alpha cutout without writing
+		// depth, after their dense core has been drawn as solid -- see
+		// recordCommandBuffer's rigged-mesh passes. Cull none, like hair itself.
+		VkPipeline riggedFringePipeline_ = VK_NULL_HANDLE;
 		VkPipelineLayout riggedPipelineLayout_ = VK_NULL_HANDLE;
 
 	private:

@@ -456,6 +456,23 @@ namespace lightGraphics
 		texture->width = width;
 		texture->height = height;
 
+		// Count see-through texels (alpha below ~98%). A small tolerance share keeps
+		// an essentially opaque texture (a skin map with a few soft-edged texels in
+		// its UV padding) on the solid path.
+		{
+			const auto* rgba = static_cast<const uint8_t*>(pixels);
+			const size_t texelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+			size_t translucentTexels = 0;
+			for (size_t i = 0; i < texelCount; ++i)
+			{
+				if (rgba[i * 4 + 3] < 250)
+				{
+					++translucentTexels;
+				}
+			}
+			texture->hasTranslucentTexels = translucentTexels * 200 > texelCount; // > 0.5%
+		}
+
 		return texture;
 	}
 
