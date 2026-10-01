@@ -18,7 +18,7 @@
 
 /// @file LightVulkanGraphicsPublic.h
 /// @brief Public API facade for LightVulkanGraphics library
-/// @version 2.1.1
+/// @version 3.0.0
 /// @date 2026
 ///
 /// This header provides the main entry point for using LightVulkanGraphics.

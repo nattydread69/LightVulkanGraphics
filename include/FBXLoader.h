@@ -129,6 +129,19 @@ namespace lightGraphics
         uint32_t height = 0;
     };
 
+    // How VkApp's renderer treats a submesh's texture alpha. Auto: decided from
+    // the texture itself (a noticeable share of see-through texels -- hair cards,
+    // eyelashes -- makes it Translucent). Set explicitly through
+    // RiggedObject::getModel() when that guess is wrong for a material.
+    // Translucent submeshes draw after the solid ones, as a solid alpha >= 0.5
+    // core plus a blended fringe, without specular, and cast cutout shadows.
+    enum class MeshTranslucency
+    {
+        Auto,
+        Opaque,
+        Translucent
+    };
+
     // Structure to hold mesh data
     struct RiggedMesh
     {
@@ -140,6 +153,7 @@ namespace lightGraphics
         std::string diffuseTexturePath;
         std::shared_ptr<EmbeddedTextureData> embeddedTexture;
         std::string embeddedTextureKey;
+        MeshTranslucency translucency = MeshTranslucency::Auto;
         glm::mat4 globalBindTransform = glm::mat4(1.0f);
         std::vector<Bone> bones;
         std::map<std::string, int> boneMapping; // Maps bone names to indices

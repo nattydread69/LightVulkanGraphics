@@ -35,6 +35,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <filesystem>
@@ -304,6 +305,16 @@ namespace lightGraphics
 			vkDestroyPipelineLayout(device_, shadowPipelineLayout_, nullptr);
 			shadowPipelineLayout_ = VK_NULL_HANDLE;
 		}
+		if (shadowCutoutPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, shadowCutoutPipeline_, nullptr);
+			shadowCutoutPipeline_ = VK_NULL_HANDLE;
+		}
+		if (shadowCutoutPipelineLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipelineLayout(device_, shadowCutoutPipelineLayout_, nullptr);
+			shadowCutoutPipelineLayout_ = VK_NULL_HANDLE;
+		}
 		if (shadowRenderPass_ == VK_NULL_HANDLE)
 		{
 			return;
@@ -402,6 +413,57 @@ namespace lightGraphics
 		gp.subpass = 0;
 		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &shadowPipeline_));
 		vkDestroyShaderModule(device_, vs, nullptr);
+
+		// Cutout variant (see shadowCutoutPipeline_'s comment, VkApp.h): same
+		// state plus the texture coordinate and a fragment stage that discards
+		// transparent texels.
+		if (textureSetLayout_ == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		VkPipelineLayoutCreateInfo cutoutPlci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+		cutoutPlci.setLayoutCount = 1;
+		cutoutPlci.pSetLayouts = &textureSetLayout_;
+		cutoutPlci.pushConstantRangeCount = 1;
+		cutoutPlci.pPushConstantRanges = &pushRange;
+		VK_CHECK(vkCreatePipelineLayout(device_, &cutoutPlci, nullptr, &shadowCutoutPipelineLayout_));
+
+		std::array<VkVertexInputAttributeDescription, 6> cutoutAttrs{};
+		std::copy(attrs.begin(), attrs.end(), cutoutAttrs.begin());
+		cutoutAttrs[5] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
+		VkPipelineVertexInputStateCreateInfo cutoutVi = vi;
+		cutoutVi.vertexAttributeDescriptionCount = static_cast<uint32_t>(cutoutAttrs.size());
+		cutoutVi.pVertexAttributeDescriptions = cutoutAttrs.data();
+
+		auto mkModule = [&](const std::vector<char>& code) -> VkShaderModule {
+			VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+			info.codeSize = code.size();
+			info.pCode = reinterpret_cast<const uint32_t*>(code.data());
+			VkShaderModule module{};
+			VK_CHECK(vkCreateShaderModule(device_, &info, nullptr, &module));
+			return module;
+		};
+		VkShaderModule cutoutVs = mkModule(readFile(findShaderPath("shadow_cutout.vert.spv")));
+		VkShaderModule cutoutFs = mkModule(readFile(findShaderPath("shadow_cutout.frag.spv")));
+
+		VkPipelineShaderStageCreateInfo cutoutStages[2]{};
+		cutoutStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		cutoutStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+		cutoutStages[0].module = cutoutVs;
+		cutoutStages[0].pName = "main";
+		cutoutStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+		cutoutStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+		cutoutStages[1].module = cutoutFs;
+		cutoutStages[1].pName = "main";
+
+		gp.stageCount = 2;
+		gp.pStages = cutoutStages;
+		gp.pVertexInputState = &cutoutVi;
+		gp.layout = shadowCutoutPipelineLayout_;
+		VK_CHECK(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &shadowCutoutPipeline_));
+		vkDestroyShaderModule(device_, cutoutVs, nullptr);
+		vkDestroyShaderModule(device_, cutoutFs, nullptr);
 	}
 
 	void VkApp::createOriginalSpherePipeline()

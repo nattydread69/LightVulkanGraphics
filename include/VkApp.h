@@ -642,6 +642,13 @@ namespace lightGraphics
 		VkPipelineLayout shadowPipelineLayout_ = VK_NULL_HANDLE;
 		VkPipeline graphicsPipeline_ = VK_NULL_HANDLE;
 		VkPipeline shadowPipeline_ = VK_NULL_HANDLE;
+		// Shadow pass for rigged submeshes with see-through textures (hair cards,
+		// eye cornea shells): samples the texture and discards transparent
+		// texels. Set 0 is textureSetLayout_, so the submesh's own texture
+		// descriptor binds directly. Null if textureSetLayout_ wasn't available,
+		// in which case those submeshes fall back to shadowPipeline_.
+		VkPipelineLayout shadowCutoutPipelineLayout_ = VK_NULL_HANDLE;
+		VkPipeline shadowCutoutPipeline_ = VK_NULL_HANDLE;
 
 		// Multiple pipelines for different rendering modes
 		VkPipeline flexibleShapePipeline_ = VK_NULL_HANDLE;
@@ -924,6 +931,10 @@ namespace lightGraphics
 			uint32_t indexCount = 0;
 			std::shared_ptr<detail::Texture> texture;
 		};
+		// The mesh's own MeshTranslucency if set, else its texture's
+		// hasTranslucentTexels. Read every frame, so an app can change a mesh's
+		// setting after the object is added to the scene.
+		static bool isTranslucentRiggedMesh(const RiggedMeshRenderData& meshData);
 		struct RiggedInstanceRenderData
 		{
 			std::shared_ptr<RiggedObject> object;
