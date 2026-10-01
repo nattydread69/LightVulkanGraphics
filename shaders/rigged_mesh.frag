@@ -18,9 +18,14 @@ layout(set = 0, binding = 0) uniform UBO
 
 layout(set = 1, binding = 0) uniform sampler2D textureSampler;
 
+// Mirrors detail::RiggedMeshPush (VkApp.h).
 layout(push_constant) uniform Push
 {
     float opacity;
+    float alphaMin;
+    float alphaMax;
+    float forceOpaque;
+    float roughness;
 } push;
 
 const float specularPower = 32.0;
@@ -163,13 +168,27 @@ void main()
     vec3 viewDir = normalize(cameraPosWS - vPosWS);
 
     vec4 texSample = texture(textureSampler, vTexCoord);
+    // The rigged pipeline blends AND writes depth, so a fully transparent texel
+    // would still occlude whatever is drawn after it -- e.g. MakeHuman's
+    // high-poly eyes, whose transparent cornea shell (mapped to the alpha-0
+    // circle in the eye texture's corner) otherwise hides the iris and pupil
+    // underneath. The band [alphaMin, alphaMax) also splits a see-through
+    // submesh (hair cards) into a solid core pass and a blended fringe pass --
+    // see recordCommandBuffer. Only the texture's own alpha is tested:
+    // push.opacity (the stability display's whole-object fade) must still
+    // blend, not vanish.
+    if (texSample.a < push.alphaMin || texSample.a >= push.alphaMax)
+    {
+        discard;
+    }
     vec3 baseColor = texSample.rgb;
-    float roughness = 0.4;
+    float roughness = push.roughness;
     
     vec3 finalColor = calculateLighting(
         vNrmWS,
         viewDir,
         baseColor,
         roughness);
-    outColor = vec4(finalColor, texSample.a * push.opacity);
+    float texAlpha = push.forceOpaque > 0.5 ? 1.0 : texSample.a;
+    outColor = vec4(finalColor, texAlpha * push.opacity);
 }

@@ -696,6 +696,11 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, riggedTransparentPipeline_, nullptr);
 			riggedTransparentPipeline_ = VK_NULL_HANDLE;
 		}
+		if (riggedFringePipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, riggedFringePipeline_, nullptr);
+			riggedFringePipeline_ = VK_NULL_HANDLE;
+		}
 		if (riggedPipelineLayout_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipelineLayout(device_, riggedPipelineLayout_, nullptr);
@@ -721,7 +726,7 @@ namespace lightGraphics
 		VkPushConstantRange opacityPushRange{};
 		opacityPushRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 		opacityPushRange.offset = 0;
-		opacityPushRange.size = sizeof(float);
+		opacityPushRange.size = sizeof(detail::RiggedMeshPush);
 		VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 		plci.setLayoutCount = 2;
 		plci.pSetLayouts = setLayouts;
@@ -829,6 +834,19 @@ namespace lightGraphics
 		if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &riggedTransparentPipeline_) != VK_SUCCESS)
 		{
 			throw std::runtime_error("Failed to create rigged transparent graphics pipeline");
+		}
+
+		// Fringe pipeline: blended, cull none, depth-tested but not depth-written,
+		// so the faint edge texels of hair cards layer over whatever is already
+		// drawn (scalp, the cards' own solid cores) without hiding anything
+		// drawn after them.
+		VkPipelineDepthStencilStateCreateInfo dsFringe = ds;
+		dsFringe.depthWriteEnable = VK_FALSE;
+		gp.pRasterizationState = &rs;
+		gp.pDepthStencilState = &dsFringe;
+		if (vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &riggedFringePipeline_) != VK_SUCCESS)
+		{
+			throw std::runtime_error("Failed to create rigged fringe graphics pipeline");
 		}
 
 		vkDestroyShaderModule(device_, vs, nullptr);

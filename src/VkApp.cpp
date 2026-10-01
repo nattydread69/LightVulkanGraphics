@@ -744,6 +744,11 @@ namespace lightGraphics
 			vkDestroyPipeline(device_, riggedTransparentPipeline_, nullptr);
 			riggedTransparentPipeline_ = VK_NULL_HANDLE;
 		}
+		if (riggedFringePipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, riggedFringePipeline_, nullptr);
+			riggedFringePipeline_ = VK_NULL_HANDLE;
+		}
 		if (shadowPipeline_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipeline(device_, shadowPipeline_, nullptr);
@@ -3430,7 +3435,7 @@ namespace lightGraphics
 
 		// Draw rigged meshes
 		if (!riggedInstances_.empty() && riggedPipeline_ != VK_NULL_HANDLE &&
-		    riggedTransparentPipeline_ != VK_NULL_HANDLE)
+		    riggedTransparentPipeline_ != VK_NULL_HANDLE && riggedFringePipeline_ != VK_NULL_HANDLE)
 		{
 			if (!descriptorSets_.empty())
 			{
@@ -3458,101 +3463,141 @@ namespace lightGraphics
 				// display has set a lower alpha via RiggedObject::setColour().
 				float const riggedOpacity = riggedInstance.object ? riggedInstance.object->getColour().a : 1.0f;
 				bool const instanceIsTransparent = riggedOpacity < 1.0f;
-				vkCmdPushConstants(cmd, riggedPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
-					0, sizeof(float), &riggedOpacity);
 				// Pipeline is chosen per submesh, not once for the whole instance --
 				// see the hair exception below -- so track what's currently bound to
 				// avoid redundant vkCmdBindPipeline calls when neighbouring submeshes
 				// agree. Descriptor sets stay bound across a switch: both pipelines
 				// share riggedPipelineLayout_.
 				VkPipeline boundRiggedPipeline = VK_NULL_HANDLE;
-				for (const auto& meshData : riggedInstance.meshes)
+				// Three passes. The rigged pipeline blends but also writes depth, so
+				// in plain file order a see-through submesh listed before the body
+				// (aikido_variant10.glb's afro is its first mesh) blends against the
+				// background and then depth-rejects the head behind it, and a faint
+				// outer hair card hides the denser cards under it -- the hair reads
+				// as transparent. So:
+				//   0: submeshes with solid textures, as before;
+				//   1: see-through submeshes' dense core (alpha >= 0.5) drawn as
+				//      solid, so cards occlude each other properly;
+				//   2: their faint fringe (alpha < 0.5) blended over everything
+				//      already drawn, without writing depth.
+				enum RiggedPass { SolidPass, TranslucentCorePass, TranslucentFringePass, RiggedPassCount };
+				for (int pass = SolidPass; pass < RiggedPassCount; ++pass)
 				{
-					const detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[currentFrame_];
-					if (frameVertexBuffer.buffer == VK_NULL_HANDLE ||
-					    frameInstanceBuffer.buffer == VK_NULL_HANDLE ||
-					    meshData.indexBuffer.buffer == VK_NULL_HANDLE ||
-					    meshData.indexCount == 0)
+					detail::RiggedMeshPush riggedPush;
+					riggedPush.opacity = riggedOpacity;
+					if (pass != SolidPass)
 					{
-						continue;
+						riggedPush.roughness = 1.0f;
 					}
-
-					// riggedTransparentPipeline_ only differs from riggedPipeline_ by
-					// enabling back-face culling (see its own comment, VkApp.h) -- a fix
-					// for translucent *closed* volumes (sleeves, torso) whose far inside
-					// surface would otherwise blend on top of the near one. Hair is thin,
-					// double-sided card geometry, not a closed volume: culling half of
-					// every strand instead makes it read as a patchy, oddly-coloured mask
-					// wherever bangs/fringe drape over the face during the Stability
-					// display's semi-transparent shite/uke. Keep hair on the cull-none
-					// pipeline regardless of the character's own opacity -- matches its
-					// pre-existing (harmless) opaque-mode behaviour rather than opting it
-					// into a fix it was never the target of.
-					//
-					// Skin, unlike hair, DOES belong on the culled pipeline: a since-
-					// reverted attempt to also exempt it (on a theory of bad winding
-					// around the mouth) made the face artifact visibly worse, not better,
-					// confirming culling was helping there, not hurting. Direct inspection
-					// of aikido_shite.glb's own vertex/index buffers found the actual cause
-					// instead: the "male_muscle" skin primitive contains a ~485-vertex
-					// island sitting inside the head's own bounding volume at mouth/jaw
-					// height (isolated by connected-component analysis, weighted to the
-					// same "head" joint as the surrounding skin) -- almost certainly an
-					// inner-mouth/teeth remnant that ordinary opaque depth testing hides
-					// perfectly behind the closed lips, but which the *same* thin lip
-					// geometry can no longer fully hide once it's only 50% opaque. That
-					// geometry shares the skin mesh's own primitive and material, so no
-					// per-submesh pipeline or opacity dispatch (this loop's own
-					// granularity) can separate it from the visible face around it -- see
-					// the brown-face-artifact investigation for the full vertex dump.
-					// Fixing that residual properly needs an asset-level change (splitting
-					// or removing that island in aikido_shite.glb/aikido_uke.glb), not
-					// another pipeline tweak here.
-					bool const meshIsHair = meshData.mesh && meshData.mesh->materialName == "short02";
-					VkPipeline const desiredRiggedPipeline =
-						(instanceIsTransparent && !meshIsHair) ? riggedTransparentPipeline_ : riggedPipeline_;
-					if (desiredRiggedPipeline != boundRiggedPipeline)
+					if (pass == TranslucentCorePass)
 					{
-						vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredRiggedPipeline);
-						boundRiggedPipeline = desiredRiggedPipeline;
+						riggedPush.alphaMin = 0.5f;
+						riggedPush.forceOpaque = 1.0f;
 					}
-
-					std::array<VkBuffer, 2> riggedBuffers{
-						frameVertexBuffer.buffer,
-						frameInstanceBuffer.buffer
-					};
-					std::array<VkDeviceSize, 2> riggedOffsets{0, 0};
-
-					vkCmdBindVertexBuffers(cmd, 0, 2, riggedBuffers.data(), riggedOffsets.data());
-					vkCmdBindIndexBuffer(cmd, meshData.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
-
-					VkDescriptorSet textureSet = VK_NULL_HANDLE;
-					if (meshData.texture && meshData.texture->descriptor != VK_NULL_HANDLE)
+					else if (pass == TranslucentFringePass)
 					{
-						textureSet = meshData.texture->descriptor;
+						riggedPush.alphaMax = 0.5f;
 					}
-					else if (defaultTexture_ && defaultTexture_->descriptor != VK_NULL_HANDLE)
+					vkCmdPushConstants(cmd, riggedPipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT,
+						0, sizeof(riggedPush), &riggedPush);
+					for (const auto& meshData : riggedInstance.meshes)
 					{
-						textureSet = defaultTexture_->descriptor;
+						bool const meshIsTranslucent = meshData.texture && meshData.texture->hasTranslucentTexels;
+						if (meshIsTranslucent != (pass != SolidPass))
+						{
+							continue;
+						}
+
+						const detail::Buffer& frameVertexBuffer = meshData.vertexBuffers[currentFrame_];
+						if (frameVertexBuffer.buffer == VK_NULL_HANDLE ||
+						    frameInstanceBuffer.buffer == VK_NULL_HANDLE ||
+						    meshData.indexBuffer.buffer == VK_NULL_HANDLE ||
+						    meshData.indexCount == 0)
+						{
+							continue;
+						}
+
+						// riggedTransparentPipeline_ only differs from riggedPipeline_ by
+						// enabling back-face culling (see its own comment, VkApp.h) -- a fix
+						// for translucent *closed* volumes (sleeves, torso) whose far inside
+						// surface would otherwise blend on top of the near one. Hair is thin,
+						// double-sided card geometry, not a closed volume: culling half of
+						// every strand instead makes it read as a patchy, oddly-coloured mask
+						// wherever bangs/fringe drape over the face during the Stability
+						// display's semi-transparent shite/uke. Keep hair on the cull-none
+						// pipeline regardless of the character's own opacity -- matches its
+						// pre-existing (harmless) opaque-mode behaviour rather than opting it
+						// into a fix it was never the target of.
+						//
+						// Skin, unlike hair, DOES belong on the culled pipeline: a since-
+						// reverted attempt to also exempt it (on a theory of bad winding
+						// around the mouth) made the face artifact visibly worse, not better,
+						// confirming culling was helping there, not hurting. Direct inspection
+						// of aikido_shite.glb's own vertex/index buffers found the actual cause
+						// instead: the "male_muscle" skin primitive contains a ~485-vertex
+						// island sitting inside the head's own bounding volume at mouth/jaw
+						// height (isolated by connected-component analysis, weighted to the
+						// same "head" joint as the surrounding skin) -- almost certainly an
+						// inner-mouth/teeth remnant that ordinary opaque depth testing hides
+						// perfectly behind the closed lips, but which the *same* thin lip
+						// geometry can no longer fully hide once it's only 50% opaque. That
+						// geometry shares the skin mesh's own primitive and material, so no
+						// per-submesh pipeline or opacity dispatch (this loop's own
+						// granularity) can separate it from the visible face around it -- see
+						// the brown-face-artifact investigation for the full vertex dump.
+						// Fixing that residual properly needs an asset-level change (splitting
+						// or removing that island in aikido_shite.glb/aikido_uke.glb), not
+						// another pipeline tweak here.
+						// "short02" is aikido_shite.glb's hair; the newer MakeHuman variants'
+						// hair (and lashes) are caught by their see-through textures instead.
+						bool const meshIsHair = meshIsTranslucent ||
+							(meshData.mesh && meshData.mesh->materialName == "short02");
+						VkPipeline const desiredRiggedPipeline =
+							pass == TranslucentFringePass ? riggedFringePipeline_
+							: (instanceIsTransparent && !meshIsHair) ? riggedTransparentPipeline_ : riggedPipeline_;
+						if (desiredRiggedPipeline != boundRiggedPipeline)
+						{
+							vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredRiggedPipeline);
+							boundRiggedPipeline = desiredRiggedPipeline;
+						}
+
+						std::array<VkBuffer, 2> riggedBuffers{
+							frameVertexBuffer.buffer,
+							frameInstanceBuffer.buffer
+						};
+						std::array<VkDeviceSize, 2> riggedOffsets{0, 0};
+
+						vkCmdBindVertexBuffers(cmd, 0, 2, riggedBuffers.data(), riggedOffsets.data());
+						vkCmdBindIndexBuffer(cmd, meshData.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+
+						VkDescriptorSet textureSet = VK_NULL_HANDLE;
+						if (meshData.texture && meshData.texture->descriptor != VK_NULL_HANDLE)
+						{
+							textureSet = meshData.texture->descriptor;
+						}
+						else if (defaultTexture_ && defaultTexture_->descriptor != VK_NULL_HANDLE)
+						{
+							textureSet = defaultTexture_->descriptor;
+						}
+
+						if (textureSet == VK_NULL_HANDLE)
+						{
+							continue;
+						}
+
+						vkCmdBindDescriptorSets(
+							cmd,
+							VK_PIPELINE_BIND_POINT_GRAPHICS,
+							riggedPipelineLayout_,
+							1,
+							1,
+							&textureSet,
+							0,
+							nullptr
+						);
+
+						vkCmdDrawIndexed(cmd, meshData.indexCount, 1, 0, 0, 0);
 					}
-
-					if (textureSet == VK_NULL_HANDLE)
-					{
-						continue;
-					}
-
-					vkCmdBindDescriptorSets(
-						cmd,
-						VK_PIPELINE_BIND_POINT_GRAPHICS,
-						riggedPipelineLayout_,
-						1,
-						1,
-						&textureSet,
-						0,
-						nullptr
-					);
-
-					vkCmdDrawIndexed(cmd, meshData.indexCount, 1, 0, 0, 0);
 				}
 			}
 		}
