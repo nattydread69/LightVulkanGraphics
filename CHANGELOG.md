@@ -6,7 +6,14 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+**ABI break (3.0.0, `libLightVulkanGraphics.so.3`)**: `VkApp`, `detail::Texture` and
+`RiggedMesh` gained members, so applications must be rebuilt against the new headers.
+
 ### Added
+- `MeshTranslucency` (`RiggedMesh::translucency`): per-submesh override of how the
+  rigged renderer treats texture alpha; `Auto` (the default) decides from the texture.
+- Cutout shadows (`shadow_cutout.vert/.frag`) for rigged submeshes with see-through
+  textures, so hair cards and eye cornea shells no longer cast solid shadows.
 - **LVGUI**: a retained-mode GUI layer (immediate-mode rendering underneath) drawn as
   Vulkan geometry inside the same frame/render pass/swapchain image the library already
   renders, for parameter and debug panels beside a 3D scene. `Panel`, `Widget` and
@@ -41,6 +48,12 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Object state method implementations were split out of `src/VkApp.cpp` into `src/VkAppObjectState.cpp`.
 
 ### Fixed
+- Rigged meshes with see-through textures (MakeHuman hair cards, eyelashes, eyes) rendered
+  wrongly: texels blended but still wrote depth, so a transparent cornea shell hid the
+  iris, and hair listed before the body in the file showed the background through it.
+  Fully transparent texels are now discarded; see-through submeshes draw after solid
+  ones as an opaque alpha >= 0.5 core plus a blended, non-depth-writing fringe, without
+  specular highlights (flat hair-card normals caught the light as pale streaks).
 - The Vulkan validation-layer debug messenger printed to the console unconditionally, ignoring `debugOutput` / `LightVulkanGraphicsCreateInfo::enableDebugOutput` (both default `false`). It now always routes through `logMessage()`, so that flag is the sole switch for validation-layer chatter.
 - `FBXLoader::loadModel()` computed a skinned bone's world bind pose as `mesh.globalBindTransform * inverse(offsetMatrix)` for every source format. Assimp's glTF2 importer reports `mOffsetMatrix` already relative to the skin's common space, unlike its FBX importer (mesh-node-local); for a glTF/glb mesh node with a non-identity transform, premultiplying by `mesh.globalBindTransform` doubled that transform and corrupted every bone's bind position (e.g. a hip bind height collapsing from ~1m to ~0.1m with an axis swap). glTF/glb sources now use `inverse(offsetMatrix)` directly; FBX is unaffected (verified via `worker_skinning_sanity`).
 - `FBXLoader` never applied a node's accumulated hierarchy transform to its mesh's vertex data. Harmless for skinned meshes (positioned entirely by bone skinning) but for unskinned static-prop meshes -- a large multi-node scene, for example -- every mesh rendered at its own local-node origin, collapsing the whole scene into an overlapping jumble. Each unskinned mesh's node transform is now baked into its vertex positions/normals at load time.

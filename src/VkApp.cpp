@@ -764,6 +764,16 @@ namespace lightGraphics
 			vkDestroyPipelineLayout(device_, shadowPipelineLayout_, nullptr);
 			shadowPipelineLayout_ = VK_NULL_HANDLE;
 		}
+		if (shadowCutoutPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, shadowCutoutPipeline_, nullptr);
+			shadowCutoutPipeline_ = VK_NULL_HANDLE;
+		}
+		if (shadowCutoutPipelineLayout_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipelineLayout(device_, shadowCutoutPipelineLayout_, nullptr);
+			shadowCutoutPipelineLayout_ = VK_NULL_HANDLE;
+		}
 		if (riggedPipelineLayout_ != VK_NULL_HANDLE)
 		{
 			vkDestroyPipelineLayout(device_, riggedPipelineLayout_, nullptr);
@@ -2995,6 +3005,7 @@ namespace lightGraphics
 				}
 			}
 
+			VkPipeline boundShadowPipeline = shadowPipeline_;
 			for (const auto& riggedInstance : riggedInstances_)
 			{
 				const detail::Buffer& frameInstanceBuffer = riggedInstance.instanceBuffers[currentFrame_];
@@ -3013,6 +3024,25 @@ namespace lightGraphics
 						continue;
 					}
 
+					// See-through submeshes (hair cards, cornea shells) cast shadows
+					// only from their solid texels -- see shadowCutoutPipeline_.
+					bool const useCutout = shadowCutoutPipeline_ != VK_NULL_HANDLE &&
+						isTranslucentRiggedMesh(meshData) &&
+						meshData.texture && meshData.texture->descriptor != VK_NULL_HANDLE;
+					VkPipeline const desiredShadowPipeline = useCutout ? shadowCutoutPipeline_ : shadowPipeline_;
+					if (desiredShadowPipeline != boundShadowPipeline)
+					{
+						VkPipelineLayout const layout = useCutout ? shadowCutoutPipelineLayout_ : shadowPipelineLayout_;
+						vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, desiredShadowPipeline);
+						vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(push), &push);
+						boundShadowPipeline = desiredShadowPipeline;
+					}
+					if (useCutout)
+					{
+						vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowCutoutPipelineLayout_,
+							0, 1, &meshData.texture->descriptor, 0, nullptr);
+					}
+
 					std::array<VkBuffer, 2> buffers{frameVertexBuffer.buffer, frameInstanceBuffer.buffer};
 					std::array<VkDeviceSize, 2> offsets{0, 0};
 					vkCmdBindVertexBuffers(cmd, 0, 2, buffers.data(), offsets.data());
@@ -3023,6 +3053,15 @@ namespace lightGraphics
 
 			vkCmdEndRenderPass(cmd);
 		}
+	}
+
+	bool VkApp::isTranslucentRiggedMesh(const RiggedMeshRenderData& meshData)
+	{
+		if (meshData.mesh && meshData.mesh->translucency != MeshTranslucency::Auto)
+		{
+			return meshData.mesh->translucency == MeshTranslucency::Translucent;
+		}
+		return meshData.texture && meshData.texture->hasTranslucentTexels;
 	}
 
 	void VkApp::recordCommandBuffer(VkCommandBuffer cmd, uint32_t imageIndex)
@@ -3502,7 +3541,7 @@ namespace lightGraphics
 						0, sizeof(riggedPush), &riggedPush);
 					for (const auto& meshData : riggedInstance.meshes)
 					{
-						bool const meshIsTranslucent = meshData.texture && meshData.texture->hasTranslucentTexels;
+						bool const meshIsTranslucent = isTranslucentRiggedMesh(meshData);
 						if (meshIsTranslucent != (pass != SolidPass))
 						{
 							continue;
