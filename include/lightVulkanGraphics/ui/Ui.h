@@ -60,6 +60,7 @@
 #include "widgets/Image.h"
 #include "widgets/TabBar.h"
 #include "widgets/ListBox.h"
+#include "widgets/TreeView.h"
 #include "widgets/ContextMenu.h"
 #include "widgets/LogView.h"
 #include "widgets/FileListView.h"

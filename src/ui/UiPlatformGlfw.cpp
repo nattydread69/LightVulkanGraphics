@@ -63,6 +63,22 @@ int translateMods(int glfwMods) {
 	return mods;
 }
 
+// The Mod:: bit a modifier key controls, and the key on the other side of the keyboard
+// that controls it too. 0 / GLFW_KEY_UNKNOWN for every other key.
+int modifierBitOf(int glfwKey, int& otherKey) {
+	switch (glfwKey) {
+		case GLFW_KEY_LEFT_SHIFT:    otherKey = GLFW_KEY_RIGHT_SHIFT;   return Mod::Shift;
+		case GLFW_KEY_RIGHT_SHIFT:   otherKey = GLFW_KEY_LEFT_SHIFT;    return Mod::Shift;
+		case GLFW_KEY_LEFT_CONTROL:  otherKey = GLFW_KEY_RIGHT_CONTROL; return Mod::Ctrl;
+		case GLFW_KEY_RIGHT_CONTROL: otherKey = GLFW_KEY_LEFT_CONTROL;  return Mod::Ctrl;
+		case GLFW_KEY_LEFT_ALT:      otherKey = GLFW_KEY_RIGHT_ALT;     return Mod::Alt;
+		case GLFW_KEY_RIGHT_ALT:     otherKey = GLFW_KEY_LEFT_ALT;      return Mod::Alt;
+		case GLFW_KEY_LEFT_SUPER:    otherKey = GLFW_KEY_RIGHT_SUPER;   return Mod::Super;
+		case GLFW_KEY_RIGHT_SUPER:   otherKey = GLFW_KEY_LEFT_SUPER;    return Mod::Super;
+		default:                     otherKey = GLFW_KEY_UNKNOWN;       return 0;
+	}
+}
+
 int translateKey(int glfwKey) {
 	switch (glfwKey) {
 		case GLFW_KEY_BACKSPACE:  return Key::Backspace;
@@ -154,7 +170,11 @@ void onKeyTrampoline(GLFWwindow* window, int key, int scancode, int action, int 
 		if (it->second.target) {
 			const bool pressed = (action == GLFW_PRESS || action == GLFW_REPEAT);
 			const bool repeat  = (action == GLFW_REPEAT);
-			it->second.target->injectKey(translateKey(key), translateMods(mods), pressed, repeat);
+			int otherKey = GLFW_KEY_UNKNOWN;
+			const int modBit = modifierBitOf(key, otherKey);
+			const bool otherDown = otherKey != GLFW_KEY_UNKNOWN && glfwGetKey(window, otherKey) == GLFW_PRESS;
+			const int modsAfter = UiPlatformGlfw::modsAfterKeyEvent(modBit, pressed, translateMods(mods), otherDown);
+			it->second.target->injectKey(translateKey(key), modsAfter, pressed, repeat);
 		}
 		if (it->second.prevKey) {
 			it->second.prevKey(window, key, scancode, action, mods);
@@ -319,6 +339,16 @@ void UiPlatformGlfw::injectMouseButton(MouseButton button, bool pressed) {
 
 void UiPlatformGlfw::injectScroll(float delta) {
 	m_pending.wheelDelta += delta;
+}
+
+int UiPlatformGlfw::modsAfterKeyEvent(int keyModBit, bool pressed, int mods, bool otherKeyDown) {
+	if (keyModBit == 0) {
+		return mods;
+	}
+	if (pressed || otherKeyDown) {
+		return mods | keyModBit;
+	}
+	return mods & ~keyModBit;
 }
 
 void UiPlatformGlfw::injectKey(int key, int mods, bool pressed, bool repeat) {

@@ -243,6 +243,7 @@ never hit-testable) and `setEnabled(false)` (greys it out and blocks input).
 | `TextBox(label, initial)` | Free text. `setFilter(Integer/Decimal/Identifier)`, `setPlaceholder`, `setMaxLength`, `setPasswordMode`, `setValidator` (red border when it returns false). |
 | `DropDown(label, items, initialIndex)` | A combo box; scrolls its own popup past 12 items. |
 | `ListBox(label, items, initialIndex)` | Same list, always visible instead of behind a popup — for when the selection itself is the point. `setVisibleRows(n)`, `initialIndex = -1` for "nothing selected yet". |
+| `TreeView(label)` | A collapsible hierarchy — scene graph, skeleton, dataset groups. `addNode(text, parent)`, arrows/keyboard to open branches, double-click or Enter to activate. See [Trees](#trees). |
 | `ColorEdit3(label, Color)` / `ColorEdit4(label, Color)` | A swatch that opens a saturation/value + hue (+ alpha, `ColorEdit4`) picker popup. |
 
 **Grouping / layout:**
@@ -392,6 +393,33 @@ axis with `setXRange(lo, hi)` / `setYRange(lo, hi)`. The user can zoom with the 
 clicking a legend entry hides or shows that series, and hovering reads off the nearest
 point. To react to the user's zoom — say, to re-sample a function over the visible range,
 as `function_plotter_demo` does — use `setOnViewChange([](const lvgui::PlotRange& v) { ... })`.
+
+## Trees
+
+`TreeView` shows anything with a parent/child shape. Build it with `addNode()`, which
+returns an int id for the new node; pass that id as the parent of its children:
+
+```cpp
+auto* tree = panel->add<lvgui::TreeView>();
+tree->setVisibleRows(12);
+int scene  = tree->addNode("Scene");
+int lights = tree->addNode("Lights", scene);
+int key    = tree->addNode("Key light", lights);
+tree->setNodeDetail(key, "spot");          // dimmed text at the right of the row
+tree->setNodeUserData(key, keyLightIndex); // your own index, read back later
+tree->setExpanded(scene, true);            // nodes start collapsed
+
+tree->setOnSelectionChange([tree](int node) {
+    if (node >= 0) { selectLight(tree->nodeUserData(node)); }
+});
+tree->setOnActivate([](int node) { /* double-click or Enter */ });
+```
+
+Ids stay valid until `clear()`, so they are safe to keep. `removeNode()` removes a whole
+subtree, `reveal(node)` opens the way to a node and scrolls to it, and
+`setSelectedNode(node)` selects one (revealing it). The user opens branches with the
+arrows (Shift+click opens a whole branch), Left/Right, or a double-click, and can type a
+name to jump to it. `fbx_model_inspector` shows a model's bone hierarchy this way.
 
 ## File dialogs
 

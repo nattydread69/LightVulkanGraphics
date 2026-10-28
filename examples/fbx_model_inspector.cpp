@@ -26,7 +26,9 @@
 //
 // Widgets demonstrated:
 //   MenuBar + OpenFileDialog -- File > Open... browses assets/*.fbx
-//   ListBox     -- mesh list, bone list, material list (click a row to inspect it)
+//   ListBox     -- mesh list and material list (click a row to inspect it)
+//   TreeView    -- the bone hierarchy (click a bone to inspect it; arrows or
+//                  Left/Right open and close branches, Shift+click opens a whole limb)
 //   DropDown    -- animation clip picker
 //   Slider      -- animation scrub position (drag to seek) and playback speed
 //   PlotLine    -- a rolling "timeline" of normalised playback position
@@ -135,10 +137,16 @@ struct MaterialSummary
 // Everything the panel needs to know about the currently loaded model, rebuilt in full
 // each time a new file is loaded. Kept separate from the widgets themselves so
 // rebuildX() only has to write into ListBox::setItems() etc., never re-derive this data.
+struct BoneSummary
+{
+	std::string name;
+	int parent = -1;   // index into ModelSummary::bones; -1 for a root
+};
+
 struct ModelSummary
 {
 	std::vector<std::string> meshLabels;
-	std::vector<std::string> boneLabels;
+	std::vector<BoneSummary> bones;   // in the model's own bone order
 	std::vector<MaterialSummary> materials;
 	std::vector<std::string> animationLabels;
 	bool valid = false;
@@ -176,10 +184,15 @@ ModelSummary summarize(const std::shared_ptr<lightGraphics::RiggedModel>& model)
 		}
 	}
 
-	for (std::size_t i = 0; i < model->bones.size(); ++i)
+	for (const auto& bone : model->bones)
 	{
-		const auto& bone = model->bones[i];
-		summary.boneLabels.push_back("[" + std::to_string(i) + "] " + bone.name);
+		BoneSummary b;
+		b.name = bone.name.empty() ? std::string("(unnamed bone)") : bone.name;
+		if (bone.parentIndex >= 0 && static_cast<std::size_t>(bone.parentIndex) < model->bones.size())
+		{
+			b.parent = bone.parentIndex;
+		}
+		summary.bones.push_back(std::move(b));
 	}
 
 	for (const auto& anim : model->animations)
@@ -226,7 +239,7 @@ struct Inspector
 	std::array<lvgui::Label*, 4> meshDetailLines{};
 
 	lvgui::Label* boneCountLabel = nullptr;
-	lvgui::ListBox* boneList = nullptr;
+	lvgui::TreeView* boneTree = nullptr;
 	std::array<lvgui::Label*, 5> boneDetailLines{};
 
 	lvgui::ListBox* materialList = nullptr;
@@ -270,6 +283,70 @@ struct Inspector
 		meshDetailLines[1]->setText("Vertices: " + std::to_string(mesh.vertices.size()));
 		meshDetailLines[2]->setText("Triangles: " + std::to_string(mesh.indices.size() / 3));
 		meshDetailLines[3]->setText("Bones used: " + std::to_string(mesh.bones.size()));
+	}
+
+	// The model's bone index of the bone selected in the tree, or -1.
+	int selectedBoneIndex() const
+	{
+		if (!boneTree || boneTree->selectedNode() < 0)
+		{
+			return -1;
+		}
+		return static_cast<int>(boneTree->nodeUserData(boneTree->selectedNode()));
+	}
+
+	// Fills the bone tree from summary.bones. A TreeView node needs its parent to be in
+	// the tree already, and a file may list its bones in any order, so they go in
+	// breadth-first from the roots. Each node carries its bone index as user data.
+	void rebuildBoneTree()
+	{
+		boneTree->clear();
+		const auto& bones = summary.bones;
+		std::vector<std::vector<int>> children(bones.size());
+		std::vector<int> queue;
+		for (std::size_t i = 0; i < bones.size(); ++i)
+		{
+			int parent = bones[i].parent;
+			(parent < 0 ? queue : children[static_cast<std::size_t>(parent)]).push_back(static_cast<int>(i));
+		}
+
+		std::vector<int> nodeOfBone(bones.size(), -1);
+		auto addBone = [&](int bone, int parentNode)
+		{
+			int node = boneTree->addNode(bones[static_cast<std::size_t>(bone)].name, parentNode);
+			boneTree->setNodeUserData(node, bone);
+			boneTree->setNodeDetail(node, "#" + std::to_string(bone));
+			// Open the first two levels, and carry on down any chain of only children
+			// (RootNode > Armature > Root > Hips, typically) to where the skeleton
+			// first branches -- its shape at a glance, without unrolling all of it.
+			int parent = bones[static_cast<std::size_t>(bone)].parent;
+			bool onlyChild = parent >= 0 && children[static_cast<std::size_t>(parent)].size() == 1 &&
+				boneTree->isExpanded(parentNode);
+			boneTree->setExpanded(node, boneTree->depthOf(node) < 2 || onlyChild);
+			nodeOfBone[static_cast<std::size_t>(bone)] = node;
+		};
+		for (std::size_t q = 0; q < queue.size(); ++q)
+		{
+			int bone = queue[q];
+			int parent = bones[static_cast<std::size_t>(bone)].parent;
+			addBone(bone, parent < 0 ? -1 : nodeOfBone[static_cast<std::size_t>(parent)]);
+			for (int child : children[static_cast<std::size_t>(bone)])
+			{
+				queue.push_back(child);
+			}
+		}
+		// A parent chain that loops back on itself never reaches a root. Show such bones
+		// at the top level rather than silently leave them out of an inspector.
+		for (std::size_t i = 0; i < bones.size(); ++i)
+		{
+			if (nodeOfBone[i] < 0)
+			{
+				addBone(static_cast<int>(i), -1);
+			}
+		}
+
+		const auto& roots = boneTree->childrenOf(-1);
+		boneTree->setSelectedNode(roots.empty() ? -1 : roots.front(), true);
 	}
 
 	void updateBoneDetail(int index)
@@ -386,12 +463,11 @@ struct Inspector
 
 		if (boneCountLabel)
 		{
-			boneCountLabel->setText(std::to_string(summary.boneLabels.size()) + " bone(s)");
+			boneCountLabel->setText(std::to_string(summary.bones.size()) + " bone(s)");
 		}
-		if (boneList)
+		if (boneTree)
 		{
-			boneList->setItems(summary.boneLabels);
-			boneList->setSelectedIndex(summary.boneLabels.empty() ? -1 : 0, true);
+			rebuildBoneTree();
 		}
 
 		if (materialList)
@@ -467,11 +543,11 @@ struct Inspector
 
 		rebuildFromModel();
 		updateMeshDetail(meshList ? meshList->selectedIndex() : -1);
-		updateBoneDetail(boneList ? boneList->selectedIndex() : -1);
+		updateBoneDetail(selectedBoneIndex());
 		updateMaterialDetail(materialList ? materialList->selectedIndex() : -1);
 
 		log("Loaded OK: " + std::to_string(summary.meshLabels.size()) + " mesh(es), " +
-			std::to_string(summary.boneLabels.size()) + " bone(s), " +
+			std::to_string(summary.bones.size()) + " bone(s), " +
 			std::to_string(summary.materials.size()) + " material(s), " +
 			std::to_string(summary.animationLabels.size()) + " animation clip(s).");
 	}
@@ -490,6 +566,13 @@ struct Inspector
 	void handleGlobalShortcuts(lvgui::GuiContext& gui)
 	{
 		if (!riggedObject || summary.animationLabels.empty() || gui.wantsKeyboard())
+		{
+			return;
+		}
+		// While the bone tree has focus the arrow and page keys move through it and
+		// typing jumps to a bone, so these shortcuts stand aside until focus moves on
+		// (clicking the 3D view clears it).
+		if (boneTree && gui.focusedId() == boneTree->id())
 		{
 			return;
 		}
@@ -629,14 +712,15 @@ int main()
 
 		auto* boneSection = panel->add<lvgui::CollapsingSection>("Bones", false);
 		inspector.boneCountLabel = boneSection->add<lvgui::Label>("0 bone(s)");
-		inspector.boneList = boneSection->add<lvgui::ListBox>("", std::vector<std::string>{}, -1);
-		inspector.boneList->setVisibleRows(6);
+		inspector.boneTree = boneSection->add<lvgui::TreeView>();
+		inspector.boneTree->setVisibleRows(9);
+		inspector.boneTree->setEmptyText("No bones");
 		inspector.boneDetailLines[0] = boneSection->add<lvgui::Label>("Select a bone to see its details.");
 		for (std::size_t i = 1; i < inspector.boneDetailLines.size(); ++i)
 		{
 			inspector.boneDetailLines[i] = boneSection->add<lvgui::Label>("");
 		}
-		inspector.boneList->setOnChange([&inspector](int idx) { inspector.updateBoneDetail(idx); });
+		inspector.boneTree->setOnSelectionChange([&inspector](int) { inspector.updateBoneDetail(inspector.selectedBoneIndex()); });
 
 		auto* materialSection = panel->add<lvgui::CollapsingSection>("Materials", true);
 		inspector.materialList = materialSection->add<lvgui::ListBox>("", std::vector<std::string>{}, -1);
@@ -664,7 +748,8 @@ int main()
 		});
 
 		auto* shortcutHintLabel = animSection->add<lvgui::Label>(
-			"Keyboard: Left/Right (or PageUp/PageDown) = prev/next clip, Space = play/pause.");
+			"Keyboard: Left/Right (or PageUp/PageDown) = prev/next clip, Space = play/pause "
+			"(click the 3D view first if the bone tree has focus).");
 		shortcutHintLabel->setWordWrap(true);
 		shortcutHintLabel->setColor(lvgui::Color{ 0x9A, 0xA3, 0xAF, 0xFF });
 

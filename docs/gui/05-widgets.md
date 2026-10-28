@@ -833,6 +833,79 @@ the trailing `itemSpacing`, so a `Scrollable` panel never grows a scrollbar over
 never less than `setVisibleRows()`. That is what lets a `Resizable` file dialog's list
 grow and shrink with the dialog.
 
+## TreeView
+
+```cpp
+class TreeView : public Widget {
+public:
+    explicit TreeView(std::string label = {});
+    int  addNode(std::string text, int parent = -1);   // returns the id; -1 parent = top level
+    void removeNode(int);          // and its subtree; other ids don't change
+    void clear();                  // ids start again from 0
+    bool isValid(int) const;  int nodeCount() const;
+    void setNodeText(int, std::string);      const std::string& nodeText(int) const;
+    void setNodeDetail(int, std::string);    // dimmed, right-aligned ("spot", "#12")
+    void setNodeUserData(int, std::int64_t); std::int64_t nodeUserData(int) const;
+    int  parentOf(int) const;  const std::vector<int>& childrenOf(int) const;  int depthOf(int) const;
+    void setExpanded(int, bool, bool recursive = false);  bool isExpanded(int) const;
+    void expandAll();  void collapseAll();
+    void reveal(int);              // open its ancestors, scroll it into view
+    int  selectedNode() const;     // -1 = none
+    void setSelectedNode(int, bool fireCallback = false);   // reveals it
+    void setOnSelectionChange(std::function<void(int)>);
+    void setOnActivate(std::function<void(int)>);           // double-click / Enter
+    void setOnToggle(std::function<void(int, bool)>);       // user expand/collapse
+    void setVisibleRows(int);      // default 8
+    void setEmptyText(std::string);
+};
+```
+
+A scrollable, collapsible hierarchy: a scene graph, a skeleton's bones, a dataset's
+groups. Each row is one node, indented under its parent, with a disclosure arrow on
+every node that has children and a faint guide line down each open branch.
+
+**Nodes are ints.** `addNode(text, parent)` returns ids 0, 1, 2, ... in the order nodes
+are added; a parent must exist before its children (`addNode` returns -1 for a parent
+that doesn't). Ids are stable until `clear()` — `removeNode()` leaves a gap rather than
+renumbering — so an application can key its own data by them, or hang an index off each
+node with `setNodeUserData()` (`fbx_model_inspector` stores the model's bone index
+there). New nodes start collapsed. `setExpanded()` on a node with no children yet is
+remembered, so a branch can be opened before it is filled.
+
+**Mouse.** Like `FileListView`, a row is selected on press, and a second press on the
+same row within 0.4 s activates it; on a node with children that double-click also
+opens or closes it. Pressing the arrow toggles the node *without* selecting it, as
+native trees do; Shift+press does the whole subtree. Pressing below the last row clears
+the selection. Opening a node scrolls just far enough to bring its new rows into view,
+but never scrolls the node itself off the top.
+
+**Keyboard while focused.** Up/Down/PageUp/PageDown/Home/End move through the rows that
+are showing (no wrap); Right opens a closed node, or steps into the first child of an
+open one; Left closes an open node, or steps out to the parent; Enter activates; typing
+jumps to the first showing row whose text starts with what was typed (type-ahead, reset
+after a 1 s pause).
+
+**The selection is never left on a row the user can't see.** Collapsing a branch that
+contains the selection — by the arrow, Left, or a double-click — moves the selection up
+to the node that was collapsed, and fires `setOnSelectionChange`. A *programmatic*
+`setExpanded(…, false)` or `collapseAll()` leaves the selection where it is (hidden);
+the arrow keys then carry on from its nearest showing ancestor. `removeNode()` clears a
+selection inside the removed subtree without firing the callback, the same silence as
+every other setter.
+
+**Callbacks may rebuild the tree.** A handler is free to `clear()` and refill, or remove
+the node it was handed: the widget stops processing that frame's input after
+`onActivate`, and re-reads its rows after every other callback.
+
+**Scrolling** is `FileListView`'s: three rows per wheel notch (accumulated), a draggable
+thumb, and track clicks that page. The tree consumes the wheel while hovered
+(`wantsWheel()`), so its panel doesn't scroll underneath it.
+
+**No recursion anywhere** — building the visible rows, `removeNode()`, recursive
+expand/collapse — so a pathologically deep tree (a 20 000-level chain in the tests) is
+fine. Single selection only; there is no drag-and-drop reparenting or per-node
+checkbox.
+
 ## OpenFileDialog and SaveFileDialog
 
 ```cpp

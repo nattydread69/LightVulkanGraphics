@@ -45,6 +45,13 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   `setOnViewChange()` reports user zooms and pans. `function_plotter_demo` now uses it
   (and re-samples the function over the zoomed range), and `gui_demo` has a live
   streaming plot panel.
+- **LVGUI `TreeView`**: a scrollable, collapsible hierarchy -- nodes added with
+  `addNode(text, parent)` under stable int ids, optional per-node detail text and user
+  data, disclosure arrows (Shift+click opens or closes a whole subtree), indent guides,
+  double-click/Enter activation, keyboard navigation (Up/Down/PageUp/PageDown/Home/End,
+  Right/Left to open/step in and close/step out), type-ahead, `reveal()`, and a
+  draggable scrollbar. `fbx_model_inspector` now shows the bone hierarchy as a tree
+  instead of a flat list, and `gui_demo` has a scene-graph tree panel.
 - `VolumeColorSource::TextureRgba`: volumes can take their colour directly from an
   RGBA8 3D texture, with the texture's alpha mapped to opacity through the transfer
   function, so colour and opacity can show different quantities. The default,
@@ -94,6 +101,13 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   straight to the platform and nothing ever asked for the arrow again. Cursor requests
   now last one frame, defaulting back to the arrow, and the platform is only told when
   the shape actually changes.
+- **LVGUI**: on X11, GLFW reports a modifier key's own press with the modifier state from
+  *before* the press, and its release likewise. Pressing Shift therefore told the GUI
+  Shift was up, and releasing it told the GUI Shift was down -- until the next key event.
+  Every modifier+mouse gesture was inverted on Linux: Ctrl-click text entry and Shift
+  fine-adjustment drags on sliders and drag values, and `PlotView`'s Shift/Ctrl wheel
+  zoom. The GLFW layer now applies a modifier key's own transition to the state it
+  reports.
 - `-DLVG_BUILD_UI=OFF` builds failed to compile: `VkApp::pollKey()` was declared only
   inside the `LVG_WITH_UI` block of `VkApp.h` but defined (and used by the rigged
   animation shortcuts) unconditionally. It is now declared for both configurations.

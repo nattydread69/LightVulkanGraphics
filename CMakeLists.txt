@@ -755,8 +755,8 @@ if (LVG_BUILD_EXAMPLES)
 		lvg_configure_build_tree_example(perf_overlay_demo)
 		target_link_libraries(perf_overlay_demo PRIVATE LightVulkanGraphics::UI)
 
-		# 2D math-function plotter: a custom Widget (PlotCanvas) drawn directly with
-		# DrawList primitives, plus a small self-contained expression parser -- see the
+		# 2D math-function plotter: a PlotView that resamples the curve over whatever the
+		# user zooms or pans to, plus a small self-contained expression parser -- see the
 		# same LightVulkanGraphicsUI-linking rationale on gui_demo just above.
 		add_executable(function_plotter_demo examples/function_plotter_demo.cpp)
 		lvg_configure_build_tree_example(function_plotter_demo)

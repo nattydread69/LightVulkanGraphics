@@ -64,6 +64,9 @@
 //   Modal       -- "Clear log..." opens a confirmation dialog that blocks every other
 //                  panel and the camera entirely until dismissed (Cancel, Clear it,
 //                  the title-bar X, or Escape) -- docs/gui/05, "Panel", "Modal panels"
+//   TreeView    -- a made-up scene graph (right): click the arrows (Shift+click opens a
+//                  whole branch), or Tab to it and use the arrow keys; double-click or
+//                  Enter logs the node, typing jumps to a matching name
 //   PlotView    -- a live, streaming plot (top middle): series appended every frame
 //                  into rolling windows, auto-fit making the X axis scroll. Wheel zooms
 //                  (Shift: X only, Ctrl: Y only), drag pans, double-click resumes
@@ -464,6 +467,52 @@ int main()
 			solverLog->push("[gui-demo] File > Open: " + path);
 		});
 		openDialog.setOnCancel([solverLog] { solverLog->push("[gui-demo] File > Open cancelled"); });
+
+		// docs/gui/05-widgets.md, "TreeView": a collapsible hierarchy, here a made-up scene
+		// graph. Click an arrow to open or close a branch (Shift+click: the whole branch),
+		// or Tab to the tree and use the arrow keys; double-click or Enter activates a
+		// node, which just logs it.
+		auto* treePanel = gui.createPanel("TreeView", { 1036.0f, 100.0f, 228.0f, 420.0f });
+		auto* sceneTree = treePanel->add<lvgui::TreeView>();
+		sceneTree->setVisibleRows(15);
+		{
+			auto add = [sceneTree](const char* text, int parent, const char* detail = "") {
+				int node = sceneTree->addNode(text, parent);
+				sceneTree->setNodeDetail(node, detail);
+				return node;
+			};
+			int world = add("World", -1);
+			add("Camera", world, "persp");
+			int lights = add("Lights", world, "3");
+			add("Key light", lights, "spot");
+			add("Fill light", lights, "point");
+			add("Rim light", lights, "spot");
+			int env = add("Environment", world);
+			add("Sky", env, "HDR");
+			add("Ground grid", env);
+			int props = add("Props", world, "12");
+			for (int i = 1; i <= 12; ++i) {
+				add(("Crate " + std::to_string(i)).c_str(), props, "mesh");
+			}
+			int worker = add("Worker", world, "rigged");
+			int hips = add("Hips", worker);
+			int spine = add("Spine", hips);
+			int chest = add("Chest", spine);
+			add("Head", add("Neck", chest));
+			add("Hand.L", add("Arm.L", chest));
+			add("Hand.R", add("Arm.R", chest));
+			add("Foot.L", add("Leg.L", hips));
+			add("Foot.R", add("Leg.R", hips));
+			sceneTree->setExpanded(world, true);
+			sceneTree->setExpanded(lights, true);
+		}
+		auto* treeSelection = treePanel->add<lvgui::Label>("Selected: (none)");
+		sceneTree->setOnSelectionChange([sceneTree, treeSelection](int node) {
+			treeSelection->setText(node < 0 ? std::string("Selected: (none)") : "Selected: " + sceneTree->nodeText(node));
+		});
+		sceneTree->setOnActivate([sceneTree, solverLog](int node) {
+			solverLog->push("[gui-demo] tree: activated " + sceneTree->nodeText(node));
+		});
 
 		panel->add<lvgui::Separator>("Modal");
 

@@ -225,6 +225,38 @@ namespace {
 		std::cout << "✓ testKeyAndModCodesAreDistinct\n";
 	}
 
+	// X11's key callback reports a modifier key's own press with the state from before
+	// it (Shift down -> mods says Shift up) and its release likewise (Shift up -> mods
+	// says Shift still down); Win32 already includes the key's own transition. Either
+	// way, what reaches injectKey must be the state after the event.
+	void testModifierKeysReportTheirOwnTransition() {
+		using P = lvgui::UiPlatformGlfw;
+		// X11-style.
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Shift, true, 0, false) == lvgui::Mod::Shift);
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Shift, false, lvgui::Mod::Shift, false) == 0);
+		// Win32-style: already right, left alone.
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Ctrl, true, lvgui::Mod::Ctrl, false) == lvgui::Mod::Ctrl);
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Ctrl, false, 0, false) == 0);
+		// Other modifiers held at the same time are untouched.
+		int const shiftCtrl = lvgui::Mod::Shift | lvgui::Mod::Ctrl;
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Shift, false, shiftCtrl, false) == lvgui::Mod::Ctrl);
+		// Releasing one Shift while the other is still held keeps Shift down.
+		assert(P::modsAfterKeyEvent(lvgui::Mod::Shift, false, lvgui::Mod::Shift, true) == lvgui::Mod::Shift);
+		// Not a modifier key: mods passes straight through.
+		assert(P::modsAfterKeyEvent(0, true, lvgui::Mod::Alt, false) == lvgui::Mod::Alt);
+
+		// And the corrected value is what modsDown then holds, across frames.
+		P platform;
+		platform.injectKey(lvgui::Key::Unknown, P::modsAfterKeyEvent(lvgui::Mod::Shift, true, 0, false), true, false);
+		platform.beginFrame({ 800, 600 }, 1.0f, 0.016f);
+		platform.endFrame();
+		platform.beginFrame({ 800, 600 }, 1.0f, 0.016f);
+		assert(platform.current().modsDown == lvgui::Mod::Shift);
+		platform.endFrame();
+
+		std::cout << "✓ testModifierKeysReportTheirOwnTransition\n";
+	}
+
 }
 
 int main() {
@@ -238,6 +270,7 @@ int main() {
 	testDisplaySizeAndContentScalePassThrough();
 	testCursorShapeRequestResetsEachFrame();
 	testKeyAndModCodesAreDistinct();
+	testModifierKeysReportTheirOwnTransition();
 
 	std::cout << "\n✅ All input tests passed!\n";
 	return 0;

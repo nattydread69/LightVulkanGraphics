@@ -68,6 +68,15 @@ public:
 	static void setClipboardText(GLFWwindow* window, std::string_view text);
 	static void setCursorShape(GLFWwindow* window, CursorShape shape);
 
+	// GLFW's `mods` for a modifier key's OWN press or release differs by platform: X11
+	// reports the state from just before the event, so pressing Shift says Shift is up
+	// and releasing it says Shift is still down -- which would leave modsDown wrong until
+	// the next key event. Given the Mod:: bit the key controls (0 for any other key),
+	// returns `mods` with the key's own transition applied: the state after the event,
+	// on every platform. A release keeps the bit while `otherKeyDown` (the other Shift,
+	// say) is still held.
+	static int modsAfterKeyEvent(int keyModBit, bool pressed, int mods, bool otherKeyDown);
+
 	// ---- frame-boundary bookkeeping (docs/gui/04, "Frame-boundary bookkeeping") ----
 	void beginFrame(Vec2 displaySize, float contentScale, float deltaTime);
 	void endFrame();

@@ -272,6 +272,18 @@ target_compile_definitions(lvgui_plotview_tests PRIVATE
 
 add_test(NAME lvgui_plotview_tests COMMAND lvgui_plotview_tests)
 
+# TreeView -- headless, same pattern as tests above.
+add_executable(lvgui_treeview_tests
+	test_treeview.cpp
+)
+target_link_libraries(lvgui_treeview_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_treeview_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_treeview_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_treeview_tests COMMAND lvgui_treeview_tests)
+
 # MenuBar -- headless, same pattern as tests above.
 add_executable(lvgui_menubar_tests
 	test_menubar.cpp
