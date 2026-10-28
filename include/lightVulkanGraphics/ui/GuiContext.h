@@ -206,6 +206,10 @@ public:
 	// need clipboard access, and hovering a text box requests the I-beam cursor.
 	std::string clipboardText() const;
 	void        setClipboardText(std::string_view text) const;
+	// Asks for `shape` for the CURRENT frame only -- call it from update() every frame the
+	// shape should hold. Every update() starts from Arrow, and the platform's
+	// setCursorShape hook is called only when the shape that results at the end of
+	// update() differs from the one last applied.
 	void        requestCursorShape(CursorShape shape) const;
 
 	// ---- internal: used by Panel and widget update() implementations, not part of the
@@ -296,6 +300,13 @@ private:
 
 	PlatformHooks m_hooks;
 	std::unique_ptr<UiPlatformGlfw> m_platform;
+	// requestCursorShape() bookkeeping: what widgets asked for during this update()
+	// (mutable: the request call is const, same as the clipboard hooks beside it), and
+	// what was last handed to m_hooks.setCursorShape. The hook used to be called
+	// straight from requestCursorShape(), and nothing ever asked for Arrow again -- the
+	// I-beam from hovering one text box stuck for the rest of the session.
+	mutable CursorShape m_requestedCursor = CursorShape::Arrow;
+	CursorShape m_appliedCursor = CursorShape::Arrow;
 
 	std::vector<std::unique_ptr<Panel>> m_panels;   // front-to-back; index 0 = frontmost
 

@@ -448,6 +448,34 @@ namespace {
 		std::cout << "✓ testFocusedTextBoxClaimsKeyboardSoWasdDoesNotReachCamera\n";
 	}
 
+	// Hovering a text box shows the I-beam; leaving it must bring the arrow back. The
+	// platform hook used to be called only with the I-beam, so it stuck for good after
+	// the mouse first crossed any text field.
+	void testCursorReturnsToArrowAfterLeavingATextBox() {
+		std::vector<lvgui::CursorShape> applied;
+		lvgui::PlatformHooks hooks;
+		hooks.setCursorShape = [&](lvgui::CursorShape shape) { applied.push_back(shape); };
+		lvgui::GuiContext ctx(testCreateInfo(), hooks);
+		auto* panel = ctx.createPanel("Panel", { 0.0f, 0.0f, 300.0f, 100.0f });
+		auto* box = panel->add<lvgui::TextBox>("", "");
+		step(ctx);
+		assert(applied.empty());   // starts on the platform's own arrow: nothing to change
+
+		lvgui::Rect const b = box->bounds();
+		ctx.injectMousePos({ b.x + 2.0f, b.y + b.h * 0.5f });
+		step(ctx);
+		step(ctx);
+		step(ctx);
+		assert(applied.size() == 1 && applied.back() == lvgui::CursorShape::TextInput);
+
+		ctx.injectMousePos({ 600.0f, 500.0f });   // off the panel entirely
+		step(ctx);
+		step(ctx);
+		assert(applied.size() == 2 && applied.back() == lvgui::CursorShape::Arrow);
+
+		std::cout << "✓ testCursorReturnsToArrowAfterLeavingATextBox\n";
+	}
+
 }
 
 	// A password field's buffer is the real secret even though the glyphs are
@@ -490,6 +518,7 @@ int main() {
 	testMouseClickPositionsCaretAtClickedCharacterNotOneOff();
 	testPasswordModeCaretMatchesDisplayedBulletString();
 	testFocusedTextBoxClaimsKeyboardSoWasdDoesNotReachCamera();
+	testCursorReturnsToArrowAfterLeavingATextBox();
 
 	testPasswordFieldRefusesCopyAndCut();
 	std::cout << "\n✅ All TextBox tests passed!\n";
