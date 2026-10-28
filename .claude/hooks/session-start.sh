@@ -1,11 +1,18 @@
 #!/bin/bash
 # Installs the Linux build dependencies (matching .github/workflows/ci.yml)
-# so LightVulkanGraphics can be built and tested in Claude Code cloud sessions.
+# so LightVulkanGraphics can be built and tested in Claude Code cloud sessions,
+# and makes commits made there carry the repository owner's identity.
 set -euo pipefail
 
 if [ "${CLAUDE_CODE_REMOTE:-}" != "true" ]; then
   exit 0
 fi
+
+# Commit as the repository owner, not as Claude (see CLAUDE.md, "Commit Identity").
+# Repo-local, so it overrides the container's global "Claude <noreply@anthropic.com>".
+cd "${CLAUDE_PROJECT_DIR:-.}"
+git config user.name "Nathanael Inkson"
+git config user.email "NathanaelInkson@gmail.com"
 
 packages=(
   cmake
