@@ -64,6 +64,10 @@
 //   Modal       -- "Clear log..." opens a confirmation dialog that blocks every other
 //                  panel and the camera entirely until dismissed (Cancel, Clear it,
 //                  the title-bar X, or Escape) -- docs/gui/05, "Panel", "Modal panels"
+//   PlotView    -- a live, streaming plot (top middle): series appended every frame
+//                  into rolling windows, auto-fit making the X axis scroll. Wheel zooms
+//                  (Shift: X only, Ctrl: Y only), drag pans, double-click resumes
+//                  following, click a legend entry to hide/show it, hover for values
 //   OpenFileDialog -- File > Open... (or Ctrl+O) browses the repository: sort by
 //                  Name/Size/Modified, enter folders, search, switch file type. The
 //                  chosen path is printed and shown in the log view; nothing is loaded
@@ -411,6 +415,20 @@ int main()
 		// DropDown was already built (docs/gui/06-layout-and-theme.md, "Theme": "a way to
 		// switch between them at runtime -- a DropDown is the obvious choice and you
 		// already have one").
+		// docs/gui/05-widgets.md, "PlotView": a streaming x/y plot. The update callback
+		// below appends a point to each series every frame; setSeriesMaxPoints() keeps a
+		// rolling window, and the default auto-fit scrolls the X axis along with it.
+		auto* plotPanel = gui.createPanel("PlotView", { 420.0f, 40.0f, 600.0f, 330.0f });
+		auto* livePlot = plotPanel->add<lvgui::PlotView>("Live signals");
+		livePlot->setHeight(276.0f);
+		livePlot->setXLabel("time (s)");
+		const int sinSeries = livePlot->addSeries("sin(2t)");
+		const int cosSeries = livePlot->addSeries("0.5 cos(3t)");
+		const int noisySeries = livePlot->addSeries("noisy samples", lvgui::PlotStyle::Points);
+		livePlot->setSeriesMaxPoints(sinSeries, 600);
+		livePlot->setSeriesMaxPoints(cosSeries, 600);
+		livePlot->setSeriesMaxPoints(noisySeries, 100);
+
 		auto* themePanel = gui.createPanel("Theme", { 1280.0f - 220.0f, 20.0f, 200.0f, 60.0f });
 		themePanel->setAnchor(lvgui::Panel::Anchor::TopRight);
 		themePanel->setPersistenceId("theme");
@@ -488,7 +506,8 @@ int main()
 		rightClickMenu->addSeparator();
 		rightClickMenu->addItem("Log a message", [solverLog] { solverLog->push("[gui-demo] context menu action"); });
 
-		app.setUpdateCallback([&gui, &openDialog, rightClickMenu, solverLog](float dt) {
+		app.setUpdateCallback([&gui, &openDialog, rightClickMenu, solverLog, livePlot, sinSeries, cosSeries,
+		                       noisySeries](float dt) {
 			const lvgui::InputState& in = gui.input();
 			if (in.mouseReleased[static_cast<int>(lvgui::MouseButton::Right)]) {
 				rightClickMenu->open(in.mousePos);
@@ -503,6 +522,21 @@ int main()
 						openDialog.open();
 					}
 				}
+			}
+
+			// Feed the live plot: two smooth signals every frame, and a noisy sample of the
+			// first one ten times a second (pseudo-noise from a fast sine, so the demo needs
+			// no random-number state).
+			static float plotTime = 0.0f;
+			static float sampleAccum = 0.0f;
+			plotTime += dt;
+			livePlot->appendPoint(sinSeries, { plotTime, std::sin(2.0f * plotTime) });
+			livePlot->appendPoint(cosSeries, { plotTime, 0.5f * std::cos(3.0f * plotTime) });
+			sampleAccum += dt;
+			if (sampleAccum >= 0.1f) {
+				sampleAccum -= 0.1f;
+				float const noise = 0.25f * std::sin(plotTime * 97.3f) * std::cos(plotTime * 41.9f);
+				livePlot->appendPoint(noisySeries, { plotTime, std::sin(2.0f * plotTime) + noise });
 			}
 
 			// A fake "solver" feeding the log view periodically, so isFollowingBottom()'s

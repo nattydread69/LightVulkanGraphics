@@ -36,6 +36,15 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   remembered between `open()` calls, and confirmed paths are now absolute. New
   `file_dialog_demo` example; `gui_demo`'s File > Open... (and Ctrl+O) now opens an
   `OpenFileDialog` on the repository.
+- **LVGUI `PlotView`**: a 2D x/y plot widget -- several named series drawn as lines
+  and/or points, axes with 1/2/5 "nice" ticks sized to their labels, grid, legend
+  (click to hide/show a series), wheel zoom about the cursor (Shift: X only, Ctrl: Y
+  only), drag pan, double-click reset, and a hover readout that snaps to the nearest
+  point. Axes auto-fit to the data or are pinned with `setXRange()`/`setYRange()`;
+  `appendPoint()` with `setSeriesMaxPoints()` streams into a rolling window;
+  `setOnViewChange()` reports user zooms and pans. `function_plotter_demo` now uses it
+  (and re-samples the function over the zoomed range), and `gui_demo` has a live
+  streaming plot panel.
 - `VolumeColorSource::TextureRgba`: volumes can take their colour directly from an
   RGBA8 3D texture, with the texture's alpha mapped to opacity through the transfer
   function, so colour and opacity can show different quantities. The default,

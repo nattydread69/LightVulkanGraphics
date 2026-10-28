@@ -1202,6 +1202,71 @@ Draw with a single `addPolyline` over the ring buffer mapped to the plot rect. A
 should track a running min/max with mild hysteresis, or the plot jumps distractingly on
 every new extreme.
 
+## PlotView
+
+```cpp
+enum class PlotStyle { Line, Points, LineAndPoints };
+struct PlotRange { double xMin, xMax, yMin, yMax; };
+
+class PlotView : public Widget {
+public:
+    explicit PlotView(std::string label = {});        // non-empty label = title
+    int  addSeries(std::string name, PlotStyle = PlotStyle::Line);   // returns its index
+    void setSeriesData(int series, std::vector<Vec2> points);
+    void appendPoint(int series, Vec2 point);           // streaming
+    void setSeriesMaxPoints(int series, std::size_t);   // rolling window, 0 = unlimited
+    void setSeriesColor/Style/LineWidth/PointRadius/Name/Visible(int series, ...);
+    void setXLabel(std::string); void setYLabel(std::string);
+    void setXRange(double lo, double hi);               // pins X (auto-fit off for X)
+    void setYRange(double lo, double hi);               // pins Y
+    void setAutoFit(bool fitX, bool fitY);              // default: both
+    PlotRange view() const;   bool hasUserView() const;   void resetView();
+    void setOnViewChange(std::function<void(const PlotRange&)>);
+    void setHeight(float);  void setShowLegend(bool);  void setShowGrid(bool);
+    void setInteractive(bool);
+    static std::vector<double> niceTicks(double lo, double hi, int maxTicks);
+    static std::string formatTick(double value, double step);
+};
+```
+
+`PlotLine`'s big brother: a real x/y chart for the plots a simulation tool lives on —
+residual against iteration, energy against time, a fitted curve over measured points.
+Several named series, each a line, points or both; axes, grid and legend; and mouse
+interaction.
+
+**Interaction.** The wheel zooms about the cursor (Shift: X only, Ctrl: Y only). A
+left-drag pans, keeping the grabbed point under the cursor. A double-click resets the
+view. Clicking a legend entry hides or shows that series. Hovering shows the nearest data
+point within 10 px, highlighted with its series name and value, or else the cursor's own
+coordinates with a faint crosshair. The plot claims the wheel (`wantsWheel()`) so a
+scrollable panel underneath doesn't scroll as well. `setInteractive(false)` turns off
+everything but the hover readout.
+
+**What is on screen — three layers.** Each axis is either *auto-fitted* to every finite
+point of every visible series (the default; 3% margin in X, 8% in Y) or *pinned* by
+`setXRange()`/`setYRange()`. When X is pinned and Y is auto, Y fits only the points
+inside the X range — what is actually on screen. On top of that, a zoom or pan creates a
+*user view* that overrides both until double-click or `resetView()`. Any application call
+that sets a range or auto-fit discards the user view: what the application asks for wins.
+`setOnViewChange()` fires for user zooms, pans and resets only, never for the
+application's own calls — which is what lets an application re-sample a function over
+exactly what is on screen without looping (`function_plotter_demo` does this).
+
+**Ticks.** `niceTicks()` picks steps of 1, 2 or 5 × 10^k. Y gets at most one tick per 40
+px. X labels sit side by side, so X starts from a dense step and coarsens until the
+*measured* labels have 14 px between them. `formatTick()` takes its decimals from the
+step, and zero gets the same decimals as its neighbours ("−0.5, 0.0, 0.5"). The plot's
+left margin is the widest Y label, so it moves as the view changes; zoom and pan
+re-measure the layout of the *new* view and correct for that, so the point under the
+cursor stays exactly put.
+
+**Data.** Series need not be sorted. A non-finite point breaks a line rather than joining
+across it (1/x at 0), and is ignored by auto-fit. The data bounds auto-fit needs are
+cached and grown incrementally by `appendPoint()`, so streaming a long series doesn't
+rescan it every frame. The legend lists named series that have data (hidden ones dimmed,
+so they can be clicked back on). Colours default to `theme.plotLine`, `theme.accent`,
+then a fixed qualitative palette, unless `setSeriesColor()` sets one.
+
 ## CollapsingSection
 
 ```cpp

@@ -21,9 +21,10 @@
 // A 2D math-function plotter built entirely out of LVGUI primitives: type an expression
 // of x into the text box and press Enter (or click Plot) to graph it, load scatter data
 // from a CSV file to overlay against it, and export the currently-plotted curve back out
-// to CSV. There is no 3D scene here at all -- this demo is a reminder that LVGUI's
-// DrawList (lines, filled circles, polylines, clipped text) is a small general-purpose
-// 2D vector canvas, not something that only ever draws widget chrome.
+// to CSV. There is no 3D scene here at all: the graph is a PlotView, LVGUI's 2D plot
+// widget. Zoom it with the wheel (Shift: X only, Ctrl: Y only), drag to pan, and
+// double-click to go back to the range set in the panel -- the function is re-sampled
+// over whatever is on screen, so the curve stays smooth however far in you zoom.
 //
 // The expression parser (recursive-descent, +-*/^, unary minus, parentheses, a fixed set
 // of named functions, and the constants pi/e) is a small, self-contained piece written
@@ -38,10 +39,10 @@
 //   SliderInt   -- sample count (curve resolution)
 //   OpenFileDialog / SaveFileDialog -- load scatter CSV / export curve CSV
 //   CollapsingSection -- groups Range/Resolution, Scatter Data, Export
-//   A custom Widget (PlotCanvas, defined in this file) -- the graph itself, drawn with
-//   DrawList::addLine/addRectFilled/addCircleFilled/addPolyline/addText directly rather
-//   than composed from existing widgets, exactly the escape hatch docs/gui/05-widgets.md
-//   describes for anything an existing widget doesn't cover.
+//   PlotView    -- the graph: a line series for f(x) and a points series for the
+//                  scatter data, with a legend (click an entry to hide/show it), a
+//                  hover readout of the nearest point, and setOnViewChange() driving
+//                  the re-sampling
 //
 // See docs/gui_usage.md for a guide to the GUI layer and docs/gui/05-widgets.md for the
 // full per-widget spec.
@@ -112,7 +113,7 @@ public:
 
 	// Never throws: division by zero, sqrt of a negative number, etc. all flow through
 	// as IEEE Inf/NaN (the same way the underlying <cmath> calls already behave), which
-	// PlotCanvas treats as "skip this sample" rather than a hard failure.
+	// PlotView draws as a gap in the curve rather than a hard failure.
 	float evaluate(float x) const { return static_cast<float>(evalNode(*m_root, static_cast<double>(x))); }
 
 private:
@@ -444,146 +445,6 @@ private:
 	std::unique_ptr<Node> m_root;
 };
 
-// ============================================================================
-// PlotCanvas: a custom LVGUI Widget -- the graph itself. Everything here is drawn
-// straight into the DrawList (docs/gui/02-rendering.md), the same escape hatch any
-// consumer has for content none of the bundled widgets cover.
-// ============================================================================
-class PlotCanvas : public lvgui::Widget
-{
-public:
-	explicit PlotCanvas(std::string label) { setLabel(std::move(label)); }
-
-	void setHeight(float px) { m_height = px; }
-	void setXRange(float lo, float hi) { m_xMin = lo; m_xMax = hi; }
-	void setYRange(float lo, float hi) { m_yMin = lo; m_yMax = hi; }
-
-	void setCurve(std::vector<glm::vec2> points) { m_curve = std::move(points); }
-	void clearCurve() { m_curve.clear(); }
-	void setScatter(std::vector<glm::vec2> points) { m_scatter = std::move(points); }
-	void clearScatter() { m_scatter.clear(); }
-	const std::vector<glm::vec2>& curve() const { return m_curve; }
-	const std::vector<glm::vec2>& scatter() const { return m_scatter; }
-
-	lvgui::Vec2 preferredSize(const lvgui::GuiContext&) const override { return { 0.0f, m_height }; }
-	void draw(lvgui::DrawList& dl, const lvgui::GuiContext& ctx) const override;
-
-	bool acceptsCapture() const override { return false; }
-	bool acceptsFocus() const override { return false; }
-
-private:
-	float m_height = 340.0f;
-	float m_xMin = -10.0f, m_xMax = 10.0f;
-	float m_yMin = -1.0f, m_yMax = 1.0f;
-	std::vector<glm::vec2> m_curve;
-	std::vector<glm::vec2> m_scatter;
-};
-
-void PlotCanvas::draw(lvgui::DrawList& dl, const lvgui::GuiContext& ctx) const
-{
-	if (!visible())
-	{
-		return;
-	}
-	const lvgui::Theme& th = ctx.theme();
-	lvgui::Rect full = bounds();
-	dl.addRectFilled(full, th.frameBg, th.rounding);
-	dl.addRect(full, th.border, 1.0f, th.rounding);
-
-	constexpr float kLeftMargin = 46.0f;
-	constexpr float kBottomMargin = 20.0f;
-	constexpr float kTopMargin = 6.0f;
-	constexpr float kRightMargin = 8.0f;
-	lvgui::Rect plot{ full.x + kLeftMargin, full.y + kTopMargin,
-		full.w - kLeftMargin - kRightMargin, full.h - kTopMargin - kBottomMargin };
-	if (plot.w <= 1.0f || plot.h <= 1.0f)
-	{
-		return;
-	}
-
-	float xMin = m_xMin, xMax = m_xMax, yMin = m_yMin, yMax = m_yMax;
-	if (xMax <= xMin) xMax = xMin + 1.0f;
-	if (yMax <= yMin) yMax = yMin + 1.0f;
-
-	auto toScreenX = [&](float x) { return plot.x + (x - xMin) / (xMax - xMin) * plot.w; };
-	auto toScreenY = [&](float y) { return plot.y + plot.h - (y - yMin) / (yMax - yMin) * plot.h; };
-
-	// Grid lines + tick labels, unclipped -- their geometry is already bounded to `plot`
-	// or the margin around it by construction, so there's nothing here that needs a
-	// pushClipRect() to stay tidy (see below for the one thing that does: the data).
-	constexpr int kDivisions = 5;
-	float tickFontSize = th.fontSize * 0.8f;
-	for (int i = 0; i <= kDivisions; ++i)
-	{
-		float t = static_cast<float>(i) / static_cast<float>(kDivisions);
-
-		float gx = plot.x + t * plot.w;
-		dl.addLine({ gx, plot.y }, { gx, plot.y + plot.h }, th.border, 1.0f);
-		float valX = xMin + t * (xMax - xMin);
-		char buf[32];
-		std::snprintf(buf, sizeof(buf), "%.3g", static_cast<double>(valX));
-		lvgui::Vec2 sz = ctx.font().measureText(buf, tickFontSize);
-		dl.addText(ctx.font(), tickFontSize, { gx - sz.x * 0.5f, plot.y + plot.h + 3.0f }, th.textDisabled, buf);
-
-		float gy = plot.y + plot.h - t * plot.h;
-		dl.addLine({ plot.x, gy }, { plot.x + plot.w, gy }, th.border, 1.0f);
-		float valY = yMin + t * (yMax - yMin);
-		std::snprintf(buf, sizeof(buf), "%.3g", static_cast<double>(valY));
-		lvgui::Vec2 ysz = ctx.font().measureText(buf, tickFontSize);
-		dl.addText(ctx.font(), tickFontSize, { plot.x - ysz.x - 6.0f, gy - ysz.y * 0.5f }, th.textDisabled, buf);
-	}
-
-	// x=0 / y=0 axis lines, brighter than the grid, only when actually in range.
-	if (xMin < 0.0f && xMax > 0.0f)
-	{
-		float ax = toScreenX(0.0f);
-		dl.addLine({ ax, plot.y }, { ax, plot.y + plot.h }, th.text, 1.5f);
-	}
-	if (yMin < 0.0f && yMax > 0.0f)
-	{
-		float ay = toScreenY(0.0f);
-		dl.addLine({ plot.x, ay }, { plot.x + plot.w, ay }, th.text, 1.5f);
-	}
-
-	// Data: clipped to the plot rect, since a manually-set Y range or an out-of-domain
-	// sample can otherwise push geometry over the axis labels / outside the widget.
-	dl.pushClipRect(plot, true);
-
-	for (const glm::vec2& p : m_scatter)
-	{
-		if (!std::isfinite(p.x) || !std::isfinite(p.y) || p.x < xMin || p.x > xMax)
-		{
-			continue;
-		}
-		dl.addCircleFilled({ toScreenX(p.x), toScreenY(p.y) }, 3.0f, th.accent);
-	}
-
-	// The curve is one logical polyline, but a domain error (1/x at x=0, sqrt of a
-	// negative, ...) makes a sample non-finite -- drawn as a broken run rather than one
-	// continuous line, a stray non-finite sample would otherwise connect two completely
-	// unrelated points with a straight line straight across the plot.
-	std::vector<lvgui::Vec2> run;
-	auto flushRun = [&]() {
-		if (run.size() >= 2)
-		{
-			dl.addPolyline(run.data(), static_cast<int>(run.size()), th.plotLine, 2.0f, false);
-		}
-		run.clear();
-	};
-	for (const glm::vec2& p : m_curve)
-	{
-		if (!std::isfinite(p.x) || !std::isfinite(p.y))
-		{
-			flushRun();
-			continue;
-		}
-		run.push_back({ toScreenX(p.x), toScreenY(p.y) });
-	}
-	flushRun();
-
-	dl.popClipRect();
-}
-
 // All mutable plotter state, gathered in one place so the widget callbacks (built inline
 // in main()) can reach it without a long lambda-capture list each.
 struct PlotterState
@@ -596,7 +457,9 @@ struct PlotterState
 
 	std::string scatterFile;
 
-	PlotCanvas* canvas = nullptr;
+	lvgui::PlotView* plot = nullptr;
+	int curveSeries = -1;
+	int scatterSeries = -1;
 	lvgui::Label* errorLabel = nullptr;
 	lvgui::Label* scatterStatusLabel = nullptr;
 	lvgui::Label* saveStatusLabel = nullptr;
@@ -618,14 +481,15 @@ struct PlotterState
 		}
 	}
 
-	// Re-samples the current expression across [xMin, xMax] and pushes the result (plus
-	// whatever Y range applies) into the canvas. Called on every control that affects the
-	// plot -- expression commit, range/sample changes, auto-fit toggling.
-	void replot()
+	// Samples the current expression across [lo, hi] into the plot's curve series.
+	void sampleCurve(float lo, float hi)
 	{
+		if (!plot)
+		{
+			return;
+		}
 		Expression expr;
-		std::vector<glm::vec2> points;
-		bool parsed = true;
+		std::vector<lvgui::Vec2> points;
 		try
 		{
 			expr.parse(exprText);
@@ -633,86 +497,70 @@ struct PlotterState
 		catch (const ExprError& e)
 		{
 			setError(std::string("Parse error: ") + e.what());
-			parsed = false;
+			plot->clearSeries(curveSeries);
+			return;
 		}
 
-		if (parsed)
+		int n = std::clamp(samples, 2, 4000);
+		points.reserve(static_cast<std::size_t>(n));
+		bool anyFinite = false;
+		for (int i = 0; i < n; ++i)
 		{
-			int n = std::clamp(samples, 2, 4000);
-			points.reserve(static_cast<std::size_t>(n));
-			bool anyFinite = false;
-			for (int i = 0; i < n; ++i)
-			{
-				float t = static_cast<float>(i) / static_cast<float>(n - 1);
-				float x = xMin + t * (xMax - xMin);
-				float y = expr.evaluate(x);
-				points.emplace_back(x, y);
-				anyFinite = anyFinite || std::isfinite(y);
-			}
-			setError(anyFinite ? std::string() : "Function produced no finite values over this X range.");
+			float t = static_cast<float>(i) / static_cast<float>(n - 1);
+			float x = lo + t * (hi - lo);
+			float y = expr.evaluate(x);
+			points.push_back({ x, y });
+			anyFinite = anyFinite || std::isfinite(y);
 		}
-
-		if (canvas)
-		{
-			canvas->setCurve(std::move(points));
-			canvas->setXRange(xMin, xMax);
-			if (yAutoScale)
-			{
-				fitYToData();
-			}
-			else
-			{
-				canvas->setYRange(yMin, yMax);
-			}
-		}
+		setError(anyFinite ? std::string() : "Function produced no finite values over this X range.");
+		plot->setSeriesName(curveSeries, exprText);
+		plot->setSeriesData(curveSeries, std::move(points));
 	}
 
-	// Recomputes yMin/yMax from whatever finite Y values the curve and scatter data
-	// currently have, with ~12% padding so the extremes aren't drawn flush against the
-	// plot's top/bottom edge. Falls back to [-1, 1] if there is no finite data at all
-	// (an empty plot, or every sample out of the function's domain).
-	void fitYToData()
+	// Re-samples the expression and puts the plot back on the panel's X range, with Y
+	// either fitted to the data or fixed to the Y fields. Called by every control that
+	// affects the plot -- expression commit, range/sample changes, auto-fit toggling --
+	// and it discards any zoom/pan the user made in the plot itself.
+	void replot()
 	{
-		if (!canvas)
+		sampleCurve(xMin, xMax);
+		if (!plot)
 		{
 			return;
 		}
-		float lo = std::numeric_limits<float>::infinity();
-		float hi = -std::numeric_limits<float>::infinity();
-		auto absorb = [&](const std::vector<glm::vec2>& pts) {
-			for (const glm::vec2& p : pts)
-			{
-				if (std::isfinite(p.y))
-				{
-					lo = std::min(lo, p.y);
-					hi = std::max(hi, p.y);
-				}
-			}
-		};
-		absorb(canvas->curve());
-		absorb(canvas->scatter());
-
-		if (!std::isfinite(lo) || !std::isfinite(hi))
+		plot->setXRange(xMin, xMax);
+		if (yAutoScale)
 		{
-			lo = -1.0f;
-			hi = 1.0f;
-		}
-		else if (hi - lo < 1e-6f)
-		{
-			lo -= 1.0f;
-			hi += 1.0f;
+			plot->setAutoFit(false, true);
+			showFittedY();
 		}
 		else
 		{
-			float pad = (hi - lo) * 0.12f;
-			lo -= pad;
-			hi += pad;
+			plot->setYRange(yMin, yMax);
 		}
-		yMin = lo;
-		yMax = hi;
-		canvas->setYRange(lo, hi);
-		if (yMinDrag) yMinDrag->setValue(lo, false);
-		if (yMaxDrag) yMaxDrag->setValue(hi, false);
+	}
+
+	// Copies the Y range the plot fitted to the data into the (disabled, bound) Y min/max
+	// fields, so they show what auto-fit chose.
+	void showFittedY()
+	{
+		if (plot && yAutoScale && !plot->hasUserView())
+		{
+			lvgui::PlotRange v = plot->view();
+			yMin = static_cast<float>(v.yMin);
+			yMax = static_cast<float>(v.yMax);
+		}
+	}
+
+	// The user zoomed, panned or double-clicked the plot: the range fields follow it, and
+	// the curve is re-sampled over exactly what is now on screen.
+	void onViewChanged(const lvgui::PlotRange& v)
+	{
+		xMin = static_cast<float>(v.xMin);
+		xMax = static_cast<float>(v.xMax);
+		yMin = static_cast<float>(v.yMin);
+		yMax = static_cast<float>(v.yMax);
+		sampleCurve(xMin, xMax);
 	}
 
 	void loadScatter(const std::string& path)
@@ -723,7 +571,7 @@ struct PlotterState
 			if (scatterStatusLabel) scatterStatusLabel->setText("Could not open " + path);
 			return;
 		}
-		std::vector<glm::vec2> points;
+		std::vector<lvgui::Vec2> points;
 		std::string line;
 		while (std::getline(in, line))
 		{
@@ -735,31 +583,33 @@ struct PlotterState
 			float x, y;
 			if (iss >> x >> y)
 			{
-				points.emplace_back(x, y);
+				points.push_back({ x, y });
 			}
 		}
-		if (canvas)
-		{
-			canvas->setScatter(std::move(points));
-		}
 		scatterFile = fs::path(path).filename().string();
+		if (plot)
+		{
+			plot->setSeriesData(scatterSeries, std::move(points));
+			plot->setSeriesName(scatterSeries, scatterFile);
+		}
 		if (scatterStatusLabel)
 		{
-			scatterStatusLabel->setText(std::to_string(canvas ? canvas->scatter().size() : 0) +
+			scatterStatusLabel->setText(std::to_string(plot ? plot->seriesData(scatterSeries).size() : 0) +
 				" point(s) loaded from " + scatterFile);
 		}
-		if (yAutoScale)
-		{
-			fitYToData();
-		}
+		showFittedY();
 	}
 
 	void clearScatter()
 	{
-		if (canvas) canvas->clearScatter();
+		if (plot)
+		{
+			plot->clearSeries(scatterSeries);
+			plot->setSeriesName(scatterSeries, "scatter");
+		}
 		scatterFile.clear();
 		if (scatterStatusLabel) scatterStatusLabel->setText("No scatter data loaded.");
-		if (yAutoScale) fitYToData();
+		showFittedY();
 	}
 
 	void saveCurve(const std::string& path)
@@ -772,9 +622,9 @@ struct PlotterState
 		}
 		out << "x,y\n";
 		std::size_t written = 0;
-		if (canvas)
+		if (plot)
 		{
-			for (const glm::vec2& p : canvas->curve())
+			for (const lvgui::Vec2& p : plot->seriesData(curveSeries))
 			{
 				if (std::isfinite(p.x) && std::isfinite(p.y))
 				{
@@ -843,8 +693,14 @@ int main()
 			->setWordWrap(true);
 		panel->add<lvgui::Spacer>(4.0f);
 
-		auto* canvas = panel->add<PlotCanvas>("");
-		state.canvas = canvas;
+		auto* plot = panel->add<lvgui::PlotView>();
+		plot->setHeight(340.0f);
+		plot->setXLabel("x");
+		plot->setYLabel("f(x)");
+		state.plot = plot;
+		state.curveSeries = plot->addSeries(state.exprText, lvgui::PlotStyle::Line);
+		state.scatterSeries = plot->addSeries("scatter", lvgui::PlotStyle::Points);
+		plot->setOnViewChange([&state](const lvgui::PlotRange& v) { state.onViewChanged(v); });
 
 		auto* exprBox = panel->add<lvgui::TextBox>("f(x) =", state.exprText);
 		exprBox->setPlaceholder("e.g. sin(x) * x");
@@ -897,7 +753,7 @@ int main()
 
 		// Auto-fit and the manual Y fields are mutually exclusive: flipping the checkbox
 		// enables/disables the fields it would otherwise fight with, and either an edit or
-		// a re-fit needs the SAME replot() to actually reach the canvas.
+		// a re-fit needs the SAME replot() to actually reach the plot.
 		autoScaleCheckbox->setOnChange([&state, yMinDrag, yMaxDrag](bool on) {
 			state.yAutoScale = on;
 			yMinDrag->setEnabled(!on);

@@ -55,6 +55,7 @@
 #include "widgets/CollapsingSection.h"
 #include "widgets/ProgressBar.h"
 #include "widgets/PlotLine.h"
+#include "widgets/PlotView.h"
 #include "widgets/ColorEdit.h"
 #include "widgets/Image.h"
 #include "widgets/TabBar.h"

@@ -227,6 +227,7 @@ never hit-testable) and `setEnabled(false)` (greys it out and blocks input).
 | `Spacer(height)` | Fixed vertical gap. |
 | `ProgressBar(label)` | `setFraction(0..1)` or `setIndeterminate(true)` for a busy sweep. |
 | `PlotLine(label, historySize)` | Sparkline. `push(sample)` each frame; auto-scales. |
+| `PlotView(title)` | A full x/y plot: several series, axes, legend, wheel zoom, drag pan, hover readout. See [Plots](#plots). |
 | `LogView(label)` | Read-only, word-wrapping, scrollable text. `push(line)` to append; auto-follows new output until you scroll away. `setMaxLines(n)`. |
 | `Image(label, textureId, size)` | A registered texture (see below) at a fixed size — a colormap legend, an icon, a thumbnail. |
 
@@ -366,6 +367,31 @@ it: the active modal always draws on top regardless of its position in panel z-o
 path as clicking the X — a handler passed to `setOnClose()` still fires either way).
 Leave `Closable` off for a dialog the user must resolve with an explicit choice, with no
 implicit "never mind" available.
+
+## Plots
+
+`PlotLine` is a one-value sparkline; `PlotView` is a proper chart:
+
+```cpp
+auto* plot = panel->add<lvgui::PlotView>("Convergence");
+plot->setXLabel("iteration");
+plot->setYLabel("residual");
+int residual = plot->addSeries("residual");                          // a line
+int target   = plot->addSeries("target", lvgui::PlotStyle::Points);  // points
+
+plot->setSeriesData(target, { { 0.0f, 1e-3f }, { 100.0f, 1e-3f } });
+plot->setSeriesMaxPoints(residual, 500);   // keep the newest 500
+
+// each step of the solver:
+plot->appendPoint(residual, { float(iteration), float(r) });
+```
+
+By default both axes fit the data, so a streaming plot scrolls as points arrive. Pin an
+axis with `setXRange(lo, hi)` / `setYRange(lo, hi)`. The user can zoom with the wheel
+(hold Shift for X only, Ctrl for Y only), pan by dragging and double-click to go back;
+clicking a legend entry hides or shows that series, and hovering reads off the nearest
+point. To react to the user's zoom — say, to re-sample a function over the visible range,
+as `function_plotter_demo` does — use `setOnViewChange([](const lvgui::PlotRange& v) { ... })`.
 
 ## File dialogs
 
