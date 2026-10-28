@@ -57,6 +57,10 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Windows/MSVC builds now avoid `min`/`max` macro collisions, enable the required GLM experimental quaternion extension, and clean up warning-as-error blockers.
 - Invalid object indices in remove/update APIs now throw `std::out_of_range` consistently instead of being ignored.
 - Object state method implementations were split out of `src/VkApp.cpp` into `src/VkAppObjectState.cpp`.
+- Bundled `stb_image.h` updated from v2.28 to v2.30: faster PNG decoding, stricter
+  handling of truncated compressed data, and the fix for a false
+  `-Wstringop-overflow` warning GCC 14 reports in optimised builds (an error under
+  `LVG_WARNINGS_AS_ERRORS=ON`).
 
 ### Fixed
 - Rigged meshes with see-through textures (MakeHuman hair cards, eyelashes, eyes) rendered
