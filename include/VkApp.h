@@ -778,14 +778,6 @@ namespace lightGraphics
 		// camera's zoom/dolly.
 		bool uiWantsScroll() const;
 
-		// GLFW_PRESS/GLFW_RELEASE for `key`, reported as RELEASE whenever the GUI owns
-		// the keyboard (and when there is no window). This is what application shortcuts
-		// should poll instead of glfwGetKey(): a key held while a text field has focus
-		// reads as released, so a shortcut can neither fire while someone is typing nor
-		// fire again on the way back out -- held/released edge tracking stays consistent
-		// across the transition, which skipping the poll entirely would not give you.
-		int pollKey(int key) const;
-
 	public:
 		// Configure the GUI before init() brings it up -- same "must be called before
 		// init(); has no effect afterward" convention as setMaxTextureCount(). Fields left
@@ -828,6 +820,19 @@ namespace lightGraphics
 		ui::GuiCreateInfo guiCreateInfo_{};
 #endif
 
+	public:
+		// GLFW_PRESS/GLFW_RELEASE for `key`, reported as RELEASE whenever the GUI owns
+		// the keyboard (and when there is no window). This is what application shortcuts
+		// should poll instead of glfwGetKey(): a key held while a text field has focus
+		// reads as released, so a shortcut can neither fire while someone is typing nor
+		// fire again on the way back out -- held/released edge tracking stays consistent
+		// across the transition, which skipping the poll entirely would not give you.
+		// Declared outside the LVG_WITH_UI block above: it exists (and simply never
+		// defers to a GUI) in a -DLVG_BUILD_UI=OFF build too, where the rigged-animation
+		// shortcuts in VkAppRigged.cpp still call it.
+		int pollKey(int key) const;
+
+	private:
 		// Sync
 		static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 		std::vector<VkSemaphore> imageAvailableSemaphores_;

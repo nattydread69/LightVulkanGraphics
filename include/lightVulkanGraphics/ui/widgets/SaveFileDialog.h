@@ -18,71 +18,75 @@
 
 #pragma once
 
-// A reusable "Save As" file dialog. Not a Widget itself -- like the About-dialog
-// pattern in docs/gui/05-widgets.md ("Panel", "Modal panels"), it owns a single
-// Modal|Closable|Movable Panel, created once and toggled visible/hidden rather than
-// rebuilt each time it's opened. Lists the existing files in `directory` matching
-// `extensionFilter` (click one to prefill the filename, for overwrite awareness),
-// plus a filename TextBox and Save/Cancel buttons.
+// A reusable "Save As" file dialog. Everything it shares with OpenFileDialog (the
+// sortable Name/Size/Modified list, folder navigation, search, file-type filter,
+// hidden-files toggle, resizable Modal panel) lives in FileDialogBase; see that header
+// for the layout and for what is remembered between open() calls.
+//
+// Below the list sits a "File name" field: clicking an existing file copies its name in
+// (for overwrite awareness), and Save or Enter confirms. The selected file type's first
+// extension is appended to a name that has none of that filter's extensions. Saving
+// over an existing file asks first, in a small "Replace file?" modal on top of this
+// one, unless setConfirmOverwrite(false). A name that matches a folder in the current
+// folder goes into that folder rather than saving.
 //
 // `directory` and `extensionFilter` are constructor parameters rather than anything
 // pose-file-specific, so any lightVulkanGraphics consumer can reuse this for its own
 // "export to a new file" flow.
 
-#include <functional>
+#include "FileDialogBase.h"
+
 #include <string>
 
 namespace lightGraphics::ui {
 
-class GuiContext;
-class Panel;
-class TextBox;
-class ListBox;
-class Button;
-class Label;
-
-class SaveFileDialog {
+class SaveFileDialog : public FileDialogBase {
 public:
-	// extensionFilter, e.g. ".pose.json" -- matched against each directory entry's
-	// filename suffix for the existing-files list, and appended to whatever the user
-	// types if they didn't already type it themselves.
+	// extensionFilter, e.g. ".pose.json" -- matched case-insensitively against the end
+	// of each filename for the listing, and appended to whatever the user types if they
+	// didn't already type it themselves. "" lists every file and appends nothing.
 	SaveFileDialog(GuiContext& context, std::string directory, std::string extensionFilter);
 
-	// Shows the dialog and (re)scans `directory` on disk for its file listing. Safe to
-	// call again while already open, e.g. re-clicking "Save As...".
+	// Shows the dialog and (re)scans its folder, with an empty, focused filename field
+	// -- type and press Enter. Safe to call again while already open, e.g. re-clicking
+	// "Save As...".
 	void open();
+	// Same, with the filename field prefilled (and selected, so typing replaces it) --
+	// e.g. the document's current name.
+	void open(std::string suggestedFilename);
 
-	// Fired once, with the full chosen path, when the user confirms via the Save
-	// button. Not fired by Cancel/the title-bar close button/Escape -- see
-	// setOnCancel() for those.
-	void setOnConfirm(std::function<void(const std::string& fullPath)> onConfirm) { m_onConfirm = std::move(onConfirm); }
-	// Fired when the user backs out without saving: Cancel button, the title-bar X, or
-	// Escape (all three route through Panel::requestClose(), see the .cpp).
-	void setOnCancel(std::function<void()> onCancel) { m_onCancel = std::move(onCancel); }
+	// Whether saving over an existing file first asks "Replace file?". Default true.
+	void setConfirmOverwrite(bool confirm) { m_confirmOverwrite = confirm; }
+	bool confirmOverwrite() const { return m_confirmOverwrite; }
 
-	bool isOpen() const;
+	// setOnConfirm() fires once, with the full chosen path, when the user confirms --
+	// after the overwrite question, if one was asked and answered "Replace".
 
-	// The underlying Panel, for callers that want to dock/anchor it, give it a
-	// persistence id, or (in tests) reach its child widgets directly -- the same
-	// pattern GuiContext::createPanel() already hands raw Panel* back to any
-	// consumer. Never null after construction.
-	Panel* panel() const { return m_panel; }
+	TextBox* filenameField() const { return m_filenameField; }
+	// The "Replace file?" confirmation panel (hidden except while it is asking) and its
+	// two buttons -- for tests, and for callers that want to retitle them. The Cancel
+	// button is focused while it asks, so Enter keeps the existing file.
+	Panel* overwritePanel() const { return m_overwritePanel; }
+	Button* replaceButton() const { return m_replaceButton; }
+	Button* keepExistingButton() const { return m_keepButton; }
+
+protected:
+	void onFileActivated(const FileEntry& entry) override;
+	void onConfirmClicked() override;
+	void onSelectionChanged(const FileEntry* entry) override;
 
 private:
-	void refreshFileList();
 	void confirm();
+	void askToReplace(const std::string& name, std::string fullPath);
 
-	GuiContext& m_context;
-	std::string m_directory;
-	std::string m_extensionFilter;
-
-	Panel* m_panel = nullptr;
 	TextBox* m_filenameField = nullptr;
-	ListBox* m_fileList = nullptr;
-	Label* m_statusLabel = nullptr;
+	bool m_confirmOverwrite = true;
 
-	std::function<void(const std::string&)> m_onConfirm;
-	std::function<void()> m_onCancel;
+	Panel* m_overwritePanel = nullptr;
+	Label* m_overwriteMessage = nullptr;
+	Button* m_replaceButton = nullptr;
+	Button* m_keepButton = nullptr;
+	std::string m_pendingPath;   // what Replace will save to
 };
 
 } // namespace lightGraphics::ui

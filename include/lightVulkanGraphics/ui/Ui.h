@@ -61,5 +61,7 @@
 #include "widgets/ListBox.h"
 #include "widgets/ContextMenu.h"
 #include "widgets/LogView.h"
+#include "widgets/FileListView.h"
+#include "widgets/FileDialogBase.h"
 #include "widgets/SaveFileDialog.h"
 #include "widgets/OpenFileDialog.h"

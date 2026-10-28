@@ -367,6 +367,40 @@ path as clicking the X — a handler passed to `setOnClose()` still fires either
 Leave `Closable` off for a dialog the user must resolve with an explicit choice, with no
 implicit "never mind" available.
 
+## File dialogs
+
+`OpenFileDialog` and `SaveFileDialog` are ready-made modal dialogs for picking a file to
+load or a name to save under:
+
+```cpp
+auto openDialog = std::make_unique<lvgui::OpenFileDialog>(gui, "data", ".csv");
+openDialog->setFileTypeFilters({
+    { "Data files (*.csv, *.json)", { ".csv", ".json" } },
+    { "All files", {} },
+});
+openDialog->setOnConfirm([&](const std::string& path) { loadData(path); });
+
+auto saveDialog = std::make_unique<lvgui::SaveFileDialog>(gui, "data", ".csv");
+saveDialog->setOnConfirm([&](const std::string& path) { saveData(path); });
+
+auto file = gui.menuBar().addMenu("File");
+file.addItem("Open...",    [&] { openDialog->open(); });
+file.addItem("Save As...", [&] { saveDialog->open("results.csv"); });
+```
+
+The file list has **Name**, **Size** and **Modified** columns — click a header to sort
+by it, click again to reverse. Folders are listed first and can be entered by
+double-click (↑ or Backspace goes back up); there's a search box, a file-type dropdown,
+a Hidden toggle for dot-files, and the dialog can be resized from its corner. Save As
+asks before replacing an existing file. Keep the dialog objects alive for as long as
+you want to use them: each remembers its folder, sort order and file type between
+`open()` calls. Call `setNavigationEnabled(false)` to keep the user in the folder you
+gave it.
+
+Run `file_dialog_demo` to try both against a generated sample folder; see
+[`gui/05-widgets.md`](gui/05-widgets.md#openfiledialog-and-savefiledialog) for the full
+behaviour.
+
 ## Themes
 
 ```cpp
@@ -404,8 +438,7 @@ frame's widgets are updated.
 - No accessibility tree / screen reader support.
 - No docking, tabs, or multi-viewport — panels float, drag, collapse, and resize; that's
   the whole layout model.
-- No list box or modal dialog yet. See [`gui/ROADMAP.md`](gui/ROADMAP.md)
-  for what's planned and in what order.
+- See [`gui/ROADMAP.md`](gui/ROADMAP.md) for what's planned and in what order.
 
 ## Reference
 
