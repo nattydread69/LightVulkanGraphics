@@ -34,7 +34,8 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   it, and a status line. Save As adds an overwrite confirmation (`setConfirmOverwrite()`),
   filename validation and `open(suggestedFilename)`. Folder, sort and filter are
   remembered between `open()` calls, and confirmed paths are now absolute. New
-  `file_dialog_demo` example.
+  `file_dialog_demo` example; `gui_demo`'s File > Open... (and Ctrl+O) now opens an
+  `OpenFileDialog` on the repository.
 - `VolumeColorSource::TextureRgba`: volumes can take their colour directly from an
   RGBA8 3D texture, with the texture's alpha mapped to opacity through the transfer
   function, so colour and opacity can show different quantities. The default,
