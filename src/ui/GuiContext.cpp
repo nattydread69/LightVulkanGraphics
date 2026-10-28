@@ -452,6 +452,10 @@ void GuiContext::updateFocusNavigation() {
 }
 
 void GuiContext::update() {
+	// Cursor requests last one frame: widgets re-request every frame they want a shape
+	// (see requestCursorShape()), so anything not asked for again falls back to Arrow.
+	m_requestedCursor = CursorShape::Arrow;
+
 	const InputState& in = input();
 	Vec2 mouse = in.mousePos;
 	const bool leftPressed  = in.mousePressed[static_cast<int>(MouseButton::Left)];
@@ -633,6 +637,15 @@ void GuiContext::update() {
 	// inside the update() call that just ran above.
 	if (leftReleased) {
 		m_activeId = kInvalidWidgetId;
+	}
+
+	// Apply this frame's cursor only when it changed -- once on entering a text box,
+	// once on leaving it -- rather than calling the platform every frame.
+	if (m_requestedCursor != m_appliedCursor) {
+		m_appliedCursor = m_requestedCursor;
+		if (m_hooks.setCursorShape) {
+			m_hooks.setCursorShape(m_appliedCursor);
+		}
 	}
 }
 
@@ -828,9 +841,7 @@ void GuiContext::setClipboardText(std::string_view text) const {
 }
 
 void GuiContext::requestCursorShape(CursorShape shape) const {
-	if (m_hooks.setCursorShape) {
-		m_hooks.setCursorShape(shape);
-	}
+	m_requestedCursor = shape;
 }
 
 void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewProj,

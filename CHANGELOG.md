@@ -76,6 +76,11 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   on the bare scene and cleared keyboard focus right after the item's callback ran, so a
   dialog opened from a menu (e.g. `SaveFileDialog`, which focuses its filename field)
   came up with nothing focused. Presses on the menu bar no longer clear focus.
+- **LVGUI**: once the mouse had passed over any text box the cursor stayed an I-beam
+  for the rest of the session -- `GuiContext::requestCursorShape()` forwarded the I-beam
+  straight to the platform and nothing ever asked for the arrow again. Cursor requests
+  now last one frame, defaulting back to the arrow, and the platform is only told when
+  the shape actually changes.
 - `-DLVG_BUILD_UI=OFF` builds failed to compile: `VkApp::pollKey()` was declared only
   inside the `LVG_WITH_UI` block of `VkApp.h` but defined (and used by the rigged
   animation shortcuts) unconditionally. It is now declared for both configurations.
