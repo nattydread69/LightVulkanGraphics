@@ -761,6 +761,13 @@ if (LVG_BUILD_EXAMPLES)
 		add_executable(function_plotter_demo examples/function_plotter_demo.cpp)
 		lvg_configure_build_tree_example(function_plotter_demo)
 		target_link_libraries(function_plotter_demo PRIVATE LightVulkanGraphics::UI)
+
+		# OpenFileDialog/SaveFileDialog over a generated sample folder: sorting, folder
+		# navigation, search, file-type filters, overwrite confirmation -- see the same
+		# LightVulkanGraphicsUI-linking rationale on gui_demo just above.
+		add_executable(file_dialog_demo examples/file_dialog_demo.cpp)
+		lvg_configure_build_tree_example(file_dialog_demo)
+		target_link_libraries(file_dialog_demo PRIVATE LightVulkanGraphics::UI)
 	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.

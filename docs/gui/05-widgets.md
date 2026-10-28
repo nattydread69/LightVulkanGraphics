@@ -766,6 +766,134 @@ position. Auto-scroll is specifically an interactive-navigation courtesy, not a 
 application code is assumed to know what it's doing to its own scroll position, the same
 assumption `DropDown` already makes.
 
+## FileListView
+
+```cpp
+struct FileEntry {
+    std::string   name;
+    bool          isDirectory = false;
+    std::uint64_t size = 0;           // bytes; not shown for folders
+    std::int64_t  modifiedTime = 0;   // Unix seconds; 0 = unknown (blank)
+};
+enum class FileSortKey { Name, Size, Modified };
+
+class FileListView : public Widget {
+public:
+    void setEntries(std::vector<FileEntry>);          // re-sorts; clears the selection
+    const std::vector<FileEntry>& entries() const;    // display (sorted) order
+    int  selectedIndex() const;  const FileEntry* selectedEntry() const;
+    void setSelectedIndex(int, bool fireCallback = false);
+    bool selectName(std::string_view, bool fireCallback = false);
+    void setSort(FileSortKey, bool ascending);         // default Name, ascending
+    void setOnSelectionChange(std::function<void(const FileEntry*)>);
+    void setOnActivate(std::function<void(const FileEntry&)>);   // double-click / Enter
+    void setOnSortChange(std::function<void(FileSortKey, bool)>);
+    void setOnNavigateUp(std::function<void()>);                // Backspace
+    void setVisibleRows(int);      // minimum rows below the header, default 8
+    void setFillPanel(bool);       // grow into the panel's leftover height
+    void setEmptyText(std::string);
+};
+```
+
+The table `OpenFileDialog`/`SaveFileDialog` are built around: a header row of **Name**,
+**Size** and **Modified** cells, then one row per entry with a drawn folder/page icon.
+It only displays what it is given — scanning, filtering and navigation live in the
+dialog — so it is equally usable for a listing that doesn't come from a local folder.
+
+**Sorting.** Clicking a header cell sorts by that column; clicking the active one again
+reverses it. A newly chosen column starts in the direction you almost always want:
+Name A→Z, Size largest first, Modified newest first. Folders are kept ahead of files in
+*both* directions, and ties (equal sizes or timestamps) always fall back to A→Z by name.
+Names compare **naturally and case-insensitively** (`compareNatural()`): digit runs
+compare by value, so `frame_2` sorts before `frame_10`. Re-sorting keeps the same entry
+selected rather than the same row index. The header click is release-inside, like
+`Button`: pressing a header and dragging off it cancels.
+
+**Selection follows native file managers, not `ListBox`.** A row is selected on press,
+and a second press on the same row within 0.4 s *activates* it (`setOnActivate`) — the
+dialogs open a file or enter a folder. Clicking empty space below the last row clears
+the selection. Keyboard while focused: Up/Down/PageUp/PageDown/Home/End move the
+selection and clamp at the ends (no wrap — a file list isn't a carousel), Enter
+activates, Backspace calls `setOnNavigateUp`, and typing jumps to the first name
+starting with what was typed (type-ahead; the buffer resets after a 1 s pause).
+
+**Scrolling.** The wheel scrolls three rows per notch (accumulated, so trackpad deltas
+under a notch still add up). Unlike `ListBox`, the scrollbar is interactive: drag the
+thumb, or click the track above/below it to page.
+
+**Columns adapt to the width.** Size and Modified are sized from sample strings in the
+current font (`"000.0 MB"`, `"0000-00-00 00:00"`, tabular digits), and Name takes the
+rest. In a narrow list Modified is dropped first, then Size, so Name never shrinks below
+about 120 px. Sizes are 1024-based (`formatSize()`: `512 B`, `1.5 KB`, `20 KB`); times
+are local `YYYY-MM-DD HH:MM` (`formatModifiedTime()`).
+
+**`setFillPanel(true)`** makes `preferredSize()` take whatever height the owning panel
+has left after its other widgets (the same arithmetic `Panel::layout()` uses, including
+the trailing `itemSpacing`, so a `Scrollable` panel never grows a scrollbar over it),
+never less than `setVisibleRows()`. That is what lets a `Resizable` file dialog's list
+grow and shrink with the dialog.
+
+## OpenFileDialog and SaveFileDialog
+
+```cpp
+OpenFileDialog open(gui, "data", ".csv");      // directory, extension filter ("" = all)
+open.setOnConfirm([](const std::string& path) { /* load path */ });
+open.open();
+
+SaveFileDialog save(gui, "data", ".csv");
+save.setOnConfirm([](const std::string& path) { /* write path */ });
+save.open("results.csv");                         // optional suggested name
+```
+
+Not widgets: each owns one `Modal | Closable | Movable | Resizable` `Panel`, created
+once and shown/hidden (the "Modal panels" pattern below). Both derive from
+`FileDialogBase`, which lays the panel out as:
+
+```
+[↑] [ /current/folder                                  ]   up button, editable path
+[ Search          ] [ Files (*.csv)        v ] Hidden [ ]  search, file type, hidden
++------------------------------------------------------+
+| Name ▲                         |    Size | Modified   |  FileListView (fills)
++------------------------------------------------------+
+  File name [ untitled.csv                          ]      SaveFileDialog only
+  4 files, 2 folders · 3 files of other types not shown    status line
+                                   [ Save ] [ Cancel ]
+```
+
+- **Navigation.** Double-click or Enter on a folder (or Open on a selected folder) goes
+  into it; ↑ or Backspace goes up and selects the folder just left; a path typed into
+  the path field (absolute, or relative to the current folder) goes there on Enter, or
+  reports "Folder not found". `setNavigationEnabled(false)` pins the dialog to its
+  folder: folders aren't listed and the path is read-only. `directory()` is always
+  absolute and normalised, so confirmed paths are absolute too.
+- **Filtering.** The constructor's extension seeds a single file-type entry;
+  `setFileTypeFilters({{"Images", {".png", ".jpg"}}, {"All files", {}}})` offers more.
+  Extensions match case-insensitively against the end of the name (multi-part
+  extensions like `.pose.json` work). The search box filters names by case-insensitive
+  substring as you type. Names starting with `.` appear only with **Hidden** ticked.
+  The status line says how many files the type filter is keeping out of view, so a
+  folder that looks empty doesn't look broken.
+- **Remembered between `open()` calls** on the same dialog object: folder, sort column
+  and direction, file type, Hidden. The search text is cleared on each `open()`.
+- **Open.** Confirms an existing file only (Open, double-click, or Enter — the list has
+  focus as soon as the dialog opens). Open with nothing selected says "Select a file
+  first."
+- **Save.** The filename field is focused on open. Picking a file copies its name in;
+  picking a folder doesn't. The selected file type's *first* extension is appended to a
+  name that has none of that type's extensions ("All files" appends nothing). Names
+  containing `/` or `\`, or `.`/`..`, are rejected in the status line; a name matching a
+  folder enters it. Saving over an existing file asks **Replace file?** in a second
+  modal raised over the dialog, sized to its message, with Cancel focused so Enter keeps
+  the existing file; Escape closes just the question. `setConfirmOverwrite(false)` turns
+  the question off.
+
+`onConfirm` fires once with the full path; `onCancel` fires for Cancel, the title-bar X
+and Escape (all `requestClose()`), never after a confirm. The parts are reachable for
+restyling and tests — `fileList()`, `pathField()`, `upButton()`, `searchField()`,
+`fileTypeDropDown()`, `hiddenFilesToggle()`, `statusLabel()`, `confirmButton()`,
+`cancelButton()`, plus `filenameField()`, `overwritePanel()`, `replaceButton()` and
+`keepExistingButton()` on `SaveFileDialog`.
+
 ## ContextMenu
 
 ```cpp

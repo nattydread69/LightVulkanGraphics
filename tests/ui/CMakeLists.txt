@@ -246,6 +246,19 @@ target_compile_definitions(lvgui_openfiledialog_tests PRIVATE
 
 add_test(NAME lvgui_openfiledialog_tests COMMAND lvgui_openfiledialog_tests)
 
+# FileListView -- headless, same pattern as tests above. Entries are made up in
+# memory (the widget never touches the filesystem itself), so no temp directory.
+add_executable(lvgui_filelistview_tests
+	test_filelistview.cpp
+)
+target_link_libraries(lvgui_filelistview_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_filelistview_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_filelistview_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_filelistview_tests COMMAND lvgui_filelistview_tests)
+
 # MenuBar -- headless, same pattern as tests above.
 add_executable(lvgui_menubar_tests
 	test_menubar.cpp
