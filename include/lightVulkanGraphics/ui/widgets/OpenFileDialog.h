@@ -18,75 +18,43 @@
 
 #pragma once
 
-// A reusable "Open" file dialog -- SaveFileDialog's counterpart. Not a Widget
-// itself -- like the About-dialog pattern in docs/gui/05-widgets.md ("Panel",
-// "Modal panels"), it owns a single Modal|Closable|Movable Panel, created once and
-// toggled visible/hidden rather than rebuilt each time it's opened. Lists the
-// existing files in `directory` matching `extensionFilter`; unlike SaveFileDialog
-// there is no filename TextBox -- Open only ever picks an EXISTING file, so
-// selecting a list entry (or typing nothing) is the whole interaction, not typing a
-// new name.
+// A reusable "Open" file dialog -- SaveFileDialog's counterpart. Everything it shares
+// with SaveFileDialog (the sortable Name/Size/Modified list, folder navigation, search,
+// file-type filter, hidden-files toggle, resizable Modal panel) lives in FileDialogBase;
+// see that header for the layout and for what is remembered between open() calls.
+//
+// Open only ever picks an EXISTING file, so there is no filename field: selecting a
+// file and pressing Open, double-clicking it, or pressing Enter on it is the whole
+// interaction. Open (or Enter/double-click) on a folder goes into it instead.
 //
 // `directory` and `extensionFilter` are constructor parameters rather than anything
 // pose-file-specific, so any lightVulkanGraphics consumer can reuse this for its own
 // "load from a file" flow.
 
-#include <functional>
+#include "FileDialogBase.h"
+
 #include <string>
 
 namespace lightGraphics::ui {
 
-class GuiContext;
-class Panel;
-class ListBox;
-class Button;
-class Label;
-
-class OpenFileDialog {
+class OpenFileDialog : public FileDialogBase {
 public:
-	// extensionFilter, e.g. ".pose.json" -- matched against each directory entry's
-	// filename suffix for the file listing.
+	// extensionFilter, e.g. ".pose.json" -- matched case-insensitively against the end
+	// of each filename; "" lists every file. setFileTypeFilters() offers several.
 	OpenFileDialog(GuiContext& context, std::string directory, std::string extensionFilter);
 
-	// Shows the dialog and (re)scans `directory` on disk for its file listing,
-	// clearing any previous selection. Safe to call again while already open, e.g.
-	// re-clicking "Open...".
+	// Shows the dialog and (re)scans its folder, clearing any previous selection and
+	// search, with the file list focused so the arrow keys and type-ahead work straight
+	// away. Safe to call again while already open, e.g. re-clicking "Open...".
 	void open();
 
-	// Fired once, with the full path of the selected file, when the user confirms
-	// via the Open button (or presses it with something already selected from a
-	// previous open() -- selection is NOT cleared by clicking Open, only by open()
-	// itself). Not fired by Cancel/the title-bar close button/Escape -- see
-	// setOnCancel() for those. Also not fired if Open is pressed with nothing
-	// selected -- see the .cpp's confirmSelection().
-	void setOnConfirm(std::function<void(const std::string& fullPath)> onConfirm) { m_onConfirm = std::move(onConfirm); }
-	// Fired when the user backs out without opening anything: Cancel button, the
-	// title-bar X, or Escape (all three route through Panel::requestClose(), see
-	// the .cpp).
-	void setOnCancel(std::function<void()> onCancel) { m_onCancel = std::move(onCancel); }
+	// setOnConfirm() fires once, with the full path of the chosen file, on Open/double-
+	// click/Enter -- never with nothing selected (Open then just says "Select a file
+	// first.") and never for a folder.
 
-	bool isOpen() const;
-
-	// The underlying Panel, for callers that want to dock/anchor it, give it a
-	// persistence id, or (in tests) reach its child widgets directly -- the same
-	// pattern GuiContext::createPanel() already hands raw Panel* back to any
-	// consumer. Never null after construction.
-	Panel* panel() const { return m_panel; }
-
-private:
-	void refreshFileList();
-	void confirmSelection();
-
-	GuiContext& m_context;
-	std::string m_directory;
-	std::string m_extensionFilter;
-
-	Panel* m_panel = nullptr;
-	ListBox* m_fileList = nullptr;
-	Label* m_statusLabel = nullptr;
-
-	std::function<void(const std::string&)> m_onConfirm;
-	std::function<void()> m_onCancel;
+protected:
+	void onFileActivated(const FileEntry& entry) override;
+	void onConfirmClicked() override;
 };
 
 } // namespace lightGraphics::ui

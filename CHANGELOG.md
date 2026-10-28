@@ -25,6 +25,17 @@ The format is based on Keep a Changelog, and the project follows semantic versio
   the core library so `-DLVG_BUILD_UI=OFF` reproduces the library exactly as it was
   before LVGUI existed. See `docs/gui/00-overview.md` for the design and
   `docs/gui_usage.md` for usage; `gui_demo` is the bundled example.
+- **LVGUI file dialogs**: `OpenFileDialog` and `SaveFileDialog` now share a
+  `FileDialogBase` and are built around a new `FileListView` widget: Name / Size /
+  Modified columns sorted by clicking a header (natural, case-insensitive name order;
+  folders first), folder navigation (double-click/Enter, ↑/Backspace, editable path,
+  `setNavigationEnabled()`), a search box, multiple file-type filters
+  (`setFileTypeFilters()`), a hidden-files toggle, a resizable dialog whose list fills
+  it, and a status line. Save As adds an overwrite confirmation (`setConfirmOverwrite()`),
+  filename validation and `open(suggestedFilename)`. Folder, sort and filter are
+  remembered between `open()` calls, and confirmed paths are now absolute. New
+  `file_dialog_demo` example; `gui_demo`'s File > Open... (and Ctrl+O) now opens an
+  `OpenFileDialog` on the repository.
 - `VolumeColorSource::TextureRgba`: volumes can take their colour directly from an
   RGBA8 3D texture, with the texture's alpha mapped to opacity through the transfer
   function, so colour and opacity can show different quantities. The default,
@@ -46,6 +57,10 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Windows/MSVC builds now avoid `min`/`max` macro collisions, enable the required GLM experimental quaternion extension, and clean up warning-as-error blockers.
 - Invalid object indices in remove/update APIs now throw `std::out_of_range` consistently instead of being ignored.
 - Object state method implementations were split out of `src/VkApp.cpp` into `src/VkAppObjectState.cpp`.
+- Bundled `stb_image.h` updated from v2.28 to v2.30: faster PNG decoding, stricter
+  handling of truncated compressed data, and the fix for a false
+  `-Wstringop-overflow` warning GCC 14 reports in optimised builds (an error under
+  `LVG_WARNINGS_AS_ERRORS=ON`).
 
 ### Fixed
 - Rigged meshes with see-through textures (MakeHuman hair cards, eyelashes, eyes) rendered
@@ -60,6 +75,19 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 - Embedded-texture cache keys were built from Assimp's per-file texture reference (`"*0"`, `"*1"`, ...), which is only unique within one source file. `VkApp`'s texture cache is a single process-wide map, so loading a second model whose material also referenced `"*0"` silently reused the first model's texture. The source file path is now folded into the cache key.
 - The window was mapped to the screen immediately on creation, before any scene loading ran. A slow enough synchronous load between construction and `run()` (nothing pumping the event queue yet) reads to the OS/window manager as a hung application. The window is now created hidden and `run()` reveals it right as its event loop starts.
 - `-DLVG_BUILD_UI=OFF` still installed the `lightVulkanGraphics/ui/` public headers (unused, but present) alongside everything else the option correctly excluded from that install. Now excluded too, so an `LVG_BUILD_UI=OFF` install has no trace of GUI code at all.
+- **LVGUI**: a quick click on a `MenuBar` item -- press and release delivered in the
+  same frame, as a fast click or touchpad tap on a slow frame does -- counted as a click
+  on the bare scene and cleared keyboard focus right after the item's callback ran, so a
+  dialog opened from a menu (e.g. `SaveFileDialog`, which focuses its filename field)
+  came up with nothing focused. Presses on the menu bar no longer clear focus.
+- **LVGUI**: once the mouse had passed over any text box the cursor stayed an I-beam
+  for the rest of the session -- `GuiContext::requestCursorShape()` forwarded the I-beam
+  straight to the platform and nothing ever asked for the arrow again. Cursor requests
+  now last one frame, defaulting back to the arrow, and the platform is only told when
+  the shape actually changes.
+- `-DLVG_BUILD_UI=OFF` builds failed to compile: `VkApp::pollKey()` was declared only
+  inside the `LVG_WITH_UI` block of `VkApp.h` but defined (and used by the rigged
+  animation shortcuts) unconditionally. It is now declared for both configurations.
 
 ### Removed
 - Maintainer-local editor and agent workflow files from the public repo surface.

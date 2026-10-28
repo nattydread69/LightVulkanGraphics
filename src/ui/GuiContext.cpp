@@ -452,10 +452,24 @@ void GuiContext::updateFocusNavigation() {
 }
 
 void GuiContext::update() {
+	// Cursor requests last one frame: widgets re-request every frame they want a shape
+	// (see requestCursorShape()), so anything not asked for again falls back to Arrow.
+	m_requestedCursor = CursorShape::Arrow;
+
 	const InputState& in = input();
 	Vec2 mouse = in.mousePos;
 	const bool leftPressed  = in.mousePressed[static_cast<int>(MouseButton::Left)];
 	const bool leftReleased = in.mouseReleased[static_cast<int>(MouseButton::Left)];
+
+	// Whether this frame's press lands on the MenuBar -- its row or its open dropdown --
+	// decided BEFORE m_menuBar.update(), which on a release in this same frame runs the
+	// chosen item's callback and closes the dropdown. A quick click (or a touchpad tap on
+	// a slow frame) delivers press and release together; judged afterwards, the press
+	// looked like a click on the bare scene (below) and cleared whatever focus the item's
+	// callback had just set -- e.g. SaveFileDialog::open() focusing its filename field.
+	const bool pressOnMenuBar = leftPressed && m_menuBar.menuCount() > 0 &&
+		(m_menuBar.barRect(*this).contains(mouse) ||
+		 (m_menuBar.isMenuOpen() && m_menuBar.openMenuRect(*this).contains(mouse)));
 
 	// docs/gui/05-widgets.md, "MenuBar": resolved first, ahead of even the popup -- it is
 	// not a Widget (see MenuBar.h's class comment) so it cannot participate in the
@@ -580,8 +594,10 @@ void GuiContext::update() {
 		           hoveredWidget->acceptsCapture()) {
 			m_activeId = hoveredWidget->id();
 			m_focusedId = hoveredWidget->acceptsFocus() ? hoveredWidget->id() : kInvalidWidgetId;
-		} else if (!hoveredWidget && !hoveredPanel) {
-			// A click on the scene, outside every panel.
+		} else if (!hoveredWidget && !hoveredPanel && !pressOnMenuBar) {
+			// A click on the scene, outside every panel. A click on the menu bar is not
+			// one: a menu item acts on the application, and may itself have just moved
+			// focus somewhere (see pressOnMenuBar above).
 			m_focusedId = kInvalidWidgetId;
 		}
 	}
@@ -621,6 +637,15 @@ void GuiContext::update() {
 	// inside the update() call that just ran above.
 	if (leftReleased) {
 		m_activeId = kInvalidWidgetId;
+	}
+
+	// Apply this frame's cursor only when it changed -- once on entering a text box,
+	// once on leaving it -- rather than calling the platform every frame.
+	if (m_requestedCursor != m_appliedCursor) {
+		m_appliedCursor = m_requestedCursor;
+		if (m_hooks.setCursorShape) {
+			m_hooks.setCursorShape(m_appliedCursor);
+		}
 	}
 }
 
@@ -816,9 +841,7 @@ void GuiContext::setClipboardText(std::string_view text) const {
 }
 
 void GuiContext::requestCursorShape(CursorShape shape) const {
-	if (m_hooks.setCursorShape) {
-		m_hooks.setCursorShape(shape);
-	}
+	m_requestedCursor = shape;
 }
 
 void GuiContext::addWorldLabel(const glm::vec3& worldPos, const glm::mat4& viewProj,
