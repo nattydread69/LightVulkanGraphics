@@ -64,6 +64,10 @@
 //   Modal       -- "Clear log..." opens a confirmation dialog that blocks every other
 //                  panel and the camera entirely until dismissed (Cancel, Clear it,
 //                  the title-bar X, or Escape) -- docs/gui/05, "Panel", "Modal panels"
+//   OpenFileDialog -- File > Open... (or Ctrl+O) browses the repository: sort by
+//                  Name/Size/Modified, enter folders, search, switch file type. The
+//                  chosen path is printed and shown in the log view; nothing is loaded
+//                  -- docs/gui/05, "OpenFileDialog and SaveFileDialog"
 
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
@@ -74,6 +78,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -115,6 +120,24 @@ int main()
 
 		auto& gui = app.gui();
 
+		// File > Open... (and Ctrl+O, wired in the update callback below) opens this.
+		// It starts in the repository's own root folder so there are folders and files of
+		// every kind to browse, sort and filter, falling back to the working directory if
+		// the source tree isn't where it was built from. Created before the menu that
+		// opens it; its onConfirm is set further down, once the log view it reports to
+		// exists.
+		std::filesystem::path browseRoot = std::filesystem::path(__FILE__).parent_path().parent_path();
+		if (std::error_code ec; !std::filesystem::is_directory(browseRoot, ec)) {
+			browseRoot = std::filesystem::current_path(ec);
+		}
+		lvgui::OpenFileDialog openDialog(gui, browseRoot.string(), "");
+		openDialog.setFileTypeFilters({
+			{ "All files", {} },
+			{ "Models (*.fbx, *.obj, *.gltf, *.glb)", { ".fbx", ".obj", ".gltf", ".glb" } },
+			{ "Images (*.png, *.jpg)", { ".png", ".jpg", ".jpeg" } },
+			{ "Text (*.md, *.txt, *.csv, *.json)", { ".md", ".txt", ".csv", ".json" } },
+		});
+
 		// docs/gui/05-widgets.md, "MenuBar": a single, global row of dropdown menus fixed
 		// to the window's top edge -- unlike TabBar, which groups widgets within one
 		// panel. Every panel below is positioned well clear of its default height
@@ -123,7 +146,7 @@ int main()
 		{
 			auto file = gui.menuBar().addMenu("File");
 			file.addItem("New Scene", [] { std::cout << "[gui-demo] File > New Scene\n"; });
-			file.addItem("Open...", [] { std::cout << "[gui-demo] File > Open...\n"; }, "Ctrl+O");
+			file.addItem("Open...", [&openDialog] { openDialog.open(); }, "Ctrl+O");
 			file.addSeparator();
 			file.addItem("Exit", [] { std::cout << "[gui-demo] File > Exit (not wired up)\n"; }, "Ctrl+Q");
 
@@ -418,6 +441,12 @@ int main()
 		solverLog->setMaxLines(200);
 		solverLog->push("[gui-demo] log view ready -- watch this fill as the demo runs");
 
+		openDialog.setOnConfirm([solverLog](const std::string& path) {
+			std::cout << "[gui-demo] File > Open: " << path << std::endl;
+			solverLog->push("[gui-demo] File > Open: " + path);
+		});
+		openDialog.setOnCancel([solverLog] { solverLog->push("[gui-demo] File > Open cancelled"); });
+
 		panel->add<lvgui::Separator>("Modal");
 
 		// A confirmation dialog -- created once, hidden until needed. It's an ordinary
@@ -459,10 +488,21 @@ int main()
 		rightClickMenu->addSeparator();
 		rightClickMenu->addItem("Log a message", [solverLog] { solverLog->push("[gui-demo] context menu action"); });
 
-		app.setUpdateCallback([&gui, rightClickMenu, solverLog](float dt) {
+		app.setUpdateCallback([&gui, &openDialog, rightClickMenu, solverLog](float dt) {
 			const lvgui::InputState& in = gui.input();
 			if (in.mouseReleased[static_cast<int>(lvgui::MouseButton::Right)]) {
 				rightClickMenu->open(in.mousePos);
+			}
+
+			// The menu's "Ctrl+O" is only a hint (docs/gui/05-widgets.md, "MenuBar"); the
+			// shortcut itself is the application's to wire. wantsKeyboard() keeps it quiet
+			// while a text field has focus or a modal -- the dialog itself included -- is up.
+			if (!gui.wantsKeyboard()) {
+				for (const lvgui::KeyEvent& ev : in.keyQueue) {
+					if (ev.pressed && !ev.repeat && ev.key == lvgui::Key::O && (ev.mods & lvgui::Mod::Ctrl) != 0) {
+						openDialog.open();
+					}
+				}
 			}
 
 			// A fake "solver" feeding the log view periodically, so isFollowingBottom()'s
