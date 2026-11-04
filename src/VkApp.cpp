@@ -927,6 +927,24 @@ namespace lightGraphics
 		// window manager's liveness pings is actually about to start. See run().
 		glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
+#if defined(__linux__) && (GLFW_VERSION_MAJOR > 3 || (GLFW_VERSION_MAJOR == 3 && GLFW_VERSION_MINOR >= 4))
+		// Give the window an application identity (Wayland app_id / X11 WM_CLASS) so the
+		// desktop shell can match it to a .desktop file. Without it GNOME's dock shows
+		// "Unknown". The executable's file name is used, e.g. "takemusu_graphics", so
+		// the matching launcher is ~/.local/share/applications/<executable>.desktop.
+		{
+			std::error_code ec;
+			const std::string appId =
+			    std::filesystem::read_symlink("/proc/self/exe", ec).filename().string();
+			if (!ec && !appId.empty())
+			{
+				glfwWindowHintString(GLFW_WAYLAND_APP_ID, appId.c_str());
+				glfwWindowHintString(GLFW_X11_CLASS_NAME, appId.c_str());
+				glfwWindowHintString(GLFW_X11_INSTANCE_NAME, appId.c_str());
+			}
+		}
+#endif
+
 		window_ = glfwCreateWindow(w, h, title, nullptr, nullptr);
 		if (!window_)
 		{
