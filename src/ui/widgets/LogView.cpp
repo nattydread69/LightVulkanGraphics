@@ -18,7 +18,7 @@
 
 #include <lightVulkanGraphics/ui/widgets/LogView.h>
 #include <lightVulkanGraphics/ui/GuiContext.h>
-#include "../TextWrap.h"
+#include "TextWrap.h"
 
 #include <algorithm>
 #include <cmath>

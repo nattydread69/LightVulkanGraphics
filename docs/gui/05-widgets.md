@@ -94,7 +94,7 @@ public:
 - Long non-wrapping text is truncated with an ellipsis: measure, and if it exceeds the
   region, binary-search the byte index that fits `width - measureText("…")`.
 
-The greedy word-wrap itself lives in `src/ui/TextWrap.h`'s `wrapText()`, not as a private
+The greedy word-wrap itself lives in `include/internal/ui/TextWrap.h`'s `wrapText()`, not as a private
 method on this class — extracted once `LogView` (below) became a second caller needing
 the identical algorithm. Internal-only, like `Utf8.h`'s helpers; not part of the public
 GUI API.
@@ -1044,7 +1044,7 @@ A read-only, appendable, word-wrapping, internally scrollable text region for so
 output — what `Label`'s word-wrap and `Panel`'s own draggable scrollbar already do,
 combined into one widget that owns its own scroll state instead of depending on an
 owning `Panel`'s. `Label`'s wrap algorithm itself is shared, not duplicated: it moved to
-an internal `wrapText()` free function (`src/ui/TextWrap.h`, alongside `Utf8.h`'s own
+an internal `wrapText()` free function (`include/internal/ui/TextWrap.h`, alongside `Utf8.h`'s own
 internal-only helpers) once this became a second caller needing the identical
 greedy-break-at-the-last-space logic.
 

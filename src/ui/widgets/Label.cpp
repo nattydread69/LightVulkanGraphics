@@ -18,7 +18,7 @@
 
 #include <lightVulkanGraphics/ui/widgets/Label.h>
 #include <lightVulkanGraphics/ui/GuiContext.h>
-#include "../TextWrap.h"
+#include "TextWrap.h"
 
 namespace lightGraphics::ui {
 

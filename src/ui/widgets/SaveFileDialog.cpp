@@ -23,7 +23,7 @@
 #include <lightVulkanGraphics/ui/widgets/Spacer.h>
 #include <lightVulkanGraphics/ui/widgets/TextBox.h>
 #include <lightVulkanGraphics/ui/GuiContext.h>
-#include "../TextWrap.h"
+#include "TextWrap.h"
 
 #include <algorithm>
 

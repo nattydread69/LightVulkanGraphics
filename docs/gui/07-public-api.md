@@ -26,7 +26,7 @@ include/lightVulkanGraphics/ui/
         TabBar.h  ListBox.h  ContextMenu.h  LogView.h
 ```
 
-`*` `PlatformHooks` is declared in `GuiContext.h` itself; `src/ui/UiPlatformGlfw.h`
+`*` `PlatformHooks` is declared in `GuiContext.h` itself; `include/internal/ui/UiPlatformGlfw.h`
 includes it from there rather than declaring its own copy, so there is a single
 definition.
 

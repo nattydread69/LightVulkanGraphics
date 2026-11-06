@@ -464,6 +464,7 @@ target_include_directories(${PROJECT_NAME}
 		$<BUILD_INTERFACE:${LVG_GENERATED_INCLUDE_DIR}>
 		$<INSTALL_INTERFACE:${LVG_INSTALL_INCLUDEDIR}>
 	PRIVATE
+		${PROJECT_SOURCE_DIR}/include/internal
 		${PROJECT_SOURCE_DIR}/external
 )
 
@@ -520,6 +521,7 @@ if(LVG_BUILD_UI)
 		$<INSTALL_INTERFACE:include>
 	)
 	target_include_directories(LightVulkanGraphicsUI PRIVATE
+		${PROJECT_SOURCE_DIR}/include/internal/ui
 		${PROJECT_SOURCE_DIR}/external
 	)
 
@@ -597,7 +599,8 @@ if(LVG_BUILD_UI)
 	)
 endif()
 
-# 2) Public headers (everything under include/, except lightVulkanGraphics/ui/,
+# 2) Public headers (everything under include/, except include/internal/ -- the
+#    library's private headers, never installed -- and lightVulkanGraphics/ui/,
 #    which 2b below installs separately at its own destination). Excluding it
 #    here unconditionally -- not just when LVG_BUILD_UI is OFF -- means an
 #    LVG_BUILD_UI=OFF install has no trace of GUI headers anywhere: with the
@@ -607,6 +610,7 @@ endif()
 install(DIRECTORY ${PROJECT_SOURCE_DIR}/include/
 	DESTINATION ${LVG_INSTALL_INCLUDEDIR}
 	PATTERN "ui" EXCLUDE
+	PATTERN "internal" EXCLUDE
 )
 install(FILES
 	${LVG_GENERATED_INCLUDE_DIR}/LightVulkanGraphicsVersion.h

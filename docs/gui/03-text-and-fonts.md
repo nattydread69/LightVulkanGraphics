@@ -341,7 +341,7 @@ every digit without the flag, gets its own glyph's advance exactly as before.
 `Font::measureText` takes the same trailing `flags` parameter and sums through
 `advanceFor` internally, so a truncation/ellipsis measurement and the text it describes
 never disagree about which advance a digit used. `DrawList::addText`/`addTextClipped` and
-`wrapText` (`src/ui/TextWrap.h`) take the identical trailing `flags` parameter and thread
+`wrapText` (`include/internal/ui/TextWrap.h`) take the identical trailing `flags` parameter and thread
 it down to the same `advanceFor` call — the glyph itself always renders at its natural
 ink size and position; only the PEN ADVANCE after it is padded, so a narrower digit (a
 `'1'` next to an `'8'`) leaves trailing blank space rather than being stretched or

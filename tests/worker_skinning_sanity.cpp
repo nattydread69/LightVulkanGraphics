@@ -18,7 +18,7 @@
 
 #include "FBXLoader.h"
 #include "RiggedObject.h"
-#include "../src/RiggedSkinning.h"
+#include "../include/internal/RiggedSkinning.h"
 
 #include <glm/glm.hpp>
 

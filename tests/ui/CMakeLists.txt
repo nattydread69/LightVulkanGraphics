@@ -16,7 +16,7 @@ add_test(NAME lvgui_tests COMMAND lvgui_tests)
 add_executable(lvgui_utf8_tests
 	test_utf8.cpp
 )
-target_include_directories(lvgui_utf8_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_include_directories(lvgui_utf8_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
 target_link_libraries(lvgui_utf8_tests PRIVATE LightVulkanGraphics::UI)
 target_compile_features(lvgui_utf8_tests PRIVATE cxx_std_17)
 
@@ -25,7 +25,7 @@ add_test(NAME lvgui_utf8_tests COMMAND lvgui_utf8_tests)
 add_executable(lvgui_font_tests
 	test_font.cpp
 )
-target_include_directories(lvgui_font_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_include_directories(lvgui_font_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
 target_link_libraries(lvgui_font_tests PRIVATE LightVulkanGraphics::UI)
 target_compile_features(lvgui_font_tests PRIVATE cxx_std_17)
 target_compile_definitions(lvgui_font_tests PRIVATE
@@ -39,7 +39,7 @@ add_test(NAME lvgui_font_tests COMMAND lvgui_font_tests)
 add_executable(lvgui_uirenderer_tests
 	test_uirenderer.cpp
 )
-target_include_directories(lvgui_uirenderer_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_include_directories(lvgui_uirenderer_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
 target_link_libraries(lvgui_uirenderer_tests PRIVATE LightVulkanGraphics::UI Vulkan::Vulkan)
 target_compile_features(lvgui_uirenderer_tests PRIVATE cxx_std_17)
 
@@ -50,7 +50,7 @@ add_test(NAME lvgui_uirenderer_tests COMMAND lvgui_uirenderer_tests)
 add_executable(lvgui_input_tests
 	test_input.cpp
 )
-target_include_directories(lvgui_input_tests PRIVATE ${PROJECT_SOURCE_DIR}/src/ui)
+target_include_directories(lvgui_input_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
 target_link_libraries(lvgui_input_tests PRIVATE LightVulkanGraphics::UI)
 target_compile_features(lvgui_input_tests PRIVATE cxx_std_17)
 
