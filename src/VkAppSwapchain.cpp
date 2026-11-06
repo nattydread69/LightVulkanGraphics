@@ -33,8 +33,10 @@
 #include <cstdlib>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace lightGraphics
@@ -55,6 +57,29 @@ namespace lightGraphics
 			message << "Vulkan call failed (" << static_cast<int>(result) << "): "
 			        << expression << " at " << file << ":" << line;
 			throw std::runtime_error(message.str());
+		}
+
+		// std::getenv is a hard MSVC error under this project's /WX (C4996, "may be
+		// unsafe"). Same _dupenv_s/getenv split as VkAppRigged.cpp's identical helper.
+		std::optional<std::string> getEnvironmentVariable(const char* name)
+		{
+#if defined(_WIN32)
+			char* value = nullptr;
+			std::size_t length = 0;
+			if (_dupenv_s(&value, &length, name) != 0 || value == nullptr)
+			{
+				return std::nullopt;
+			}
+			std::string result(value);
+			free(value);
+			return result;
+#else
+			if (const char* value = std::getenv(name))
+			{
+				return std::string(value);
+			}
+			return std::nullopt;
+#endif
 		}
 	}
 
@@ -287,8 +312,7 @@ namespace lightGraphics
 		// mainLoop() paces the frames. LVG_PRESENT_MODE=fifo keeps FIFO.
 		VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
 		{
-			const char* asked = std::getenv("LVG_PRESENT_MODE");
-			bool const fifoAsked = asked && std::string(asked) == "fifo";
+			bool const fifoAsked = getEnvironmentVariable("LVG_PRESENT_MODE") == std::string("fifo");
 			uint32_t modeCount = 0;
 			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &modeCount, nullptr);
 			std::vector<VkPresentModeKHR> modes(modeCount);
