@@ -426,6 +426,50 @@ void testArrowKeysSwitchActiveTabWhileFocused() {
 
 }
 
+// Hidden children take no space in any composite -- the rule Panel already follows.
+void testHiddenChildrenTakeNoSpace() {
+	lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+	auto* panel = ctx.createPanel("Panel", { 50.0f, 50.0f, 300.0f, 600.0f });
+	const lvgui::Theme& th = ctx.theme();
+
+	// CollapsingSection: a hidden middle child leaves no gap.
+	auto* section = panel->add<lvgui::CollapsingSection>("Settings", true);
+	auto* first = section->add<lvgui::Label>("First");
+	auto* hidden = section->add<lvgui::Label>("Hidden");
+	auto* last = section->add<lvgui::Label>("Last");
+	step(ctx);
+	const float openHeight = section->preferredSize(ctx).y;
+	hidden->setVisible(false);
+	step(ctx);
+	assert(std::abs(section->preferredSize(ctx).y - (openHeight - hidden->preferredSize(ctx).y - th.itemSpacing)) < 1.0f);
+	assert(std::abs(last->bounds().y - (first->bounds().y + first->bounds().h + th.itemSpacing)) < 1.0f);
+
+	// Row: visible children share the full width.
+	auto* row = panel->add<lvgui::Row>();
+	auto* a = row->add<lvgui::Button>("A");
+	auto* b = row->add<lvgui::Button>("B");
+	auto* c = row->add<lvgui::Button>("C");
+	b->setVisible(false);
+	step(ctx);
+	const float rowWidth = row->bounds().w;
+	assert(std::abs(a->bounds().w - (rowWidth - th.itemSpacing) * 0.5f) < 1.0f);
+	assert(std::abs(c->bounds().x - (a->bounds().x + a->bounds().w + th.itemSpacing)) < 1.0f);
+	assert(std::abs((c->bounds().x + c->bounds().w) - (row->bounds().x + rowWidth)) < 1.0f);
+
+	// TabBar: a hidden child of the active tab adds no height.
+	auto* tabs = panel->add<lvgui::TabBar>();
+	auto tab = tabs->addTab("One");
+	tab.add<lvgui::Label>("Shown");
+	auto* hiddenInTab = tab.add<lvgui::Label>("Hidden");
+	step(ctx);
+	const float tabHeight = tabs->preferredSize(ctx).y;
+	hiddenInTab->setVisible(false);
+	step(ctx);
+	assert(std::abs(tabs->preferredSize(ctx).y - (tabHeight - hiddenInTab->preferredSize(ctx).y - th.itemSpacing)) < 1.0f);
+
+	std::cout << "✓ testHiddenChildrenTakeNoSpace\n";
+}
+
 int main() {
 	testRowDividesHorizontallyByWeight();
 	testVec3FieldOwnsThreDragValues();
@@ -442,6 +486,7 @@ int main() {
 	testClickingSecondTabButtonSwitchesActiveTab();
 	testInactiveTabChildDoesNotReceiveClicks();
 	testArrowKeysSwitchActiveTabWhileFocused();
+	testHiddenChildrenTakeNoSpace();
 
 	std::cout << "\n✅ All composite widget tests passed!\n";
 	return 0;

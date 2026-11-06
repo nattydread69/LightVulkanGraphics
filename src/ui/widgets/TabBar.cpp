@@ -73,7 +73,7 @@ Vec2 TabBar::preferredSize(const GuiContext& ctx) const {
 
 	int activeChildCount = 0;
 	for (std::size_t i = 0; i < m_children.size(); ++i) {
-		if (m_childTabIndex[i] != m_activeTab) {
+		if (m_childTabIndex[i] != m_activeTab || !childAt(i)->visible()) {
 			continue;
 		}
 		height += childAt(i)->preferredSize(ctx).y;
@@ -176,7 +176,7 @@ void TabBar::layout(const GuiContext& ctx) {
 	float y = m_bounds.y + th.rowHeight + th.itemSpacing;
 
 	for (std::size_t i = 0; i < m_children.size(); ++i) {
-		if (m_childTabIndex[i] != m_activeTab) {
+		if (m_childTabIndex[i] != m_activeTab || !childAt(i)->visible()) {
 			continue;
 		}
 		Widget* child = childAt(i);

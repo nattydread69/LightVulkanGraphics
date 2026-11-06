@@ -1205,3 +1205,50 @@ void VkApp::destroyCustomResources()
 }
 
 }
+
+namespace lightGraphics
+{
+
+void VkApp::updateTransferFunction(
+	TransferFunctionHandle handle,
+	const std::vector<TransferFunctionPoint>& points)
+{
+	if (handle.index >= transferFunctions_.size() ||
+		!transferFunctions_[handle.index].alive ||
+		transferFunctions_[handle.index].generation != handle.generation)
+	{
+		throw std::invalid_argument("Transfer-function handle is invalid or stale");
+	}
+	TransferFunctionResource& transfer = transferFunctions_[handle.index];
+	if (!transfer.texture)
+	{
+		throw std::logic_error("Transfer function has no lookup texture");
+	}
+	const std::vector<TransferFunctionPoint> normalized =
+		normalizeTransferFunctionPoints(points);
+	const std::vector<std::uint8_t> pixels =
+		sampleTransferFunctionRgba8(normalized);
+	detail::Texture& texture = *transfer.texture;
+
+	detail::Buffer staging;
+	createBuffer(pixels.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		staging);
+	void* mapped = nullptr;
+	checkVk(vkMapMemory(device_, staging.memory, 0, pixels.size(), 0, &mapped),
+		"Failed to map transfer-function staging memory");
+	std::memcpy(mapped, pixels.data(), pixels.size());
+	vkUnmapMemory(device_, staging.memory);
+	// The SHADER_READ -> TRANSFER_DST barrier waits for fragment-shader reads from
+	// frames submitted earlier on this queue, so no device-idle wait is needed.
+	transitionImageLayout(texture.image, VK_FORMAT_R8G8B8A8_SRGB,
+		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+	copyBufferToImage(staging.buffer, texture.image,
+		static_cast<uint32_t>(pixels.size() / 4), 1);
+	transitionImageLayout(texture.image, VK_FORMAT_R8G8B8A8_SRGB,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	destroyBuffer(device_, staging);
+	transfer.points = normalized;
+}
+
+}

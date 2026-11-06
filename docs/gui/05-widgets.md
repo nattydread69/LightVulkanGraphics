@@ -1203,6 +1203,12 @@ stretch to fill the row. A colormap legend or an icon has a meaningful aspect ra
 stretching it to whatever width the panel happens to be would distort it. Non-interactive
 (`acceptsCapture()` is false): there is nothing to press or drag.
 
+The texture is drawn in its own colours (RGBA, including alpha), multiplied by the tint.
+Before 3.1 every texture was drawn like the font atlas -- red channel as coverage for the
+tint -- so images came out as tinted greyscale; the heading-font atlas still uses that
+path internally. If `ui_image.frag.spv` cannot be found (a shader directory older than
+3.1) the library logs a warning and falls back to the old behaviour.
+
 **Registering a texture.**
 
 ```cpp

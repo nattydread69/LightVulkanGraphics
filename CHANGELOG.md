@@ -6,6 +6,41 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.1.0 (ABI-compatible with 3.0: same `libLightVulkanGraphics.so.3`)
+
+No class layouts change; 3.0 applications keep working. Install the shaders with the
+library (`ui_image.frag.spv` is new).
+
+#### Added
+- **Frame capture**: `VkApp::requestFrameCapture(callback)` reads back the next presented
+  frame (scene and GUI) as RGBA; `VkApp::writePng(path, frame)` saves it with no extra
+  dependency. Swapchains now request `TRANSFER_SRC` usage where the surface allows it.
+- `VkApp::updateTransferFunction(handle, points)`: edits a transfer function in place,
+  with no device-idle wait and no handle churn.
+- `VkApp::getOrbitAzimuth()` / `getOrbitElevation()`.
+- LVGUI `Key` codes for the rest of the alphabet, `Num0`-`Num9`, `F1`-`F12`, `Minus`,
+  `Equal` and `Insert` (appended; existing values unchanged).
+
+#### Changed
+- The swapchain presents with MAILBOX where the surface offers it, and `run()` paces its
+  loop to the primary monitor's refresh rate. FIFO blocked the whole loop while the window
+  was hidden on Wayland (no frame callbacks), so background work finished unseen until the
+  window came back. `LVG_PRESENT_MODE=fifo` keeps FIFO. Applications that drive frames
+  themselves instead of calling `run()` are not paced under MAILBOX.
+
+#### Fixed
+- LVGUI `Image` now draws textures from `registerUiTexture()` in colour (new
+  `ui_image.frag` pipeline); before, only the red channel was used, as coverage.
+- Orbit camera: `setOrbitTarget/Radius/Angles`, `addOrbitAngles`, `panOrbitTarget` and
+  `dollyOrbitRadius` move the camera at once (they used to wait for the next mouse event),
+  and `setOrbitEnabled(true)` snaps the camera onto the orbit.
+- Orbit camera: right-drag set yaw to azimuth - 90 degrees, turning the camera away from
+  its target; it now faces the target.
+- LVGUI `Row`, `CollapsingSection` and `TabBar` no longer reserve space for hidden
+  children (matching `Panel`).
+
+### 3.0.0
+
 **ABI break (3.0.0, `libLightVulkanGraphics.so.3`)**: `VkApp`, `detail::Texture` and
 `RiggedMesh` gained members, so applications must be rebuilt against the new headers.
 

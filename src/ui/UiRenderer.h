@@ -62,6 +62,10 @@ struct UiRendererCreateInfo {
 	// would give the project a second, divergent shader-lookup mechanism.
 	std::string vertexShaderPath;
 	std::string fragmentShaderPath;
+	// Fragment shader for colour images (ui_image.frag): samples the texture's RGBA
+	// and multiplies by the vertex colour. Optional -- left empty (or unloadable), colour
+	// textures fall back to the coverage shader above, as before it existed.
+	std::string imageFragmentShaderPath;
 };
 
 class UiRenderer {
@@ -109,7 +113,16 @@ public:
 	// std::runtime_error if more than kMaxRegisteredTextures are currently registered --
 	// see that constant's comment for why this backend caps it rather than growing the
 	// descriptor pool on demand.
-	TextureId registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height);
+	//
+	// `colour` = true (the default, and what VkApp::registerUiTexture() uses) draws the
+	// texture's own RGBA, tinted by the vertex colour, through the image pipeline.
+	// false keeps the coverage behaviour of the font atlas -- the red channel is alpha
+	// coverage for the vertex colour -- which is how the heading-font atlas is drawn.
+	TextureId registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
+	                          bool colour = true);
+
+	// True when the colour-image pipeline exists (its shader was found and built).
+	bool hasImagePipeline() const { return m_imagePipeline != VK_NULL_HANDLE; }
 	// Waits for the device to go idle before destroying anything -- the same safety
 	// requirement rebuildAtlas() already documents: a descriptor set pointing at this
 	// texture's VkImageView may still be referenced by a command buffer a previous
@@ -156,6 +169,7 @@ private:
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		VkImageView view = VK_NULL_HANDLE;
 		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+		bool colour = true;   // drawn with the image pipeline (see registerTexture())
 	};
 
 	// Sized into the descriptor pool up front (createDescriptorSet()) rather than grown
@@ -192,8 +206,12 @@ private:
 
 	std::string m_vertexShaderPath;
 	std::string m_fragmentShaderPath;
+	std::string m_imageFragmentShaderPath;
 
 	VkPipeline m_pipeline = VK_NULL_HANDLE;
+	// Same layout, vertex input and blending as m_pipeline; only the fragment shader
+	// differs (ui_image.frag). VK_NULL_HANDLE when that shader is unavailable.
+	VkPipeline m_imagePipeline = VK_NULL_HANDLE;
 	VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
 	VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;

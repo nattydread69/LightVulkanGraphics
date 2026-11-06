@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "VkApp.h"
+#include "VkAppFramePacing.h"
+#include "VkAppCapture.h"
 #include "FBXLoader.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "RiggedObject.h"
@@ -398,6 +400,7 @@ namespace lightGraphics
 	VkApp::~VkApp()
 	{
 		cleanup();
+		detail::forgetCaptureState(this);
 	}
 
 	void VkApp::assertOwnerThread(const char* where) const
@@ -1009,6 +1012,17 @@ namespace lightGraphics
 	{
 		while (!glfwWindowShouldClose(window_))
 		{
+			// Paced to the monitor's rate where presenting does not (MAILBOX:
+			// VkAppFramePacing.h): the rest of the last frame's interval slept.
+			if (detail::frameIntervalSeconds > 0.0)
+			{
+				double const wait = detail::frameStartTime + detail::frameIntervalSeconds - glfwGetTime();
+				if (wait > 0.0)
+				{
+					std::this_thread::sleep_for(std::chrono::duration<double>(wait));
+				}
+			}
+			detail::frameStartTime = glfwGetTime();
 			glfwPollEvents();
 
 			double now = glfwGetTime();
@@ -1210,6 +1224,9 @@ namespace lightGraphics
 			throw std::runtime_error("drawFrame: vkQueueSubmit failed");
 		}
 
+		// Pending requestFrameCapture() calls read this frame back before it is presented.
+		serviceFrameCaptures(imageIndex, renderFinishedSemaphores_[currentFrame_]);
+
 		// Present
 		VkSwapchainKHR swapChains[] = { swapChain_ };
 
@@ -1294,10 +1311,7 @@ namespace lightGraphics
 				if (glfwGetKey(window_, GLFW_KEY_Q) == GLFW_PRESS) orbitTarget_ -= u*speed*dtSeconds;
 				if (glfwGetKey(window_, GLFW_KEY_E) == GLFW_PRESS) orbitTarget_ += u*speed*dtSeconds;
 
-				float az = glm::radians(orbitAzimuthDeg_);
-				float el = glm::radians(orbitElevationDeg_);
-				glm::vec3 orbitDir(cos(az)*cos(el), sin(el), sin(az)*cos(el));
-				camera_.position = orbitTarget_ - glm::normalize(orbitDir) * orbitRadius_;
+				syncCameraToOrbit();
 			}
 			else
 			{
@@ -1468,13 +1482,9 @@ namespace lightGraphics
 			orbitAzimuthDeg_   += dx * orbitRotateSens_;
 			orbitElevationDeg_ -= dy * orbitRotateSens_;
 			orbitElevationDeg_ = glm::clamp(orbitElevationDeg_, -89.0f, 89.0f);
-
-			float az = glm::radians(orbitAzimuthDeg_);
-			float el = glm::radians(orbitElevationDeg_);
-			glm::vec3 dir(cos(az)*cos(el), sin(el), sin(az)*cos(el));
-			camera_.position = orbitTarget_ - glm::normalize(dir) * orbitRadius_;
-			camera_.yaw = orbitAzimuthDeg_ - 90.0f;  // align yaw with azimuth
-			camera_.pitch = orbitElevationDeg_;
+			// Was yaw = azimuth - 90, which turned the camera 90 degrees away from the
+			// target on every drag (see syncCameraToOrbit()).
+			syncCameraToOrbit();
 		}
 		else
 		{
@@ -1503,11 +1513,7 @@ namespace lightGraphics
 			// Dolly in/out
 			orbitRadius_ -= static_cast<float>(yoffset) * orbitDollySens_;
 			orbitRadius_ = std::max(0.1f, orbitRadius_);
-
-			float az = glm::radians(orbitAzimuthDeg_);
-			float el = glm::radians(orbitElevationDeg_);
-			glm::vec3 dir(cos(az)*cos(el), sin(el), sin(az)*cos(el));
-			camera_.position = orbitTarget_ - glm::normalize(dir) * orbitRadius_;
+			syncCameraToOrbit();
 		}
 		else
 		{
@@ -2319,21 +2325,64 @@ namespace lightGraphics
 	glm::vec3 VkApp::getCameraUp() const { return glm::normalize(glm::cross(getCameraRight(), getCameraForward())); }
 
 	// Orbit camera API
-	void VkApp::setOrbitEnabled(bool enabled) { orbitEnabled_ = enabled; }
-	void VkApp::setOrbitTarget(const glm::vec3& target) { orbitTarget_ = target; }
-	void VkApp::setOrbitRadius(float radius) { orbitRadius_ = std::max(0.1f, radius); }
-	void VkApp::setOrbitAngles(float azimuthDeg, float elevationDeg) {
+	// Every orbit change goes through syncCameraToOrbit() while orbit mode is on, so the
+	// camera moves at once -- not only on the next mouse event, as it used to.
+	void VkApp::syncCameraToOrbit()
+	{
+		const float az = glm::radians(orbitAzimuthDeg_);
+		const float el = glm::radians(orbitElevationDeg_);
+		// Unit vector from the camera to the target.
+		const glm::vec3 dir(std::cos(az) * std::cos(el), std::sin(el), std::sin(az) * std::cos(el));
+		camera_.position = orbitTarget_ - dir * orbitRadius_;
+		// Camera::view() looks along (cos yaw cos pitch, sin pitch, sin yaw cos pitch),
+		// so yaw = azimuth and pitch = elevation face the target exactly.
+		camera_.yaw = orbitAzimuthDeg_;
+		camera_.pitch = orbitElevationDeg_;
+	}
+
+	void VkApp::setOrbitEnabled(bool enabled)
+	{
+		const bool turningOn = enabled && !orbitEnabled_;
+		orbitEnabled_ = enabled;
+		if (turningOn)
+		{
+			syncCameraToOrbit();
+		}
+	}
+	void VkApp::setOrbitTarget(const glm::vec3& target)
+	{
+		orbitTarget_ = target;
+		if (orbitEnabled_)
+		{
+			syncCameraToOrbit();
+		}
+	}
+	void VkApp::setOrbitRadius(float radius)
+	{
+		orbitRadius_ = std::max(0.1f, radius);
+		if (orbitEnabled_)
+		{
+			syncCameraToOrbit();
+		}
+	}
+	void VkApp::setOrbitAngles(float azimuthDeg, float elevationDeg)
+	{
 		orbitAzimuthDeg_ = azimuthDeg;
 		orbitElevationDeg_ = glm::clamp(elevationDeg, -89.0f, 89.0f);
+		if (orbitEnabled_)
+		{
+			syncCameraToOrbit();
+		}
 	}
-	void VkApp::addOrbitAngles(float deltaAzimuthDeg, float deltaElevationDeg) {
-		orbitAzimuthDeg_ += deltaAzimuthDeg;
-		orbitElevationDeg_ = glm::clamp(orbitElevationDeg_ + deltaElevationDeg, -89.0f, 89.0f);
+	void VkApp::addOrbitAngles(float deltaAzimuthDeg, float deltaElevationDeg)
+	{
+		setOrbitAngles(orbitAzimuthDeg_ + deltaAzimuthDeg, orbitElevationDeg_ + deltaElevationDeg);
 	}
-	void VkApp::panOrbitTarget(float deltaRight, float deltaUp) {
+	void VkApp::panOrbitTarget(float deltaRight, float deltaUp)
+	{
 		glm::vec3 r = getCameraRight();
 		glm::vec3 u = getCameraUp();
-		orbitTarget_ += r*deltaRight*orbitPanSens_ + u*deltaUp*orbitPanSens_;
+		setOrbitTarget(orbitTarget_ + r * deltaRight * orbitPanSens_ + u * deltaUp * orbitPanSens_);
 	}
 	void VkApp::dollyOrbitRadius(float deltaRadius) { setOrbitRadius(orbitRadius_ - deltaRadius*orbitDollySens_); }
 	void VkApp::setOrbitSensitivities(float rotate, float pan, float dolly) {

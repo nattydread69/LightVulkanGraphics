@@ -69,7 +69,10 @@ The fragment shader multiplies vertex colour by the atlas red channel used as al
 Solid fills sample the white block and come out as pure vertex colour. One texture, one
 descriptor set, one pipeline for everything the library itself draws. Consumer-registered
 textures (`Image`, docs/gui/05-widgets.md) are the one deliberate exception — their own
-descriptor set, sharing the same pipeline and the same sampler settings.
+descriptor set and a second pipeline that differs only in its fragment shader
+(`ui_image.frag`: texture RGBA times vertex colour), sharing the layout, vertex format
+and sampler settings. The renderer switches pipelines only where a colour image follows
+coverage drawing or the reverse.
 
 **D5 — 32-bit indices.**
 Dear ImGui's 16-bit default causes an overflow class of bug that you do not need to

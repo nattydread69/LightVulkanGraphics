@@ -21,6 +21,12 @@
 #include <cassert>
 #include <iostream>
 
+// Applications compile Key values in; the keys added after S must not renumber the
+// original ones.
+static_assert(lightGraphics::ui::Key::Backspace == 0 && lightGraphics::ui::Key::A == 14 &&
+	lightGraphics::ui::Key::S == 22 && lightGraphics::ui::Key::B == 23,
+	"Key values are ABI: append new keys, never insert");
+
 namespace lvgui = lightGraphics::ui;
 
 namespace {

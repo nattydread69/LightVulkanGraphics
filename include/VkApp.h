@@ -206,6 +206,18 @@ namespace lightGraphics
 	// markObjectDirty(). This is a best-effort diagnostic net, not exhaustive
 	// coverage or real synchronization — if you need to mutate the scene from a
 	// worker thread, hand the data to the owning thread instead.
+	// One presented frame read back from the swapchain (see VkApp::requestFrameCapture()).
+	// rgba is width * height * 4 bytes, row 0 at the top, alpha 255. Colours are the bytes
+	// the window shows (sRGB-encoded on an sRGB swapchain), ready to save as an image.
+	struct CapturedFrame
+	{
+		bool ok = false;
+		std::string error;          // set when ok is false
+		uint32_t width = 0;
+		uint32_t height = 0;
+		std::vector<std::uint8_t> rgba;
+	};
+
 	class VkApp
 	{
 	public:
@@ -442,7 +454,13 @@ namespace lightGraphics
 		glm::vec3 getCameraRight() const;
 		glm::vec3 getCameraUp() const;
 
-		// Orbit camera API
+		// Orbit camera API. While orbit mode is on, the camera sits at
+		//   target - orbitRadius * (cos az cos el, sin el, sin az cos el)
+		// looking at the target (az = azimuth, el = elevation, degrees; note a positive
+		// elevation puts the camera BELOW the target, looking up). Every setter below --
+		// and right-drag, the wheel and A/D/Q/E -- moves the camera immediately, and
+		// turning orbit mode on snaps the camera to the stored orbit. With orbit mode off
+		// the setters only store values for later.
 		void setOrbitEnabled(bool enabled);
 		bool getOrbitEnabled() const { return orbitEnabled_; }
 		void setOrbitTarget(const glm::vec3& target);
@@ -450,6 +468,8 @@ namespace lightGraphics
 		void setOrbitRadius(float radius);
 		float getOrbitRadius() const { return orbitRadius_; }
 		void setOrbitAngles(float azimuthDeg, float elevationDeg);
+		float getOrbitAzimuth() const { return orbitAzimuthDeg_; }
+		float getOrbitElevation() const { return orbitElevationDeg_; }
 		void addOrbitAngles(float deltaAzimuthDeg, float deltaElevationDeg);
 		void panOrbitTarget(float deltaRight, float deltaUp);
 		void dollyOrbitRadius(float deltaRadius);
@@ -547,6 +567,12 @@ namespace lightGraphics
 			const std::vector<TransferFunctionPoint>& points);
 		TransferFunctionHandle createTransferFunction(
 			TransferFunctionPreset preset);
+		// Re-uploads an existing transfer function in place: volumes using it pick up the
+		// new curve on the next frame. No device-idle wait and no handle churn, so it is
+		// cheap enough to call every frame while a user drags a control point.
+		void updateTransferFunction(
+			TransferFunctionHandle handle,
+			const std::vector<TransferFunctionPoint>& points);
 		void destroyTransferFunction(TransferFunctionHandle handle);
 
 		VolumeHandle createVolume(const VolumeRenderDescription& description);
@@ -557,6 +583,20 @@ namespace lightGraphics
 		void drawVolume(VolumeHandle handle, const DrawOptions& options);
 		void hideVolume(VolumeHandle handle);
 		void destroyVolume(VolumeHandle handle);
+
+		// ==================== FRAME CAPTURE ====================
+
+		// Reads back the next frame the window presents -- the 3D scene and the GUI, exactly
+		// as shown -- and calls `onCaptured` with it on this (the owner) thread, during
+		// that frame's drawFrame(). Several requests made before one frame are all served
+		// by it. The read-back waits for that one frame on the GPU, so it costs a frame's
+		// latency, not a device-wide stall. If the surface cannot be read back (no
+		// TRANSFER_SRC usage, or a format other than 8-bit RGBA/BGRA) the callback still
+		// runs, with ok = false and an error.
+		void requestFrameCapture(std::function<void(const CapturedFrame&)> onCaptured);
+		// Writes an RGBA frame as a PNG (lossless; stored without compression, so expect
+		// width * height * 4 bytes). Returns false and fills `error` on failure.
+		static bool writePng(const std::string& path, const CapturedFrame& frame, std::string* error = nullptr);
 
 		GLFWwindow* getWindowPointer() const { return window_; }
 
@@ -1197,6 +1237,11 @@ namespace lightGraphics
 
 		// Per-frame
 		void updateCameraFromKeyboard(float dtSeconds);
+		// Places camera_ on the orbit (position and yaw/pitch); see the orbit API comment.
+		void syncCameraToOrbit();
+		// Frame capture (VkAppCapture.cpp): after the frame's submit, copies the swapchain
+		// image to host memory and serves pending requestFrameCapture() callbacks.
+		void serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished);
 		void handleRiggedAnimationInput();
 		void updateUniformBuffer(uint32_t imageIndex);
 		void updateLightingBuffer(uint32_t imageIndex);

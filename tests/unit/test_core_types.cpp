@@ -30,7 +30,10 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <iterator>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -261,6 +264,121 @@ namespace
 		                              glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
 		                              name,
 		                              1.0f);
+	}
+
+	bool nearVec(const glm::vec3& a, const glm::vec3& b, float eps = 1e-4f)
+	{
+		return glm::length(a - b) < eps;
+	}
+
+	void testVkAppOrbitSettersMoveCameraImmediately()
+	{
+		lightGraphics::VkApp app;
+		app.setCameraLookAt(glm::vec3(5.0f, 5.0f, 5.0f), glm::vec3(0.0f));
+
+		// Orbit off: setters only store values.
+		app.setOrbitTarget(glm::vec3(1.0f, 2.0f, 3.0f));
+		app.setOrbitRadius(4.0f);
+		app.setOrbitAngles(30.0f, -20.0f);
+		require(nearVec(app.getCameraPosition(), glm::vec3(5.0f)), "orbit setters must not move the camera while orbit is off");
+
+		// Turning orbit on snaps the camera onto the stored orbit, facing the target.
+		app.setOrbitEnabled(true);
+		const float az = glm::radians(30.0f);
+		const float el = glm::radians(-20.0f);
+		const glm::vec3 dir(std::cos(az) * std::cos(el), std::sin(el), std::sin(az) * std::cos(el));
+		const glm::vec3 target(1.0f, 2.0f, 3.0f);
+		require(nearVec(app.getCameraPosition(), target - dir * 4.0f), "enabling orbit should place the camera on the orbit");
+		require(nearVec(app.getCameraForward(), glm::normalize(target - app.getCameraPosition())),
+		    "the orbit camera should look at its target");
+
+		// Every setter takes effect at once and keeps the target in view.
+		app.addOrbitAngles(90.0f, 10.0f);
+		require(std::fabs(app.getOrbitAzimuth() - 120.0f) < 1e-4f && std::fabs(app.getOrbitElevation() + 10.0f) < 1e-4f,
+		    "addOrbitAngles should accumulate");
+		require(nearVec(app.getCameraForward(), glm::normalize(target - app.getCameraPosition())),
+		    "camera should face the target after addOrbitAngles");
+		app.setOrbitRadius(10.0f);
+		require(std::fabs(glm::length(target - app.getCameraPosition()) - 10.0f) < 1e-3f, "radius should apply immediately");
+		app.setOrbitTarget(glm::vec3(0.0f));
+		require(nearVec(app.getCameraForward(), glm::normalize(-app.getCameraPosition())),
+		    "camera should follow a moved target");
+		app.setOrbitAngles(0.0f, 120.0f);
+		require(std::fabs(app.getOrbitElevation() - 89.0f) < 1e-4f, "elevation is clamped to +-89 degrees");
+	}
+
+	std::uint32_t readBe32(const std::vector<std::uint8_t>& b, std::size_t at)
+	{
+		return (std::uint32_t(b[at]) << 24) | (std::uint32_t(b[at + 1]) << 16) | (std::uint32_t(b[at + 2]) << 8) | b[at + 3];
+	}
+
+	void testWritePngRoundTrip()
+	{
+		lightGraphics::CapturedFrame frame;
+		frame.ok = true;
+		frame.width = 300;   // > 65535 bytes of scanlines, so several stored blocks
+		frame.height = 70;
+		frame.rgba.resize(std::size_t(frame.width) * frame.height * 4);
+		for (std::size_t i = 0; i < frame.rgba.size(); ++i)
+		{
+			frame.rgba[i] = static_cast<std::uint8_t>((i * 7) & 0xFF);
+		}
+		const auto path = std::filesystem::temp_directory_path() / "lvg_write_png_test.png";
+		std::string error;
+		require(lightGraphics::VkApp::writePng(path.string(), frame, &error), "writePng failed: " + error);
+
+		std::ifstream in(path, std::ios::binary);
+		std::vector<std::uint8_t> png((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+		std::filesystem::remove(path);
+		require(png.size() > 33 && png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G', "PNG signature");
+		require(readBe32(png, 16) == frame.width && readBe32(png, 20) == frame.height, "IHDR size");
+
+		// Walk the chunks and inflate the stored blocks by hand.
+		std::vector<std::uint8_t> idat;
+		std::size_t p = 8;
+		bool sawEnd = false;
+		while (p + 12 <= png.size())
+		{
+			const std::uint32_t len = readBe32(png, p);
+			const std::string type(png.begin() + static_cast<std::ptrdiff_t>(p + 4), png.begin() + static_cast<std::ptrdiff_t>(p + 8));
+			if (type == "IDAT")
+			{
+				idat.insert(idat.end(), png.begin() + static_cast<std::ptrdiff_t>(p + 8),
+				    png.begin() + static_cast<std::ptrdiff_t>(p + 8 + len));
+			}
+			sawEnd = sawEnd || type == "IEND";
+			p += 12 + len;
+		}
+		require(sawEnd && p == png.size(), "PNG chunks should be well formed");
+		std::vector<std::uint8_t> raw;
+		std::size_t q = 2;   // zlib header
+		while (true)
+		{
+			const bool last = idat[q] & 1;
+			const std::size_t n = idat[q + 1] | (std::size_t(idat[q + 2]) << 8);
+			require(static_cast<std::size_t>((idat[q + 3] | (idat[q + 4] << 8)) ^ 0xFFFF) == n, "stored block length check");
+			raw.insert(raw.end(), idat.begin() + static_cast<std::ptrdiff_t>(q + 5),
+			    idat.begin() + static_cast<std::ptrdiff_t>(q + 5 + n));
+			q += 5 + n;
+			if (last)
+			{
+				break;
+			}
+		}
+		const std::size_t row = std::size_t(frame.width) * 4;
+		require(raw.size() == (row + 1) * frame.height, "decoded scanline size");
+		for (std::uint32_t y = 0; y < frame.height; ++y)
+		{
+			require(raw[y * (row + 1)] == 0, "filter byte");
+			require(std::equal(frame.rgba.begin() + static_cast<std::ptrdiff_t>(y * row),
+			    frame.rgba.begin() + static_cast<std::ptrdiff_t>((y + 1) * row),
+			    raw.begin() + static_cast<std::ptrdiff_t>(y * (row + 1) + 1)), "pixel row round trip");
+		}
+
+		lightGraphics::CapturedFrame failed;
+		failed.error = "no surface";
+		require(!lightGraphics::VkApp::writePng(path.string(), failed, &error) && error == "no surface",
+		    "writePng should refuse a failed capture and pass on its error");
 	}
 
 	void testVkAppObjectIndexValidation()
@@ -1231,6 +1349,8 @@ int main()
 		testVkAppObjectHandleValidity();
 		testVkAppLightHandleValidity();
 		testVkAppHeadlessRiggedObject();
+		testVkAppOrbitSettersMoveCameraImmediately();
+		testWritePngRoundTrip();
 		testMeshValidation();
 		testScreenTextMesh();
 		testTexture3DValidation();

@@ -164,6 +164,16 @@ namespace lightGraphics
 		rendererInfo.framesInFlight = static_cast<std::uint32_t>(MAX_FRAMES_IN_FLIGHT);
 		rendererInfo.vertexShaderPath = findShaderPath("ui.vert.spv");
 		rendererInfo.fragmentShaderPath = findShaderPath("ui.frag.spv");
+		// Optional: without it colour images fall back to coverage drawing (an install
+		// whose shader directory predates ui_image.frag).
+		try
+		{
+			rendererInfo.imageFragmentShaderPath = findShaderPath("ui_image.frag.spv");
+		}
+		catch (const std::exception&)
+		{
+			logMessage(LogLevel::Warning, "ui_image.frag.spv not found: LVGUI images will draw as coverage, not colour");
+		}
 
 		uiRenderer_ = std::make_unique<ui::UiRenderer>();
 		uiRenderer_->init(rendererInfo, guiContext_->font());
@@ -310,16 +320,13 @@ namespace lightGraphics
 
 		// Expands the heading Font's R8 (single-channel coverage) atlas into RGBA8 by
 		// replicating each byte into the red channel and zeroing the rest.
-		// registerUiTexture() only accepts RGBA8 (docs/gui/05-widgets.md, "Image"), but
-		// the shared UI fragment shader (shaders/ui.frag) ALWAYS samples only the red
-		// channel as coverage -- `float coverage = texture(uAtlas, vUV).r;` -- regardless
-		// of whether the bound texture is the primary atlas (uploaded as true R8_UNORM)
-		// or a registered RGBA8 image. That means the heading atlas can piggyback on the
-		// EXISTING registerUiTexture() path with zero UiRenderer/Vulkan changes -- this
-		// expansion is the only new code the trick needs. G/B/A are wasted here (4x the
+		// UiRenderer::registerTexture() takes RGBA8. Registered with colour = false, the
+		// texture draws through the coverage shader (shaders/ui.frag), which reads only
+		// the red channel -- `float coverage = texture(uAtlas, vUV).r;` -- exactly like
+		// the primary atlas. (Textures from registerUiTexture() are colour images and
+		// draw through shaders/ui_image.frag instead.) G/B/A are wasted here (4x the
 		// atlas's real memory footprint), an acceptable one-time cost for a single,
-		// typically-small heading atlas; not worth a second, R8-specific registration
-		// path in UiRenderer for that.
+		// typically-small heading atlas.
 		const ui::Font& heading = guiContext_->headingFont();
 		const std::vector<std::uint8_t>& r8 = heading.atlasPixels();
 		std::vector<std::uint8_t> rgba(r8.size() * 4, 0);
@@ -328,8 +335,9 @@ namespace lightGraphics
 			rgba[i * 4] = r8[i];
 		}
 
-		ui::TextureId id = registerUiTexture(rgba.data(), static_cast<uint32_t>(heading.atlasWidth()),
-		                                      static_cast<uint32_t>(heading.atlasHeight()));
+		// Registered as coverage (colour = false): ui.frag reads its red channel as alpha.
+		ui::TextureId id = uiRenderer_->registerTexture(rgba.data(), static_cast<uint32_t>(heading.atlasWidth()),
+		                                                static_cast<uint32_t>(heading.atlasHeight()), false);
 		guiContext_->setHeadingFontTextureId(id);
 	}
 

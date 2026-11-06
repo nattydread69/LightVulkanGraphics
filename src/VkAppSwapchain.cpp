@@ -17,6 +17,8 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "VkApp.h"
+#include "VkAppFramePacing.h"
+#include "VkAppCapture.h"
 
 #ifdef LVG_WITH_UI
 #include "ui/UiRenderer.h"
@@ -28,6 +30,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cstdlib>
 #include <array>
 #include <cstring>
 #include <sstream>
@@ -279,8 +282,36 @@ namespace lightGraphics
 		swapChainImageFormat_ = chosen.format;
 		const uint32_t WIDTH = width_, HEIGHT = height_;
 		swapChainExtent_ = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent : VkExtent2D{WIDTH, HEIGHT};
-		VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR; // vsync
-		uint32_t desiredImageCount = std::max(2u, caps.minImageCount);
+		// MAILBOX where the surface has it: unlike FIFO (vsync) it does not
+		// block while the window is hidden (VkAppFramePacing.h), and
+		// mainLoop() paces the frames. LVG_PRESENT_MODE=fifo keeps FIFO.
+		VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+		{
+			const char* asked = std::getenv("LVG_PRESENT_MODE");
+			bool const fifoAsked = asked && std::string(asked) == "fifo";
+			uint32_t modeCount = 0;
+			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &modeCount, nullptr);
+			std::vector<VkPresentModeKHR> modes(modeCount);
+			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &modeCount, modes.data());
+			if (!fifoAsked && std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end())
+			{
+				presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+			}
+		}
+		detail::frameIntervalSeconds = 0.0;
+		if (presentMode != VK_PRESENT_MODE_FIFO_KHR)
+		{
+			int refresh = 60;
+			if (GLFWmonitor* monitor = glfwGetPrimaryMonitor())
+			{
+				if (const GLFWvidmode* mode = glfwGetVideoMode(monitor); mode && mode->refreshRate > 0)
+				{
+					refresh = mode->refreshRate;
+				}
+			}
+			detail::frameIntervalSeconds = 1.0 / static_cast<double>(refresh);
+		}
+		uint32_t desiredImageCount = std::max(presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? 3u : 2u, caps.minImageCount);
 		if (caps.maxImageCount > 0)
 		{
 			desiredImageCount = std::min(desiredImageCount, caps.maxImageCount);
@@ -293,7 +324,11 @@ namespace lightGraphics
 		sci.imageColorSpace = chosen.colorSpace;
 		sci.imageExtent = swapChainExtent_;
 		sci.imageArrayLayers = 1;
-		sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		// TRANSFER_SRC lets requestFrameCapture() read presented frames back, where the
+		// surface allows it.
+		const bool readable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+		sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (readable ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u);
+		detail::captureState(this).swapchainReadable = readable;
 		uint32_t qidx[2] = { qFamGfx, qFamPresent };
 		if (qFamGfx != qFamPresent)
 		{

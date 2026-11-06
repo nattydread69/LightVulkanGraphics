@@ -22,13 +22,13 @@
 namespace lightGraphics::ui {
 
 Vec2 Row::preferredSize(const GuiContext& ctx) const {
-	if (childCount() == 0) {
-		return { 0.0f, ctx.theme().rowHeight };
-	}
-
-	// Height is the max preferred height of children
+	// Height is the max preferred height of the visible children. A hidden child takes
+	// no space at all (same rule as Panel::layout()).
 	float maxHeight = ctx.theme().rowHeight;
 	for (std::size_t i = 0; i < childCount(); ++i) {
+		if (!childAt(i)->visible()) {
+			continue;
+		}
 		Vec2 childPref = childAt(i)->preferredSize(ctx);
 		maxHeight = std::max(maxHeight, childPref.y);
 	}
@@ -43,31 +43,36 @@ void Row::layout(const GuiContext& ctx) {
 	}
 
 	const Theme& th = ctx.theme();
+	const bool customWeights = !m_weights.empty() && m_weights.size() == count;
 
-	// Calculate total weight
+	// Hidden children get no width and no spacing; the visible ones share the row.
 	float totalWeight = 0.0f;
-	if (m_weights.empty() || m_weights.size() != count) {
-		// Default: all weights equal
-		totalWeight = static_cast<float>(count);
-	} else {
-		for (float w : m_weights) {
-			totalWeight += w;
+	std::size_t visibleCount = 0;
+	for (std::size_t i = 0; i < count; ++i) {
+		if (!childAt(i)->visible()) {
+			continue;
 		}
+		totalWeight += customWeights ? m_weights[i] : 1.0f;
+		++visibleCount;
+	}
+	if (visibleCount == 0) {
+		return;
 	}
 
-	// Available width: subtract spacing between children
-	float spacing = th.itemSpacing * static_cast<float>(count - 1);
+	// Available width: subtract spacing between visible children
+	float spacing = th.itemSpacing * static_cast<float>(visibleCount - 1);
 	float availableWidth = m_bounds.w - spacing;
 
 	// Position children left to right
 	float x = m_bounds.x;
 	for (std::size_t i = 0; i < count; ++i) {
-		float weight = (m_weights.empty() || m_weights.size() != count)
-		               ? 1.0f
-		               : m_weights[i];
-		float childWidth = availableWidth * (weight / totalWeight);
-
 		Widget* child = childAt(i);
+		if (!child->visible()) {
+			continue;
+		}
+		float weight = customWeights ? m_weights[i] : 1.0f;
+		float childWidth = totalWeight > 0.0f ? availableWidth * (weight / totalWeight) : 0.0f;
+
 		child->setBounds({ x, m_bounds.y, childWidth, m_bounds.h });
 		child->layout(ctx);
 

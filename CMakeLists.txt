@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(libLightVulkanGraphics VERSION 3.0.0 LANGUAGES CXX)
+project(libLightVulkanGraphics VERSION 3.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -22,7 +22,7 @@ include(CTest)
 set(LVG_PACKAGE_NAME "LightVulkanGraphics")
 set(LVG_ABI_VERSION 3)
 set(LVG_VERSION_MAJOR 3)
-set(LVG_VERSION_MINOR 0)
+set(LVG_VERSION_MINOR 1)
 set(LVG_VERSION_PATCH 0)
 set(LVG_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/${LVG_PACKAGE_NAME}")
 set(LVG_SHADER_INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
@@ -448,6 +448,7 @@ lvg_compile_shader(frag volume_raymarch)
 if(LVG_BUILD_UI)
 	lvg_compile_shader(vert ui)
 	lvg_compile_shader(frag ui)
+	lvg_compile_shader(frag ui_image)
 endif()
 
 # Create shader target that depends on all compiled shaders

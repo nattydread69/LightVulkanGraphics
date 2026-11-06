@@ -115,6 +115,8 @@ namespace lightGraphics
 		void setOrbitRadius(float radius) { VkApp::setOrbitRadius(radius); }
 		float getOrbitRadius() const { return VkApp::getOrbitRadius(); }
 		void setOrbitAngles(float azimuthDeg, float elevationDeg) { VkApp::setOrbitAngles(azimuthDeg, elevationDeg); }
+		float getOrbitAzimuth() const { return VkApp::getOrbitAzimuth(); }
+		float getOrbitElevation() const { return VkApp::getOrbitElevation(); }
 		void addOrbitAngles(float deltaAzimuthDeg, float deltaElevationDeg) { VkApp::addOrbitAngles(deltaAzimuthDeg, deltaElevationDeg); }
 		void panOrbitTarget(float deltaRight, float deltaUp) { VkApp::panOrbitTarget(deltaRight, deltaUp); }
 		void dollyOrbitRadius(float deltaRadius) { VkApp::dollyOrbitRadius(deltaRadius); }

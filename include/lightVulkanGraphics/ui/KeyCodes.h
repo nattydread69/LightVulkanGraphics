@@ -47,6 +47,12 @@ namespace Key {
 		                           // global shortcut; these three exist because that's
 		                           // common enough menu-accelerator vocabulary to be worth
 		                           // mirroring, not because the GUI itself consumes them)
+		// The rest of the alphabet, digits and function keys, for application shortcuts.
+		// Appended after S so every value above keeps its number.
+		B, D, E, F, G, H, I, J, K, L, M, N, P, Q, T, U, W,
+		Num0, Num1, Num2, Num3, Num4, Num5, Num6, Num7, Num8, Num9,
+		F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
+		Minus, Equal, Insert,
 		Count
 	};
 }

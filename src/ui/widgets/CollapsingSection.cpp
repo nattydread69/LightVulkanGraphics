@@ -32,13 +32,13 @@ Vec2 CollapsingSection::preferredSize(const GuiContext& ctx) const {
 	float height = th.rowHeight;  // header height
 
 	if (m_open) {
-		// Add up preferred heights of all children
+		// Add up preferred heights of the visible children, plus the gap after each. A
+		// hidden child takes no space at all (same rule as Panel::layout()).
 		for (std::size_t i = 0; i < childCount(); ++i) {
-			height += childAt(i)->preferredSize(ctx).y;
-		}
-		// Add spacing between items
-		if (childCount() > 0) {
-			height += th.itemSpacing * static_cast<float>(childCount());
+			if (!childAt(i)->visible()) {
+				continue;
+			}
+			height += childAt(i)->preferredSize(ctx).y + th.itemSpacing;
 		}
 	}
 
@@ -136,6 +136,9 @@ void CollapsingSection::layout(const GuiContext& ctx) {
 
 	for (std::size_t i = 0; i < childCount(); ++i) {
 		Widget* child = childAt(i);
+		if (!child->visible()) {
+			continue;
+		}
 		Vec2 prefSize = child->preferredSize(ctx);
 
 		child->setBounds({ m_bounds.x, y, m_bounds.w, prefSize.y });

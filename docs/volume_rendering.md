@@ -23,6 +23,12 @@ auto volume = app.createVolume(description);
 app.drawVolume(volume, {lightGraphics::RenderLayer::Volume, 0.0f});
 ```
 
+**Editing a transfer function.** `app.updateTransferFunction(transfer, points)` re-uploads
+the lookup texture in place (3.1+): every volume using it shows the new curve on the next
+frame, the handle stays valid, and there is no device-idle wait, so it is cheap enough to
+call every frame while a user drags a control point. `destroyTransferFunction` still waits
+for the device and refuses a function a volume is using.
+
 `ExponentialExtinction` is the default for new descriptions. It computes a physical world-space step length and uses `1 - exp(-extinction * stepLength / referenceStepLength)`. This keeps appearance substantially more stable as `raymarchSteps` changes. `densityScale` scales both the sampled scalar and extinction, while `opacityScale` is the artistic extinction multiplier.
 
 `LinearAlpha` preserves VOL-1 behavior: transfer alpha is multiplied by `opacityScale` once per sample. Its appearance therefore depends strongly on step count. Set `normalizeOpacityByStepLength = false` only when intentionally treating each sample as one reference interval.

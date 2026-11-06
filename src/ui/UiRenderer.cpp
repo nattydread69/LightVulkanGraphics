@@ -113,6 +113,7 @@ void UiRenderer::init(const UiRendererCreateInfo& createInfo, const Font& font) 
 	m_sampleCount = createInfo.sampleCount;
 	m_vertexShaderPath = createInfo.vertexShaderPath;
 	m_fragmentShaderPath = createInfo.fragmentShaderPath;
+	m_imageFragmentShaderPath = createInfo.imageFragmentShaderPath;
 
 	m_frames.assign(createInfo.framesInFlight, FrameBuffers{});
 
@@ -173,6 +174,10 @@ void UiRenderer::destroyPipeline() {
 	if (m_pipeline != VK_NULL_HANDLE) {
 		vkDestroyPipeline(m_device, m_pipeline, nullptr);
 		m_pipeline = VK_NULL_HANDLE;
+	}
+	if (m_imagePipeline != VK_NULL_HANDLE) {
+		vkDestroyPipeline(m_device, m_imagePipeline, nullptr);
+		m_imagePipeline = VK_NULL_HANDLE;
 	}
 	if (m_pipelineLayout != VK_NULL_HANDLE) {
 		vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
@@ -488,7 +493,8 @@ void UiRenderer::destroyRegisteredTexture(RegisteredTexture& tex) {
 	}
 }
 
-TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height) {
+TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
+                                      bool colour) {
 	if (m_device == VK_NULL_HANDLE) {
 		throw std::runtime_error("UiRenderer::registerTexture: not initialised");
 	}
@@ -613,6 +619,7 @@ TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint3
 	vkDestroyBuffer(m_device, staging, nullptr);
 	vkFreeMemory(m_device, stagingMemory, nullptr);
 
+	tex.colour = colour;
 	TextureId id = m_nextTextureId++;
 	m_textures.emplace(id, tex);
 	return id;
@@ -744,6 +751,27 @@ void UiRenderer::createPipeline() {
 		pipelineInfo.subpass = m_subpass;
 		check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline),
 		      "vkCreateGraphicsPipelines");
+
+		// The colour-image twin: identical state, only the fragment shader differs. A
+		// missing or unloadable ui_image.frag.spv is not an error -- colour textures then
+		// draw through m_pipeline exactly as they did before this pipeline existed.
+		if (!m_imageFragmentShaderPath.empty()) {
+			VkShaderModule imageModule = VK_NULL_HANDLE;
+			try {
+				imageModule = createShaderModule(m_imageFragmentShaderPath);
+				stages[1].module = imageModule;
+				if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+				                              &m_imagePipeline) != VK_SUCCESS) {
+					m_imagePipeline = VK_NULL_HANDLE;
+				}
+			} catch (...) {
+				m_imagePipeline = VK_NULL_HANDLE;
+			}
+			stages[1].module = fragmentModule;
+			if (imageModule != VK_NULL_HANDLE) {
+				vkDestroyShaderModule(m_device, imageModule, nullptr);
+			}
+		}
 	} catch (...) {
 		vkDestroyShaderModule(m_device, vertexModule, nullptr);
 		vkDestroyShaderModule(m_device, fragmentModule, nullptr);
@@ -902,6 +930,10 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 	// per command, unconditionally, keeps this loop the single place that decides which
 	// image a draw call samples, rather than splitting that decision between here and a
 	// bind call above it.
+	// The pipeline is switched only when a colour image follows coverage drawing or the
+	// reverse. Both pipelines share m_pipelineLayout, so the push constants above stay
+	// valid across the switch.
+	VkPipeline bound = m_pipeline;
 	for (const DrawCmd& drawCmd : list.commands()) {
 		if (drawCmd.indexCount == 0) {
 			continue;
@@ -912,16 +944,24 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 		}
 
 		VkDescriptorSet set = m_descriptorSet;   // kAtlasTextureId, or an unrecognised id
+		VkPipeline wanted = m_pipeline;
 		if (drawCmd.textureId != kAtlasTextureId) {
 			auto it = m_textures.find(drawCmd.textureId);
 			if (it != m_textures.end()) {
 				set = it->second.descriptorSet;
+				if (it->second.colour && m_imagePipeline != VK_NULL_HANDLE) {
+					wanted = m_imagePipeline;
+				}
 			}
 			// else: falls back to the atlas set rather than binding VK_NULL_HANDLE (a
 			// validation error) for a stale or unregistered id -- the draw samples the
 			// wrong image instead of crashing, matching this backend's "a widget must
 			// never be able to take down a running simulation" policy
 			// (docs/gui/07-public-api.md, "Error handling policy").
+		}
+		if (wanted != bound) {
+			vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, wanted);
+			bound = wanted;
 		}
 		vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout,
 		                        0, 1, &set, 0, nullptr);
