@@ -327,7 +327,12 @@ namespace lightGraphics
 		// TRANSFER_SRC lets requestFrameCapture() read presented frames back, where the
 		// surface allows it.
 		const bool readable = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
-		sci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | (readable ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0u);
+		VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		if (readable)
+		{
+			usage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		}
+		sci.imageUsage = usage;
 		detail::captureState(this).swapchainReadable = readable;
 		uint32_t qidx[2] = { qFamGfx, qFamPresent };
 		if (qFamGfx != qFamPresent)

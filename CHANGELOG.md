@@ -38,6 +38,9 @@ library (`ui_image.frag.spv` is new).
   its target; it now faces the target.
 - LVGUI `Row`, `CollapsingSection` and `TabBar` no longer reserve space for hidden
   children (matching `Panel`).
+- The package smoke tests install with `--component Unspecified`, so they no longer
+  overwrite the build directory's `install_manifest.txt` (the record of the real install
+  that `make uninstall` uses) or fail when a `sudo` install left it root-owned.
 
 ### 3.0.0
 

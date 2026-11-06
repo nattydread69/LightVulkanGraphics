@@ -17,8 +17,17 @@ set(_consumer_build_dir "${LVG_TEST_WORK_DIR}/consumer-build")
 file(REMOVE_RECURSE "${LVG_TEST_WORK_DIR}")
 file(MAKE_DIRECTORY "${LVG_TEST_WORK_DIR}")
 
+# `--component Unspecified`: every install rule in this project uses the default
+# component, so this installs exactly the same files as a plain install -- but CMake
+# then records them in install_manifest_Unspecified.txt instead of
+# install_manifest.txt. The plain manifest belongs to the developer's real install
+# (e.g. `sudo cmake --install build` into /usr/local), which `make uninstall` reads:
+# a test must neither overwrite it with this throwaway prefix's file list nor fail
+# because a sudo install left it root-owned. If an install() rule ever gains a
+# COMPONENT, add that component here too.
 execute_process(
 	COMMAND "${CMAKE_COMMAND}" --install "${LVG_PROJECT_BINARY_DIR}" --prefix "${_install_prefix}"
+		--component Unspecified
 	RESULT_VARIABLE _install_result
 )
 if (NOT _install_result EQUAL 0)
