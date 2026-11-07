@@ -25,6 +25,9 @@
 #include <cstddef>
 #include <cstring>
 #include <stdexcept>
+#include <cmath>
+#include <mutex>
+#include <unordered_map>
 
 namespace lightGraphics
 {
@@ -86,6 +89,93 @@ struct VolumePushConstants
 static_assert(sizeof(VolumePushConstants) == 128,
 	"Volume push constants must fit Vulkan's minimum guaranteed size");
 
+}
+
+// Volume render styles (3.2) live in a side table so VkApp's layout -- and with it the
+// 3.x ABI -- is unchanged. Keyed by application and volume slot.
+namespace
+{
+	std::mutex& volumeStyleMutex()
+	{
+		static std::mutex m;
+		return m;
+	}
+
+	std::unordered_map<const void*, std::unordered_map<std::uint32_t, VolumeStyleDescription>>& volumeStyles()
+	{
+		static std::unordered_map<const void*, std::unordered_map<std::uint32_t, VolumeStyleDescription>> styles;
+		return styles;
+	}
+
+	VolumeStyleDescription styleFor(const void* app, std::uint32_t index)
+	{
+		std::lock_guard<std::mutex> lock(volumeStyleMutex());
+		auto& styles = volumeStyles();
+		auto a = styles.find(app);
+		if (a == styles.end())
+		{
+			return {};
+		}
+		auto v = a->second.find(index);
+		return v == a->second.end() ? VolumeStyleDescription{} : v->second;
+	}
+
+	void forgetStyle(const void* app, std::uint32_t index)
+	{
+		std::lock_guard<std::mutex> lock(volumeStyleMutex());
+		auto a = volumeStyles().find(app);
+		if (a != volumeStyles().end())
+		{
+			a->second.erase(index);
+		}
+	}
+}
+
+namespace detail
+{
+	void forgetVolumeStyles(const void* app)
+	{
+		std::lock_guard<std::mutex> lock(volumeStyleMutex());
+		volumeStyles().erase(app);
+	}
+}
+
+const char* volumeRenderStyleName(VolumeRenderStyle style)
+{
+	switch (style)
+	{
+	case VolumeRenderStyle::Composite: return "composite";
+	case VolumeRenderStyle::MaximumIntensity: return "maximumIntensity";
+	case VolumeRenderStyle::MinimumIntensity: return "minimumIntensity";
+	case VolumeRenderStyle::Isosurface: return "isosurface";
+	case VolumeRenderStyle::Average: return "average";
+	}
+	return "composite";
+}
+
+void VkApp::setVolumeStyle(VolumeHandle handle, const VolumeStyleDescription& style)
+{
+	if (handle.index >= volumes_.size() || !volumes_[handle.index].alive ||
+		volumes_[handle.index].generation != handle.generation)
+	{
+		throw std::invalid_argument("setVolumeStyle received an invalid or stale volume handle");
+	}
+	if (!std::isfinite(style.isoValue) || !std::isfinite(style.shadingStrength))
+	{
+		throw std::invalid_argument("Volume style values must be finite");
+	}
+	std::lock_guard<std::mutex> lock(volumeStyleMutex());
+	volumeStyles()[this][handle.index] = style;
+}
+
+VolumeStyleDescription VkApp::getVolumeStyle(VolumeHandle handle) const
+{
+	if (handle.index >= volumes_.size() || !volumes_[handle.index].alive ||
+		volumes_[handle.index].generation != handle.generation)
+	{
+		throw std::invalid_argument("getVolumeStyle received an invalid or stale volume handle");
+	}
+	return styleFor(this, handle.index);
 }
 
 MeshHandle VkApp::createStaticMesh(const MeshData& meshData)
@@ -786,6 +876,7 @@ void VkApp::destroyVolume(VolumeHandle handle)
 		volume.descriptor = VK_NULL_HANDLE;
 	}
 	destroyMesh(volume.proxyMesh);
+	forgetStyle(this, handle.index);
 	volume.alive = false;
 	volume.visible = false;
 	++volume.generation;
@@ -1056,7 +1147,11 @@ void VkApp::drawVolumeResource(
 			(description.opacityModel == VolumeOpacityModel::ExponentialExtinction ? 16 : 0) |
 			(description.normalizeOpacityByStepLength ? 32 : 0) |
 			(description.colorSource == VolumeColorSource::TextureRgba ? 64 : 0);
-		push.flags = glm::ivec4(flags, 0, 0, 0);
+		const std::uint32_t slot = static_cast<std::uint32_t>(&volume - volumes_.data());
+		const VolumeStyleDescription style = styleFor(this, slot);
+		push.volumeMinimum.w = std::clamp(style.isoValue, 0.0f, 1.0f);
+		push.volumeMaximum.w = std::clamp(style.shadingStrength, 0.0f, 1.0f);
+		push.flags = glm::ivec4(flags | (style.shading ? 128 : 0), static_cast<int>(style.style), 0, 0);
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, volumePipeline_);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 			volumePipelineLayout_, 0, 1, &descriptorSets_[imageIndex], 0, nullptr);

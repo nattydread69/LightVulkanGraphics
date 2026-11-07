@@ -583,6 +583,10 @@ namespace lightGraphics
 		void drawVolume(VolumeHandle handle, const DrawOptions& options);
 		void hideVolume(VolumeHandle handle);
 		void destroyVolume(VolumeHandle handle);
+		// Render style (MIP, MinIP, isosurface, average, shaded composite); 3.2+. A new
+		// volume starts as Composite without shading. Throws on a stale handle.
+		void setVolumeStyle(VolumeHandle handle, const VolumeStyleDescription& style);
+		VolumeStyleDescription getVolumeStyle(VolumeHandle handle) const;
 
 		// ==================== FRAME CAPTURE ====================
 

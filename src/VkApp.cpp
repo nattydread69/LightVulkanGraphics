@@ -69,6 +69,12 @@
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+namespace lightGraphics::detail
+{
+	// VkAppVolume.cpp: drops an application's volume render styles.
+	void forgetVolumeStyles(const void* app);
+}
+
 namespace lightGraphics
 {
 	using detail::Buffer;
@@ -401,6 +407,7 @@ namespace lightGraphics
 	{
 		cleanup();
 		detail::forgetCaptureState(this);
+		detail::forgetVolumeStyles(this);
 	}
 
 	void VkApp::assertOwnerThread(const char* where) const

@@ -114,6 +114,9 @@ namespace lightGraphics
          * @param speed Speed multiplier (1.0 = normal speed)
          */
         void setAnimationSpeed(float speed);
+        // Jumps to `seconds` into the current clip (wrapped when looping, clamped otherwise)
+        // and poses the skeleton there, also while paused -- for timeline scrubbing (3.2+).
+        void setAnimationTime(float seconds);
 
         /**
          * Get current animation time

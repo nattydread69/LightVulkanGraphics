@@ -48,3 +48,35 @@ The clip plane is evaluated in world space and retains samples for which `dot(po
 Custom mesh shaders receive the camera UBO at set 0, binding 0, a model-matrix vertex push constant, and attributes at locations 0..3. Volume shaders additionally receive set 1 binding 0 as `sampler3D`, binding 1 as the transfer lookup, and the documented built-in volume push block. Arbitrary descriptor and uniform layouts remain outside the public API.
 
 The example at `examples/VolumeFogExample` compares a 64-step linear volume with a 256-step exponentially normalized volume, registers two transparent reference rings with sort keys, and orbits the camera.
+
+## Render styles (3.2)
+
+`VolumeRenderDescription` controls the data, transfer function, clipping and opacity.
+How rays turn into pixels is set separately, so the 3.x ABI is unchanged:
+
+```cpp
+lightGraphics::VolumeStyleDescription style;
+style.style = lightGraphics::VolumeRenderStyle::MaximumIntensity; // MIP
+app.setVolumeStyle(volume, style);
+
+style.style = lightGraphics::VolumeRenderStyle::Isosurface;
+style.isoValue = 0.42f;   // normalised scalar, after densityScale
+app.setVolumeStyle(volume, style);
+
+style.style = lightGraphics::VolumeRenderStyle::Composite;
+style.shading = true;     // headlight gradient lighting
+style.shadingStrength = 0.8f;
+app.setVolumeStyle(volume, style);
+```
+
+| Style | Per ray | Colour and opacity |
+|---|---|---|
+| `Composite` | front-to-back emission/absorption (default) | transfer function, optional gradient shading |
+| `MaximumIntensity` | largest scalar | TF at that scalar; alpha = TF alpha x opacityScale x 4 |
+| `MinimumIntensity` | smallest scalar | as above |
+| `Average` | mean scalar (a simulated radiograph) | as above |
+| `Isosurface` | first sample >= isoValue, refined by 6 bisection steps | TF colour at the iso value, gradient-lit, opaque |
+
+With `VolumeColorSource::TextureRgba` the texture's RGB colours every style and its alpha
+is the scalar. Gradients use central differences one texel apart (6 extra fetches per
+shaded sample, only where the sample contributes).

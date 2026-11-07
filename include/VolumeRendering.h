@@ -198,6 +198,37 @@ enum class VolumeColorSource
 	TextureRgba
 };
 
+// How a volume is turned into an image (lightVulkanGraphics 3.2; set with
+// VkApp::setVolumeStyle -- VolumeRenderDescription is unchanged for ABI stability).
+//  - Composite: front-to-back emission/absorption through the transfer function.
+//  - MaximumIntensity / MinimumIntensity: the largest / smallest scalar along each ray
+//    (MIP / MinIP), coloured by the transfer function, whose opacity (times
+//    opacityScale x 4) sets how strongly it shows.
+//  - Isosurface: the first point where the scalar reaches isoValue, lit by the
+//    gradient; opaque.
+//  - Average: the mean scalar along each ray (a simulated radiograph).
+enum class VolumeRenderStyle
+{
+	Composite,
+	MaximumIntensity,
+	MinimumIntensity,
+	Isosurface,
+	Average
+};
+
+struct VolumeStyleDescription
+{
+	VolumeRenderStyle style = VolumeRenderStyle::Composite;
+	// Gradient (headlight) shading in Composite; Isosurface is always shaded.
+	bool shading = false;
+	// 0 = flat .. 1 = fully lit.
+	float shadingStrength = 0.75f;
+	// Normalised scalar (0..1 after densityScale) for Isosurface.
+	float isoValue = 0.5f;
+};
+
+[[nodiscard]] const char* volumeRenderStyleName(VolumeRenderStyle style);
+
 enum class RenderLayer
 {
 	Opaque,

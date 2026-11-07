@@ -601,6 +601,28 @@ namespace
 		    1.0f,
 		    model);
 
+		// Timeline scrubbing (3.2): setAnimationTime poses the skeleton while paused and
+		// wraps a looping clip.
+		riggedObject->playAnimation(0, true);
+		riggedObject->pauseAnimation();
+		const float duration = riggedObject->getAnimationDuration();
+		require(duration > 0.0f, "Worker clip 0 should have a duration");
+		riggedObject->setAnimationTime(0.0f);
+		const std::vector<glm::mat4> start = riggedObject->getBoneTransforms();
+		riggedObject->setAnimationTime(0.5f * duration);
+		require(std::fabs(riggedObject->getAnimationTime() - 0.5f * duration) < 1e-5f,
+		        "setAnimationTime should move the clock while paused");
+		bool moved = false;
+		for (std::size_t i = 0; i < start.size() && i < riggedObject->getBoneTransforms().size(); ++i)
+		{
+			moved = moved || start[i] != riggedObject->getBoneTransforms()[i];
+		}
+		require(moved, "setAnimationTime should re-pose the skeleton");
+		riggedObject->setAnimationTime(duration + 0.25f * duration);
+		require(std::fabs(riggedObject->getAnimationTime() - 0.25f * duration) < 1e-4f,
+		        "setAnimationTime should wrap a looping clip");
+		riggedObject->stopAnimation();
+
 		// The whole point: registering a rigged object (mesh validation,
 		// skinning-mode selection, handle bookkeeping) must not require a
 		// GLFW window or Vulkan device.
@@ -798,6 +820,12 @@ namespace
 		require(lightGraphics::parseVolumeColorSource("Texture RGBA") ==
 			lightGraphics::VolumeColorSource::TextureRgba,
 			"colour source parser should ignore case and separators");
+		require(std::string(lightGraphics::volumeRenderStyleName(
+			lightGraphics::VolumeRenderStyle::MaximumIntensity)) == "maximumIntensity",
+			"render styles should have stable public names");
+		require(lightGraphics::VolumeStyleDescription{}.style == lightGraphics::VolumeRenderStyle::Composite &&
+			!lightGraphics::VolumeStyleDescription{}.shading,
+			"volumes should default to unshaded composite rendering");
 		requireThrows<std::invalid_argument>(
 			[]() { (void)lightGraphics::parseVolumeColorSource("vertex"); },
 			"colour source parser should reject unknown names");

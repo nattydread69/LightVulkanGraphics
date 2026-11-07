@@ -6,6 +6,22 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.2.0 (ABI-compatible with 3.0/3.1: same `libLightVulkanGraphics.so.3`)
+
+No class layouts change. Install the shaders with the library (`volume_raymarch.frag.spv`
+changed; the push-constant block keeps its 128 bytes, so old binaries keep working with
+the new shader and render as before).
+
+#### Added
+- **Volume render styles**: `VkApp::setVolumeStyle(handle, VolumeStyleDescription)` /
+  `getVolumeStyle` select composite, maximum- or minimum-intensity projection,
+  isosurface (first hit, bisection-refined, gradient-lit) or average (radiograph), plus
+  optional headlight gradient shading for composite rendering. Styles live in a side
+  table, so `VolumeRenderDescription` and `VkApp` are unchanged.
+  `volumeRenderStyleName()` gives stable names.
+- `RiggedObject::setAnimationTime(seconds)`: poses the current clip at any time, also
+  while paused (timeline scrubbing); wraps looping clips, clamps others.
+
 ### 3.1.0 (ABI-compatible with 3.0: same `libLightVulkanGraphics.so.3`)
 
 No class layouts change; 3.0 applications keep working. Install the shaders with the

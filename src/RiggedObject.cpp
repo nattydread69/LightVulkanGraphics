@@ -20,6 +20,7 @@
 #include "FBXLoader.h"
 
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 namespace
@@ -190,6 +191,31 @@ void RiggedObject::updateAnimation(float deltaTime)
         }
     }
 
+    updateBoneTransforms();
+}
+
+void RiggedObject::setAnimationTime(float seconds)
+{
+    if (!model || currentAnimationIndex < 0 || !std::isfinite(seconds))
+        return;
+    const Animation& animation = model->animations[currentAnimationIndex];
+    const float durationSeconds = (animation.ticksPerSecond > 0.0f)
+                                      ? (animation.duration / animation.ticksPerSecond)
+                                      : animation.duration;
+    if (durationSeconds <= 0.0f)
+    {
+        currentAnimationTime = 0.0f;
+    }
+    else if (loopAnimation)
+    {
+        currentAnimationTime = std::fmod(seconds, durationSeconds);
+        if (currentAnimationTime < 0.0f)
+            currentAnimationTime += durationSeconds;
+    }
+    else
+    {
+        currentAnimationTime = std::clamp(seconds, 0.0f, durationSeconds);
+    }
     updateBoneTransforms();
 }
 
