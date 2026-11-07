@@ -1439,6 +1439,10 @@ namespace lightGraphics
 		{
 			if (action == GLFW_PRESS)
 			{
+				if (!mouseCameraEnabled_)
+				{
+					return;
+				}
 				// docs/gui/04, "The camera hand-off": do not begin a camera drag if the
 				// GUI wants this press. A release is handled unconditionally below --
 				// once a drag is in progress it must not get stuck in look mode just
@@ -1502,6 +1506,10 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
+		if (!mouseCameraEnabled_)
+		{
+			return;
+		}
 		// docs/gui/04, "The camera hand-off" / "Scroll wheel": resolves the
 		// "wheel over a panel with no overflow dies silently" question by giving the
 		// wheel its own, narrower query (uiWantsScroll()) instead of reusing uiWantsMouse()
@@ -2306,6 +2314,9 @@ namespace lightGraphics
 
 		camera_.yaw = glm::degrees(yawRad);
 		camera_.pitch = glm::degrees(pitchRad);
+		// Only consulted when the view is (near) vertical, where world up cannot
+		// orient the image -- see Camera::up().
+		camera_.verticalViewUp = up;
 	}
 	void VkApp::setCameraLookAtLevel(const glm::vec3& eye, const glm::vec3& target,
 	                                 const glm::vec3& up)
@@ -2326,9 +2337,31 @@ namespace lightGraphics
 
 	void VkApp::setCameraFov(float fovDeg) { camera_.fov = glm::clamp(fovDeg, 20.0f, 90.0f); }
 	void VkApp::setCameraPlanes(float zNear, float zFar) { camera_.zNear = zNear; camera_.zFar = zFar; }
+	void VkApp::setCameraProjection(Camera::Projection projection) { camera_.projection = projection; }
+	void VkApp::setCameraOrthoHeight(float height)
+	{
+		if (!(height > 0.0f) || !std::isfinite(height))
+		{
+			throw std::invalid_argument("setCameraOrthoHeight: height must be positive and finite");
+		}
+		camera_.orthoHeight = height;
+	}
+	void VkApp::setMouseCameraEnabled(bool enabled)
+	{
+		mouseCameraEnabled_ = enabled;
+		if (!enabled && mouseLook_)
+		{
+			// Do not leave the cursor captured by a drag that can no longer end.
+			mouseLook_ = false;
+			if (window_)
+			{
+				glfwSetInputMode(window_, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+			}
+		}
+	}
 	void VkApp::setCameraSensitivity(float sens) { camera_.sensitivity = sens; }
 	glm::vec3 VkApp::getCameraForward() const { return camForward(); }
-	glm::vec3 VkApp::getCameraRight() const { return glm::normalize(glm::cross(camForward(), glm::vec3(0,1,0))); }
+	glm::vec3 VkApp::getCameraRight() const { return glm::normalize(glm::cross(camForward(), camera_.up())); }
 	glm::vec3 VkApp::getCameraUp() const { return glm::normalize(glm::cross(getCameraRight(), getCameraForward())); }
 
 	// Orbit camera API
@@ -2565,8 +2598,21 @@ namespace lightGraphics
 		const auto& obj = _objects_[index];
 		Instance instance{};
 		instance.model = getObjectModelMatrix(index);
+		if (!renderFlagsFor(index).visible)
+		{
+			// The flexible-shape and shadow passes skip hidden objects outright; this
+			// zero-area transform also hides them in the wireframe/unlit/sphere modes,
+			// which draw straight from the instance cache.
+			instance.model = glm::mat4(0.0f);
+			instance.model[3] = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+		}
 		instance.color = glm::vec3(obj.getColour());
-		instance.shapeType = static_cast<float>(obj.getType());
+		// The shape slot carries the shape type in its low 4 bits and the emissive level
+		// (0..15) above them, so self-illumination needs no change to the instance
+		// layout shared by every instanced pipeline. flexible_shape.vert/.frag decode it;
+		// the other pipelines ignore the slot.
+		const float emissiveLevel = std::round(std::clamp(renderFlagsFor(index).emissive, 0.0f, 1.0f) * 15.0f);
+		instance.shapeType = static_cast<float>(obj.getType()) + 16.0f * emissiveLevel;
 		return instance;
 	}
 
@@ -2998,6 +3044,10 @@ namespace lightGraphics
 				{
 					continue;
 				}
+				if (!renderFlagsFor(i).visible)
+				{
+					continue;
+				}
 				const std::string name = _objects_[i].getName();
 				// Overlay-registered objects were already excluded from shadow
 				// casting; semi-transparent objects (alpha < 1, e.g. debug
@@ -3347,6 +3397,10 @@ namespace lightGraphics
 				int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType >= 0 && shapeType < 8)
 				{
+					if (!renderFlagsFor(i).visible)
+					{
+						continue;
+					}
 					if (frustumCullingEnabled_)
 					{
 						// World-space bounding sphere: the shape's local bounding radius

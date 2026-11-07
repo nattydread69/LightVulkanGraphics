@@ -12,6 +12,10 @@ option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project tar
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
 option(LVG_BUILD_UI "Build the LVGUI GUI layer" ON)
+# By default LVGUI is a static archive in the core library's link interface, so any
+# consumer that instantiates widgets statically links LGPL code. A shared LVGUI
+# keeps the whole library dynamically linked, which proprietary consumers need.
+option(LVG_BUILD_UI_SHARED "Build LVGUI as a shared library instead of a static archive" OFF)
 option(LVG_BUILD_DOXYGEN "Build Doxygen documentation" ON)
 
 include(GNUInstallDirs)
@@ -508,7 +512,15 @@ if(LVG_BUILD_UI)
 	# tree, never this list.
 	set(LVGUI_SOURCES ${LVGUI_EXCLUDED_SOURCES})
 
-	add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
+	if(LVG_BUILD_UI_SHARED)
+		add_library(LightVulkanGraphicsUI SHARED ${LVGUI_SOURCES})
+		set_target_properties(LightVulkanGraphicsUI PROPERTIES
+			VERSION ${PROJECT_VERSION}
+			SOVERSION ${LVG_ABI_VERSION}
+			WINDOWS_EXPORT_ALL_SYMBOLS ON)
+	else()
+		add_library(LightVulkanGraphicsUI ${LVGUI_SOURCES})
+	endif()
 	add_library(LightVulkanGraphics::UI ALIAS LightVulkanGraphicsUI)
 
 	target_compile_features(LightVulkanGraphicsUI PUBLIC cxx_std_17)

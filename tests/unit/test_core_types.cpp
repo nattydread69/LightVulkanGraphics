@@ -436,6 +436,102 @@ namespace
 		        "VkApp updateObjectProperties should leave size untouched for invalid batches");
 	}
 
+	void testCameraOrthographicProjection()
+	{
+		Camera camera;
+		camera.position = glm::vec3(0.0f, 10.0f, 0.0f);
+		camera.pitch = -45.0f;
+		camera.zNear = 0.1f;
+		camera.zFar = 100.0f;
+		camera.projection = Camera::Projection::Orthographic;
+		camera.orthoHeight = 8.0f;
+		const glm::mat4 projection = camera.proj(2.0f);
+		// Parallel projection: no perspective divide term.
+		require(std::abs(projection[2][3]) < 1e-6f && std::abs(projection[3][3] - 1.0f) < 1e-6f,
+		        "Camera: orthographic proj() must be affine (w = 1)");
+		// Half height 4 maps to NDC 1 (Y flipped for Vulkan); half width is 4 * aspect.
+		const glm::vec4 top = projection * glm::vec4(0.0f, 4.0f, -5.0f, 1.0f);
+		const glm::vec4 right = projection * glm::vec4(8.0f, 0.0f, -5.0f, 1.0f);
+		require(std::abs(top.y + 1.0f) < 1e-5f, "Camera: orthographic height must map to the screen edge");
+		require(std::abs(right.x - 1.0f) < 1e-5f, "Camera: orthographic width must be height * aspect");
+		// Sizes do not depend on distance.
+		const glm::vec4 nearPoint = projection * glm::vec4(1.0f, 0.0f, -2.0f, 1.0f);
+		const glm::vec4 farPoint = projection * glm::vec4(1.0f, 0.0f, -50.0f, 1.0f);
+		require(std::abs(nearPoint.x - farPoint.x) < 1e-6f, "Camera: orthographic projection must not foreshorten");
+		// Scroll zooms by changing the visible height, not the field of view.
+		const float fovBefore = camera.fov;
+		camera.addScroll(1.0f);
+		require(camera.orthoHeight < 8.0f && camera.fov == fovBefore, "Camera: orthographic scroll must change orthoHeight only");
+		// Frustum culling works with the parallel projection too.
+		Camera down;
+		down.position = glm::vec3(0.0f, 20.0f, 0.0f);
+		down.pitch = -90.0f;
+		down.zNear = 0.5f;
+		down.zFar = 50.0f;
+		down.projection = Camera::Projection::Orthographic;
+		down.orthoHeight = 10.0f;
+		const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(down.proj(1.0f) * down.view());
+		require(frustum.sphereIntersects(glm::vec3(4.0f, 0.0f, 4.0f), 0.1f), "Camera: point inside the ortho volume must not be culled");
+		require(!frustum.sphereIntersects(glm::vec3(9.0f, 0.0f, 0.0f), 0.5f), "Camera: point outside the ortho volume must be culled");
+	}
+
+	void testCameraStraightDown()
+	{
+		// Looking exactly down used to produce NaN (world up parallel to the view).
+		lightGraphics::VkApp app;
+		app.setCameraLookAt(glm::vec3(5.0f, 20.0f, 5.0f), glm::vec3(5.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		const glm::vec3 right = app.getCameraRight();
+		const glm::vec3 up = app.getCameraUp();
+		require(std::isfinite(right.x) && std::isfinite(up.z), "Camera: straight-down basis must be finite");
+		require(nearlyEqual(up, glm::vec3(0.0f, 0.0f, -1.0f)), "Camera: straight-down view must honour the up argument");
+		require(nearlyEqual(right, glm::vec3(1.0f, 0.0f, 0.0f)), "Camera: screen right must be +X with up = -Z");
+		// Without a usable hint the yaw direction becomes screen-up.
+		Camera camera;
+		camera.position = glm::vec3(0.0f, 10.0f, 0.0f);
+		camera.yaw = 90.0f;
+		camera.pitch = -90.0f;
+		const glm::mat4 view = camera.view();
+		require(std::isfinite(view[0][0]) && std::isfinite(view[2][2]), "Camera: vertical view without hint must be finite");
+		require(nearlyEqual(camera.up(), glm::vec3(0.0f, 0.0f, 1.0f)), "Camera: vertical view without hint must use the yaw direction");
+		// A normal view ignores the vertical hint entirely (no accidental roll).
+		app.setCameraLookAt(glm::vec3(0.0f, 2.0f, 10.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		require(app.getCameraUp().y > 0.9f, "Camera: non-vertical views must keep world up");
+		app.setCameraProjection(Camera::Projection::Orthographic);
+		app.setCameraOrthoHeight(12.0f);
+		require(app.getCameraProjection() == Camera::Projection::Orthographic && app.getCameraOrthoHeight() == 12.0f,
+		        "VkApp: projection setters must round-trip");
+		requireThrows<std::invalid_argument>([&] { app.setCameraOrthoHeight(0.0f); }, "VkApp: setCameraOrthoHeight must reject 0");
+		app.setMouseCameraEnabled(false);
+		require(!app.getMouseCameraEnabled(), "VkApp: mouse camera switch must round-trip");
+	}
+
+	void testVkAppObjectVisibilityAndEmissive()
+	{
+		lightGraphics::VkApp app;
+		for (int i = 0; i < 3; ++i)
+		{
+			app.addObject(lightGraphics::ShapeType::CUBE, glm::vec3(static_cast<float>(i)), glm::vec3(1.0f), glm::vec4(1.0f));
+		}
+		require(app.isObjectVisible(0) && app.isObjectVisible(2), "Visibility: objects start visible");
+		require(app.getObjectEmissive(1) == 0.0f, "Emissive: objects start unlit-free (0)");
+		app.setObjectVisible(1, false);
+		app.setObjectEmissive(2, 2.0f);
+		require(!app.isObjectVisible(1), "Visibility: setObjectVisible(false) must stick");
+		require(app.getObjectEmissive(2) == 1.0f, "Emissive: values clamp to [0, 1]");
+		// Objects added later default correctly even though flags grow lazily.
+		app.addObject(lightGraphics::ShapeType::SPHERE, glm::vec3(0.0f), glm::vec3(1.0f), glm::vec4(1.0f));
+		require(app.isObjectVisible(3) && app.getObjectEmissive(3) == 0.0f, "Visibility: new objects use default flags");
+		// Removal keeps flags aligned with the shifted objects.
+		app.removeObject(static_cast<size_t>(0));
+		require(!app.isObjectVisible(0), "Visibility: flags must shift with removeObject");
+		require(app.getObjectEmissive(1) == 1.0f, "Emissive: flags must shift with removeObject");
+		requireOutOfRange([&] { app.setObjectVisible(10, true); }, "Visibility: out-of-range index must throw");
+		requireThrows<std::invalid_argument>([&] { app.setObjectEmissive(0, std::nanf("")); }, "Emissive: NaN must be rejected");
+		app.clearObjects();
+		app.addObject(lightGraphics::ShapeType::CUBE, glm::vec3(0.0f), glm::vec3(1.0f), glm::vec4(1.0f));
+		require(app.isObjectVisible(0), "Visibility: clearObjects must reset flags");
+	}
+
 	void testVkAppObjectDescription()
 	{
 		lightGraphics::VkApp app;
@@ -1374,6 +1470,9 @@ int main()
 		testPObjectProperties();
 		testVkAppObjectIndexValidation();
 		testVkAppObjectDescription();
+		testCameraOrthographicProjection();
+		testCameraStraightDown();
+		testVkAppObjectVisibilityAndEmissive();
 		testVkAppObjectHandleValidity();
 		testVkAppLightHandleValidity();
 		testVkAppHeadlessRiggedObject();

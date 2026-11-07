@@ -11,7 +11,7 @@ layout(location=4) in vec4 iM1;
 layout(location=5) in vec4 iM2;
 layout(location=6) in vec4 iM3;
 layout(location=7) in vec3 iColor;
-layout(location=8) in float iShapeType;  // 0=sphere, 1=cube, 2=cone, 3=cylinder, 4=capsule, 5=arrow, 6=line
+layout(location=8) in float iShapeSlot;  // low 4 bits: 0=sphere, 1=cube, 2=cone, 3=cylinder, 4=capsule, 5=arrow, 6=line, 7=hex; above: emissive level 0..15
 
 // Uniform buffer
 layout(binding = 0) uniform UBO
@@ -35,9 +35,15 @@ layout(location=2) out vec3 vPosWS;
 layout(location=3) out float vShapeType;
 layout(location=4) out vec2 vTexCoord;
 layout(location=5) out float vOpacity;
+layout(location=6) out float vEmissive;
 
 void main() 
 {
+    // Unpack the instance shape slot (see VkApp::makeInstanceForObject).
+    float slot = floor(iShapeSlot + 0.5);
+    float iShapeType = mod(slot, 16.0);
+    vEmissive = floor(slot / 16.0) / 15.0;
+
     // Build instance model matrix
     mat4 instanceModel = mat4(iM0, iM1, iM2, iM3);
     mat4 model = instanceModel * U.model;

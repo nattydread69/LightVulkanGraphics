@@ -420,6 +420,17 @@ namespace lightGraphics
 		void setObjectTexturePath(size_t index, const std::string& path);
 		// How many times the texture repeats across the shape's UV range.
 		void setObjectTextureTiling(size_t index, const glm::vec2& tiling);
+		// Hides an object without removing it: a hidden object is not drawn, casts no
+		// shadow, is not counted in the frustum statistics and does not pull the
+		// directional shadow centre. Cheaper than remove + re-add for pooled objects, and
+		// keeps indices and handles stable. Objects start visible. (3.2+)
+		void setObjectVisible(size_t index, bool visible);
+		bool isObjectVisible(size_t index) const;
+		// Self-illumination for flexible shapes: 0 = normally lit, 1 = drawn at its full
+		// flat colour regardless of lights and shadows (projectiles, indicator lamps,
+		// holograms). Values in between blend. Quantised to 16 levels. (3.2+)
+		void setObjectEmissive(size_t index, float emissive);
+		float getObjectEmissive(size_t index) const;
 		void updateObjectProperties(size_t index, const glm::vec3& position,
 		                            const glm::vec3& scale, const glm::quat& rotation);
 
@@ -449,6 +460,18 @@ namespace lightGraphics
 		void setCameraFov(float fovDeg);
 		float getCameraFov() const { return camera_.fov; }
 		void setCameraPlanes(float zNear, float zFar);
+		// Perspective (default) or orthographic projection. In orthographic mode the
+		// visible volume is orthoHeight world units tall (width = height * aspect); the
+		// field of view is ignored and scroll zoom changes the height instead. (3.2+)
+		void setCameraProjection(Camera::Projection projection);
+		Camera::Projection getCameraProjection() const { return camera_.projection; }
+		void setCameraOrthoHeight(float height);
+		float getCameraOrthoHeight() const { return camera_.orthoHeight; }
+		// Built-in mouse camera controls (right-drag look/orbit, wheel zoom/dolly). On by
+		// default; applications with their own mouse handling switch them off instead
+		// of intercepting GLFW callbacks. Does not affect the GUI. (3.2+)
+		void setMouseCameraEnabled(bool enabled);
+		bool getMouseCameraEnabled() const { return mouseCameraEnabled_; }
 		void setCameraSensitivity(float sens);
 		glm::vec3 getCameraForward() const;
 		glm::vec3 getCameraRight() const;
@@ -648,6 +671,20 @@ namespace lightGraphics
 		float scaleFactor = 1.0;
 		uint32_t qFamGfx = 0, qFamPresent = 0;
 		bool keyboardCameraEnabled_ = true; // allow programmatic control toggle
+		bool mouseCameraEnabled_ = true;
+		struct ObjectRenderFlags
+		{
+			bool visible = true;
+			float emissive = 0.0f;
+		};
+		// Index-aligned with _objects_ but grown lazily: entries past its end mean
+		// "default flags", so the many addObject() paths need no changes. removeObject()
+		// and clearObjects() keep it aligned.
+		std::vector<ObjectRenderFlags> objectRenderFlags_;
+		ObjectRenderFlags renderFlagsFor(size_t index) const
+		{
+			return index < objectRenderFlags_.size() ? objectRenderFlags_[index] : ObjectRenderFlags{};
+		}
 		// Orbit state
 		bool orbitEnabled_ = false;
 		glm::vec3 orbitTarget_ = glm::vec3(0.0f);

@@ -392,6 +392,10 @@ namespace lightGraphics
 		size_t count = 0;
 		for (size_t i = 0; i < _objects_.size(); ++i)
 		{
+			if (!renderFlagsFor(i).visible)
+			{
+				continue;
+			}
 			sum += glm::vec3(getObjectModelMatrix(i) * glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
 			++count;
 		}
@@ -429,7 +433,7 @@ namespace lightGraphics
 
 		if (light.type == LightType::Directional)
 		{
-			const glm::vec3 center = shadowSceneCenter();
+			const glm::vec3 center = light.useShadowCenter ? light.shadowCenter : shadowSceneCenter();
 			const float nearPlane = std::max(0.001f, light.shadowNear);
 			const float farPlane = std::max(nearPlane + 0.001f, light.shadowFar);
 			const float halfSize = std::max(0.1f, light.shadowOrthoSize);

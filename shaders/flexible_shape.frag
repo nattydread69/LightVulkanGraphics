@@ -7,6 +7,7 @@ layout(location=2) in vec3 vPosWS;
 layout(location=3) in float vShapeType;
 layout(location=4) in vec2 vTexCoord;
 layout(location=5) in float vOpacity;
+layout(location=6) in float vEmissive;
 
 // Output
 layout(location=0) out vec4 outColor;
@@ -193,6 +194,10 @@ void main()
     {
         finalColor = baseColor * 2.0; // Make lines very bright
     }
+
+    // Self-illuminated objects ignore lights and shadows in proportion to their
+    // emissive level (VkApp::setObjectEmissive).
+    finalColor = mix(finalColor, baseColor, vEmissive);
 
     outColor = vec4(finalColor, vOpacity);
 }

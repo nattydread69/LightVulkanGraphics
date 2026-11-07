@@ -9,6 +9,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <sstream>
@@ -426,6 +428,10 @@ namespace lightGraphics
 		{
 			objectModelMatrixOverrides_.erase(objectModelMatrixOverrides_.begin() + static_cast<std::ptrdiff_t>(index));
 		}
+		if (index < objectRenderFlags_.size())
+		{
+			objectRenderFlags_.erase(objectRenderFlags_.begin() + static_cast<std::ptrdiff_t>(index));
+		}
 		if (index < instanceDataCache_.size())
 		{
 			instanceDataCache_.erase(instanceDataCache_.begin() + static_cast<std::ptrdiff_t>(index));
@@ -490,6 +496,7 @@ namespace lightGraphics
 		dirtyObjects_.clear();
 		objectModelMatrixOverrides_.clear();
 		instanceDataCache_.clear();
+		objectRenderFlags_.clear();
 		for (size_t i = 0; i < removedCount; ++i)
 		{
 			sceneGraph_->onObjectRemoved(0);
@@ -580,5 +587,69 @@ namespace lightGraphics
 			sceneGraph_->onObjectChanged(index);
 			markObjectDirty(index);
 		}
+	}
+}
+
+namespace lightGraphics
+{
+	void VkApp::setObjectVisible(size_t index, bool visible)
+	{
+		assertOwnerThread("setObjectVisible");
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setObjectVisible", index, _objects_.size()));
+		}
+		if (renderFlagsFor(index).visible == visible)
+		{
+			return;
+		}
+		if (objectRenderFlags_.size() < _objects_.size())
+		{
+			objectRenderFlags_.resize(_objects_.size());
+		}
+		objectRenderFlags_[index].visible = visible;
+		markObjectDirty(index);
+	}
+
+	bool VkApp::isObjectVisible(size_t index) const
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("isObjectVisible", index, _objects_.size()));
+		}
+		return renderFlagsFor(index).visible;
+	}
+
+	void VkApp::setObjectEmissive(size_t index, float emissive)
+	{
+		assertOwnerThread("setObjectEmissive");
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("setObjectEmissive", index, _objects_.size()));
+		}
+		if (!std::isfinite(emissive))
+		{
+			throw std::invalid_argument("setObjectEmissive: emissive must be finite");
+		}
+		const float clamped = std::clamp(emissive, 0.0f, 1.0f);
+		if (renderFlagsFor(index).emissive == clamped)
+		{
+			return;
+		}
+		if (objectRenderFlags_.size() < _objects_.size())
+		{
+			objectRenderFlags_.resize(_objects_.size());
+		}
+		objectRenderFlags_[index].emissive = clamped;
+		markObjectDirty(index);
+	}
+
+	float VkApp::getObjectEmissive(size_t index) const
+	{
+		if (index >= _objects_.size())
+		{
+			throw std::out_of_range(makeObjectIndexMessage("getObjectEmissive", index, _objects_.size()));
+		}
+		return renderFlagsFor(index).emissive;
 	}
 }

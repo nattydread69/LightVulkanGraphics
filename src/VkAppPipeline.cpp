@@ -1278,14 +1278,18 @@ namespace lightGraphics
 			addRoot(*envPath);
 		}
 
-#ifdef LVG_BUILD_SHADER_DIR
-		addRoot(LVG_BUILD_SHADER_DIR);
-#endif
-
 		if (const auto libraryPath = getLibraryPath())
 		{
 			appendShaderSearchRoots(searchRoots, libraryPath->parent_path());
 		}
+
+		// The build-tree directory comes after the library-relative roots: an installed
+		// or relocated library must use the shaders shipped next to it, not whatever is
+		// (or was) in the tree it was built in. A library still in its build tree finds
+		// <build>/spv through the library-relative roots anyway.
+#ifdef LVG_BUILD_SHADER_DIR
+		addRoot(LVG_BUILD_SHADER_DIR);
+#endif
 
 		if (const auto executablePath = getExecutablePath())
 		{
