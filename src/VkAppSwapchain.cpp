@@ -305,8 +305,27 @@ namespace lightGraphics
 			}
 		}
 		swapChainImageFormat_ = chosen.format;
-		const uint32_t WIDTH = width_, HEIGHT = height_;
-		swapChainExtent_ = caps.currentExtent.width != UINT32_MAX ? caps.currentExtent : VkExtent2D{WIDTH, HEIGHT};
+		if (caps.currentExtent.width != UINT32_MAX)
+		{
+			swapChainExtent_ = caps.currentExtent;
+		}
+		else
+		{
+			// The surface leaves the size to the application (Wayland): match the
+			// window's current framebuffer in pixels, so HiDPI displays render at native
+			// resolution and resizes are followed. The construction size is only a
+			// fallback for a window that reports no framebuffer yet.
+			int framebufferWidth = 0;
+			int framebufferHeight = 0;
+			if (window_ != nullptr)
+			{
+				glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+			}
+			const uint32_t width = framebufferWidth > 0 ? static_cast<uint32_t>(framebufferWidth) : static_cast<uint32_t>(width_);
+			const uint32_t height = framebufferHeight > 0 ? static_cast<uint32_t>(framebufferHeight) : static_cast<uint32_t>(height_);
+			swapChainExtent_.width = std::clamp(width, caps.minImageExtent.width, caps.maxImageExtent.width);
+			swapChainExtent_.height = std::clamp(height, caps.minImageExtent.height, caps.maxImageExtent.height);
+		}
 		// MAILBOX where the surface has it: unlike FIFO (vsync) it does not
 		// block while the window is hidden (VkAppFramePacing.h), and
 		// mainLoop() paces the frames. LVG_PRESENT_MODE=fifo keeps FIFO.

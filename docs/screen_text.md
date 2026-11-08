@@ -2,6 +2,9 @@
 
 LightVulkanGraphics provides persistent ASCII screen text using
 `stb_easy_font`. Positions are framebuffer pixels measured from the top-left.
+`VkApp::getSwapchainExtent()` returns the size of that pixel space (on HiDPI
+displays it is larger than the window size in screen coordinates), so layouts
+such as right-aligned or centred labels can be computed from it.
 Text is rendered in the overlay layer with alpha blending enabled and depth
 testing disabled.
 

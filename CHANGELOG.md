@@ -6,6 +6,33 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.3.0 (ABI-compatible with 3.0-3.2: same `libLightVulkanGraphics.so.3`)
+
+No class layouts change; the new accessor is inline.
+
+#### Added
+- `VkApp::getSwapchainExtent()`: the size in pixels of the rendered and presented
+  images (the space screen text, frame captures and the projection aspect use), which
+  can differ from the window size on HiDPI displays.
+
+#### Fixed
+- **Depth range.** `Camera::proj()` and the directional/spot shadow projections used
+  GLM's OpenGL depth range (-1..1), but Vulkan clips depth to 0..1, so the nearer half
+  of every depth range was discarded: in orthographic views everything nearer than
+  (zNear + zFar) / 2 disappeared, the effective perspective near plane was about
+  2 * zNear, and shadow casters/receivers in the nearer half of a light's shadow volume
+  got no shadows. Projections now use `perspectiveRH_ZO` / `orthoRH_ZO`, and
+  `ViewFrustum::fromViewProj()` extracts the near plane for the 0..1 range. Shadow-map
+  depth is now spread over the whole near..far range, so a given `shadowBias` covers
+  about twice the world-space distance it did before.
+- **Crash with no instanced objects.** A frame with custom meshes, screen text, rigged
+  objects or volumes but no flexible-shape objects issued a zero-vertex `vkCmdDraw`
+  that could run without a bound vertex buffer (segfault in the Intel Mesa driver).
+  The flexible-shape pass is now skipped when it has nothing to draw.
+- **Swapchain size on surfaces without a fixed extent (Wayland).** The swapchain used
+  the construction-time window size forever, ignoring HiDPI scaling and later resizes.
+  It now follows the window's framebuffer size, clamped to the surface limits.
+
 ### 3.2.0 (ABI-compatible with 3.0/3.1: same `libLightVulkanGraphics.so.3`)
 
 No class layouts change. Install the shaders with the library (`volume_raymarch.frag.spv`

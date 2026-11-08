@@ -94,6 +94,10 @@ public:
 		return glm::lookAt(position, position + f, up());
 	}
 
+	// Vulkan clip space: depth 0 at zNear, 1 at zFar (the *_ZO projections), Y down.
+	// GLM's default projections target OpenGL's -1..1 depth instead, which Vulkan
+	// clips at 0 -- that silently discarded the nearer half of the depth range
+	// (everything nearer than (zNear + zFar) / 2 in orthographic views).
 	glm::mat4 proj(float aspect) const
 	{
 		glm::mat4 P;
@@ -101,11 +105,11 @@ public:
 		{
 			const float halfHeight = std::max(orthoHeight, 1e-4f) * 0.5f;
 			const float halfWidth = halfHeight * aspect;
-			P = glm::ortho(-halfWidth, halfWidth, -halfHeight, halfHeight, zNear, zFar);
+			P = glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, zNear, zFar);
 		}
 		else
 		{
-			P = glm::perspective(glm::radians(fov), aspect, zNear, zFar);
+			P = glm::perspectiveRH_ZO(glm::radians(fov), aspect, zNear, zFar);
 		}
 		P[1][1] *= -1.0f; // Vulkan clip-space fix
 		return P;

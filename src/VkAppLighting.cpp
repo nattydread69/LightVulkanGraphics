@@ -440,7 +440,9 @@ namespace lightGraphics
 			const glm::mat4 view = glm::lookAt(center - direction * (farPlane * 0.5f),
 			                                   center,
 			                                   up);
-			glm::mat4 proj = glm::ortho(-halfSize, halfSize, -halfSize, halfSize, nearPlane, farPlane);
+			// Vulkan depth range 0..1 (see Camera::proj()); with OpenGL's -1..1 the
+			// nearer half of the shadow volume was clipped and cast no shadows.
+			glm::mat4 proj = glm::orthoRH_ZO(-halfSize, halfSize, -halfSize, halfSize, nearPlane, farPlane);
 			proj[1][1] *= -1.0f;
 			return proj * view;
 		}
@@ -449,7 +451,7 @@ namespace lightGraphics
 		const float farPlane = std::max(nearPlane + 0.001f, light.shadowFar);
 		const float outer = glm::clamp(light.outerConeAngleRadians, glm::radians(1.0f), glm::radians(89.0f));
 		const glm::mat4 view = glm::lookAt(light.position, light.position + direction, up);
-		glm::mat4 proj = glm::perspective(outer * 2.0f, 1.0f, nearPlane, farPlane);
+		glm::mat4 proj = glm::perspectiveRH_ZO(outer * 2.0f, 1.0f, nearPlane, farPlane);
 		proj[1][1] *= -1.0f;
 		return proj * view;
 	}

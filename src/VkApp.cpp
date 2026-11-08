@@ -3578,18 +3578,16 @@ namespace lightGraphics
 		}
 		else
 		{
-			logMessage(LogLevel::Debug,
-			           "Draw fallback invoked with " +
-			           std::to_string(useInstancing ? instanceCount_ : 1) + " instances");
-			// Fallback if you don't have an index buffer
-			uint32_t vertexCount = 0; // TODO set actual count if you use non-indexed draw
-			if (useInstancing)
+			// No flexible-shape objects this frame (only rigged objects, custom meshes,
+			// screen text or volumes), or no shape geometry uploaded: there is nothing
+			// for this pass to draw. This used to issue a zero-vertex vkCmdDraw, which
+			// could run without a bound vertex buffer and crashed some drivers.
+			lastFrustumCulledCount_ = 0;
+			lastFrustumVisibleCount_ = 0;
+			if (hasRegularObjects)
 			{
-				vkCmdDraw(cmd, vertexCount, instanceCount_, 0, 0);
-			}
-			else
-			{
-				vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+				logMessage(LogLevel::Warning,
+				           "recordCommandBuffer: objects present but shape geometry is not uploaded; skipping them");
 			}
 		}
 

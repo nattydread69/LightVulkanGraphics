@@ -31,9 +31,8 @@ namespace lightGraphics
 	//
 	// Built with the standard Gribb/Hartmann method (extracting planes directly from the
 	// combined view-projection matrix's rows) -- see fromViewProj()'s comment for why this
-	// project's specific clip-space convention (OpenGL-style z in [-1,1], despite the
-	// Vulkan Y-flip alongside it) matters for the near/far planes specifically, and how
-	// that was verified.
+	// project's clip-space convention (Vulkan z in [0,1], Camera::proj()) matters for the
+	// near/far planes specifically.
 	class ViewFrustum
 	{
 	public:
@@ -59,17 +58,13 @@ namespace lightGraphics
 			f.m_planes[1] = normalizePlane(row3 - row0); // right
 			f.m_planes[2] = normalizePlane(row3 + row1); // bottom (or top -- see below)
 			f.m_planes[3] = normalizePlane(row3 - row1); // top (or bottom)
-			// Near/far: this project's Camera::proj() (Camera.h) is glm::perspective's
-			// default OpenGL-style clip-space Z range ([-1,1], via P[2][2]/P[3][2]),
-			// despite the Vulkan Y-flip alongside it -- GLM_FORCE_DEPTH_ZERO_TO_ONE is not
-			// defined anywhere in this project. Verified directly against the actual
-			// matrix Camera::proj() produces: dot(row3+row2, p) is exactly zero at
-			// p = -zNear (the near plane), not dot(row2, p) alone (the Vulkan [0,1]
-			// formula, which is zero at a different, zNear-and-zFar-dependent point and
-			// would silently cull the wrong things). See tests/unit/test_core_types.cpp,
-			// testViewFrustumCulling(), for the pinned-down near/far boundary cases this
-			// depends on.
-			f.m_planes[4] = normalizePlane(row3 + row2); // near
+			// Near/far: Camera::proj() (Camera.h) produces Vulkan's clip-space Z range
+			// [0,1] (glm::perspectiveRH_ZO / orthoRH_ZO), so the near plane is z >= 0,
+			// i.e. dot(row2, p) >= 0, and the far plane is z <= w, i.e.
+			// dot(row3 - row2, p) >= 0. (The OpenGL [-1,1] formula would use row3 + row2
+			// for the near plane.) tests/unit/test_core_types.cpp,
+			// testViewFrustumCulling() and testCameraDepthRange(), pin these boundaries.
+			f.m_planes[4] = normalizePlane(row2);        // near
 			f.m_planes[5] = normalizePlane(row3 - row2); // far
 			return f;
 		}

@@ -475,6 +475,59 @@ namespace
 		require(!frustum.sphereIntersects(glm::vec3(9.0f, 0.0f, 0.0f), 0.5f), "Camera: point outside the ortho volume must be culled");
 	}
 
+	// Vulkan clips clip-space depth to [0, w]. Camera::proj() must map zNear to depth 0
+	// and zFar to depth 1 for both projections; with OpenGL's [-1, 1] mapping the nearer
+	// half of the range was clipped (in orthographic views, everything nearer than
+	// (zNear + zFar) / 2 vanished).
+	void testCameraDepthRange()
+	{
+		auto const depthAt = [](const Camera& camera, float distance)
+		{
+			const glm::vec4 clip = camera.proj(1.5f) * camera.view() *
+				glm::vec4(camera.position + camera.front() * distance, 1.0f);
+			return clip.z / clip.w;
+		};
+		for (Camera::Projection projection : {Camera::Projection::Perspective, Camera::Projection::Orthographic})
+		{
+			Camera camera;
+			camera.position = glm::vec3(1.0f, 20.0f, -3.0f);
+			camera.pitch = -90.0f;
+			camera.zNear = 1.0f;
+			camera.zFar = 41.0f;
+			camera.projection = projection;
+			const std::string kind = projection == Camera::Projection::Perspective ? "perspective" : "orthographic";
+			require(nearlyEqual(depthAt(camera, camera.zNear), 0.0f), "Camera: " + kind + " zNear must map to depth 0");
+			require(nearlyEqual(depthAt(camera, camera.zFar), 1.0f), "Camera: " + kind + " zFar must map to depth 1");
+			const float nearHalf = depthAt(camera, 5.0f);
+			require(nearHalf > 0.0f && nearHalf < 1.0f, "Camera: " + kind + " points in the nearer half of the range must not be clipped");
+		}
+
+		Camera ortho;
+		ortho.zNear = 1.0f;
+		ortho.zFar = 41.0f;
+		ortho.projection = Camera::Projection::Orthographic;
+		require(nearlyEqual(depthAt(ortho, 21.0f), 0.5f), "Camera: orthographic depth must be linear over zNear..zFar");
+
+		// The frustum's near plane must agree with the 0..1 range for both projections.
+		for (Camera::Projection projection : {Camera::Projection::Perspective, Camera::Projection::Orthographic})
+		{
+			Camera camera;
+			camera.position = glm::vec3(0.0f);
+			camera.yaw = -90.0f;
+			camera.zNear = 2.0f;
+			camera.zFar = 40.0f;
+			camera.projection = projection;
+			const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(camera.proj(1.0f) * camera.view());
+			require(frustum.sphereIntersects({0.0f, 0.0f, -2.05f}, 0.0f), "Frustum: a point just past zNear is inside");
+			require(!frustum.sphereIntersects({0.0f, 0.0f, -1.95f}, 0.0f), "Frustum: a point just before zNear is outside");
+			require(frustum.sphereIntersects({0.0f, 0.0f, -39.9f}, 0.0f), "Frustum: a point just before zFar is inside");
+			require(!frustum.sphereIntersects({0.0f, 0.0f, -40.1f}, 0.0f), "Frustum: a point just past zFar is outside");
+		}
+
+		lightGraphics::VkApp app;
+		require(app.getSwapchainExtent() == glm::uvec2(0u), "VkApp: swapchain extent is zero before init()");
+	}
+
 	void testCameraStraightDown()
 	{
 		// Looking exactly down used to produce NaN (world up parallel to the view).
@@ -1471,6 +1524,7 @@ int main()
 		testVkAppObjectIndexValidation();
 		testVkAppObjectDescription();
 		testCameraOrthographicProjection();
+		testCameraDepthRange();
 		testCameraStraightDown();
 		testVkAppObjectVisibilityAndEmissive();
 		testVkAppObjectHandleValidity();

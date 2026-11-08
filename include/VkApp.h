@@ -626,6 +626,14 @@ namespace lightGraphics
 		static bool writePng(const std::string& path, const CapturedFrame& frame, std::string* error = nullptr);
 
 		GLFWwindow* getWindowPointer() const { return window_; }
+		// Size in pixels of the images actually rendered and presented -- the space screen
+		// text positions, frame captures and the projection aspect ratio use. It can
+		// differ from the window size in screen coordinates (HiDPI) and is (0, 0) before
+		// init(). Updated whenever the swapchain is recreated, e.g. after a resize. (3.3+)
+		glm::uvec2 getSwapchainExtent() const noexcept
+		{
+			return glm::uvec2(swapChainExtent_.width, swapChainExtent_.height);
+		}
 
 	private:
 		// See the class doc comment above: the thread that constructs this VkApp is
