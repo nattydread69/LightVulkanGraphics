@@ -24,6 +24,9 @@
 #include <algorithm>
 #include <cmath>
 
+// Data layout is part of the libLightVulkanGraphics.so.3 ABI (Camera is a VkApp
+// member): add behaviour through member functions, never new data members. The
+// 3.2 projection settings live in VkApp's side table (src/VkAppExtras.h).
 class Camera
 {
 public:
@@ -31,7 +34,7 @@ public:
 	{
 		Perspective,
 		// Parallel projection: no foreshortening, sizes on screen do not depend on
-		// distance. Typical for top-down/tactical views and 2D-style scenes.
+		// distance. Typical for top-down/tactical views and 2D-style scenes. (3.2+)
 		Orthographic
 	};
 
@@ -42,18 +45,6 @@ public:
 	float fov    = 60.0f;
 	float zNear  = 0.2f;
 	float zFar   = 50.0f;
-
-	Projection projection = Projection::Perspective;
-	// Orthographic only: world-space height of the visible volume. The width is
-	// orthoHeight * aspect.
-	float orthoHeight = 10.0f;
-
-	// Screen-up direction used when the camera looks (almost) straight up or
-	// down, where world up and the view direction are parallel and cannot define
-	// a basis. Set by setCameraLookAt()'s `up` argument; a zero vector means "use
-	// the camera's yaw direction" (looking down, the top of the screen then faces
-	// the way the camera was turned).
-	glm::vec3 verticalViewUp{0.0f};
 
 	float sensitivity = 1.0f;
 
@@ -66,32 +57,36 @@ public:
 		return glm::normalize(dir);
 	}
 
-	// Up vector for the view basis. World +Y except when the view direction is
-	// within ~0.8 degrees of vertical, where it falls back to verticalViewUp (or
-	// the yaw direction) so straight-down views are well defined instead of NaN.
-	glm::vec3 up() const
+	// Up vector of the view basis: world +Y, except when the view is within ~0.8
+	// degrees of vertical, where world up is parallel to the view and cannot orient
+	// the image. There it uses `verticalViewUp` (e.g. setCameraLookAt()'s up
+	// argument) or, if that is zero or also vertical, the yaw direction -- looking
+	// down, the top of the screen faces the way the camera was turned. (3.2+)
+	glm::vec3 up(const glm::vec3& verticalViewUp = glm::vec3(0.0f)) const
 	{
 		const glm::vec3 f = front();
-		const glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
 		if (std::abs(f.y) < 0.9999f)
 		{
-			return worldUp;
+			return glm::vec3(0.0f, 1.0f, 0.0f);
 		}
 		glm::vec3 hint = verticalViewUp - f * glm::dot(verticalViewUp, f);
 		if (glm::length(hint) < 1e-4f)
 		{
-			// Looking down, "up" on screen is where the camera faces horizontally;
-			// looking up, it is the opposite.
 			const glm::vec3 heading(std::cos(glm::radians(yaw)), 0.0f, std::sin(glm::radians(yaw)));
 			hint = f.y < 0.0f ? heading : -heading;
 		}
 		return glm::normalize(hint);
 	}
 
+	// Well defined for every orientation, including straight up and down.
+	glm::mat4 view(const glm::vec3& verticalViewUp) const
+	{
+		return glm::lookAt(position, position + front(), up(verticalViewUp));
+	}
+
 	glm::mat4 view() const
 	{
-		const glm::vec3 f = front();
-		return glm::lookAt(position, position + f, up());
+		return view(glm::vec3(0.0f));
 	}
 
 	// Vulkan clip space: depth 0 at zNear, 1 at zFar (the *_ZO projections), Y down.
@@ -115,6 +110,26 @@ public:
 		return P;
 	}
 
+	// Perspective uses fov; orthographic shows a volume `orthoHeight` world units
+	// tall (width = orthoHeight * aspect). (3.2+)
+	glm::mat4 projection(float aspect, Projection mode, float orthoHeight) const
+	{
+		if (mode != Projection::Orthographic)
+		{
+			return proj(aspect);
+		}
+		const float halfHeight = std::max(orthoHeight, 1e-4f) * 0.5f;
+		const float halfWidth = halfHeight * aspect;
+		// Vulkan clip depth is [0, 1]. glm::ortho's default OpenGL [-1, 1] range would
+		// clip the whole near half of the volume (depth is linear), so use the ZO
+		// variant. proj() keeps its historical mapping, where only a sliver next to
+		// the near plane is affected. ViewFrustum's near plane stays conservative for
+		// either convention.
+		glm::mat4 P = glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, zNear, zFar);
+		P[1][1] *= -1.0f;
+		return P;
+	}
+
 	void addMouseDelta(float dx, float dy)
 	{
 		yaw   += dx*sensitivity;
@@ -126,15 +141,8 @@ public:
 			pitch = -89.0f;
 	}
 
-	// Scroll zoom: narrows the field of view in perspective, shrinks the visible
-	// height in orthographic projection.
 	void addScroll(float dy)
 	{
-		if (projection == Projection::Orthographic)
-		{
-			orthoHeight = std::clamp(orthoHeight * std::pow(0.9f, dy), 0.01f, 100000.0f);
-			return;
-		}
 		fov -= dy;
 		if (fov < 20.0f)
 			fov = 20.0f;

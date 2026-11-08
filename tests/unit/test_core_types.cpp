@@ -443,9 +443,7 @@ namespace
 		camera.pitch = -45.0f;
 		camera.zNear = 0.1f;
 		camera.zFar = 100.0f;
-		camera.projection = Camera::Projection::Orthographic;
-		camera.orthoHeight = 8.0f;
-		const glm::mat4 projection = camera.proj(2.0f);
+		const glm::mat4 projection = camera.projection(2.0f, Camera::Projection::Orthographic, 8.0f);
 		// Parallel projection: no perspective divide term.
 		require(std::abs(projection[2][3]) < 1e-6f && std::abs(projection[3][3] - 1.0f) < 1e-6f,
 		        "Camera: orthographic proj() must be affine (w = 1)");
@@ -458,19 +456,23 @@ namespace
 		const glm::vec4 nearPoint = projection * glm::vec4(1.0f, 0.0f, -2.0f, 1.0f);
 		const glm::vec4 farPoint = projection * glm::vec4(1.0f, 0.0f, -50.0f, 1.0f);
 		require(std::abs(nearPoint.x - farPoint.x) < 1e-6f, "Camera: orthographic projection must not foreshorten");
-		// Scroll zooms by changing the visible height, not the field of view.
-		const float fovBefore = camera.fov;
-		camera.addScroll(1.0f);
-		require(camera.orthoHeight < 8.0f && camera.fov == fovBefore, "Camera: orthographic scroll must change orthoHeight only");
+		// Vulkan depth range: near maps to 0, far to 1 (an OpenGL-style mapping would put
+		// the near half of the volume at negative depth, where Vulkan clips it).
+		const glm::vec4 atNear = projection * glm::vec4(0.0f, 0.0f, -0.1f, 1.0f);
+		const glm::vec4 atFar = projection * glm::vec4(0.0f, 0.0f, -100.0f, 1.0f);
+		require(std::abs(atNear.z) < 1e-5f && std::abs(atFar.z - 1.0f) < 1e-5f, "Camera: orthographic depth must map [near, far] to [0, 1]");
+		require(camera.projection(2.0f, Camera::Projection::Perspective, 8.0f) == camera.proj(2.0f),
+		        "Camera: perspective projection() must match proj()");
+		// ABI guard: Camera is a VkApp member, so its layout must stay as in 3.0/3.1.
+		static_assert(sizeof(Camera) == sizeof(glm::vec3) + 6 * sizeof(float), "Camera layout is part of the .so.3 ABI");
 		// Frustum culling works with the parallel projection too.
 		Camera down;
 		down.position = glm::vec3(0.0f, 20.0f, 0.0f);
 		down.pitch = -90.0f;
 		down.zNear = 0.5f;
 		down.zFar = 50.0f;
-		down.projection = Camera::Projection::Orthographic;
-		down.orthoHeight = 10.0f;
-		const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(down.proj(1.0f) * down.view());
+		const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(
+			down.projection(1.0f, Camera::Projection::Orthographic, 10.0f) * down.view());
 		require(frustum.sphereIntersects(glm::vec3(4.0f, 0.0f, 4.0f), 0.1f), "Camera: point inside the ortho volume must not be culled");
 		require(!frustum.sphereIntersects(glm::vec3(9.0f, 0.0f, 0.0f), 0.5f), "Camera: point outside the ortho volume must be culled");
 	}
@@ -556,6 +558,17 @@ namespace
 		requireThrows<std::invalid_argument>([&] { app.setCameraOrthoHeight(0.0f); }, "VkApp: setCameraOrthoHeight must reject 0");
 		app.setMouseCameraEnabled(false);
 		require(!app.getMouseCameraEnabled(), "VkApp: mouse camera switch must round-trip");
+		// Pinned directional shadow centres follow the light through index shifts.
+		app.clearLights();
+		app.addDirectionalLight(glm::vec3(0.0f, -1.0f, 0.0f));
+		app.addDirectionalLight(glm::vec3(0.0f, -1.0f, 0.0f));
+		require(!app.getLightShadowCenter(1).has_value(), "Shadow centre: unset by default");
+		app.setLightShadowCenter(1, glm::vec3(4.0f, 0.0f, 5.0f));
+		app.removeLight(static_cast<size_t>(0));
+		require(app.getLightShadowCenter(0).has_value() && nearlyEqual(*app.getLightShadowCenter(0), glm::vec3(4.0f, 0.0f, 5.0f)),
+		        "Shadow centre: must stay with its light when indices shift");
+		app.setLightShadowCenter(0, std::nullopt);
+		require(!app.getLightShadowCenter(0).has_value(), "Shadow centre: nullopt must restore the default");
 	}
 
 	void testVkAppObjectVisibilityAndEmissive()

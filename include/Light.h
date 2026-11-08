@@ -41,12 +41,6 @@ namespace lightGraphics
 		float shadowNear = 0.1f;
 		float shadowFar = 50.0f;
 		float shadowOrthoSize = 20.0f;
-		// Directional lights only: where the shadow map is centred. By default it follows
-		// the average position of all visible objects, which drifts as objects move or
-		// are added; set useShadowCenter to pin it (e.g. to a level's centre, or to
-		// the player for a tighter, sharper shadow region). (3.2+)
-		bool useShadowCenter = false;
-		glm::vec3 shadowCenter{0.0f};
 		std::string name;
 	};
 }
