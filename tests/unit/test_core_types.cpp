@@ -477,15 +477,20 @@ namespace
 		require(!frustum.sphereIntersects(glm::vec3(9.0f, 0.0f, 0.0f), 0.5f), "Camera: point outside the ortho volume must be culled");
 	}
 
-	// Vulkan clips clip-space depth to [0, w]. Camera::proj() must map zNear to depth 0
-	// and zFar to depth 1 for both projections; with OpenGL's [-1, 1] mapping the nearer
-	// half of the range was clipped (in orthographic views, everything nearer than
-	// (zNear + zFar) / 2 vanished).
+	// Vulkan clips clip-space depth to [0, w]. Camera::proj() and Camera::projection()
+	// must map zNear to depth 0 and zFar to depth 1 for both projections; with OpenGL's
+	// [-1, 1] mapping the nearer half of the range was clipped (in orthographic views,
+	// everything nearer than (zNear + zFar) / 2 vanished). The projection mode is not a
+	// Camera member (ABI: it lives in VkApp's side table), so it is passed explicitly.
 	void testCameraDepthRange()
 	{
-		auto const depthAt = [](const Camera& camera, float distance)
+		auto const projectionFor = [](const Camera& camera, Camera::Projection mode, float aspect)
 		{
-			const glm::vec4 clip = camera.proj(1.5f) * camera.view() *
+			return camera.projection(aspect, mode, 10.0f);
+		};
+		auto const depthAt = [&](const Camera& camera, Camera::Projection mode, float distance)
+		{
+			const glm::vec4 clip = projectionFor(camera, mode, 1.5f) * camera.view() *
 				glm::vec4(camera.position + camera.front() * distance, 1.0f);
 			return clip.z / clip.w;
 		};
@@ -496,19 +501,21 @@ namespace
 			camera.pitch = -90.0f;
 			camera.zNear = 1.0f;
 			camera.zFar = 41.0f;
-			camera.projection = projection;
 			const std::string kind = projection == Camera::Projection::Perspective ? "perspective" : "orthographic";
-			require(nearlyEqual(depthAt(camera, camera.zNear), 0.0f), "Camera: " + kind + " zNear must map to depth 0");
-			require(nearlyEqual(depthAt(camera, camera.zFar), 1.0f), "Camera: " + kind + " zFar must map to depth 1");
-			const float nearHalf = depthAt(camera, 5.0f);
+			require(nearlyEqual(depthAt(camera, projection, camera.zNear), 0.0f), "Camera: " + kind + " zNear must map to depth 0");
+			require(nearlyEqual(depthAt(camera, projection, camera.zFar), 1.0f), "Camera: " + kind + " zFar must map to depth 1");
+			const float nearHalf = depthAt(camera, projection, 5.0f);
 			require(nearHalf > 0.0f && nearHalf < 1.0f, "Camera: " + kind + " points in the nearer half of the range must not be clipped");
 		}
 
 		Camera ortho;
 		ortho.zNear = 1.0f;
 		ortho.zFar = 41.0f;
-		ortho.projection = Camera::Projection::Orthographic;
-		require(nearlyEqual(depthAt(ortho, 21.0f), 0.5f), "Camera: orthographic depth must be linear over zNear..zFar");
+		require(nearlyEqual(depthAt(ortho, Camera::Projection::Orthographic, 21.0f), 0.5f), "Camera: orthographic depth must be linear over zNear..zFar");
+
+		// proj() is the perspective case of projection().
+		Camera perspective;
+		require(perspective.proj(1.5f) == perspective.projection(1.5f, Camera::Projection::Perspective, 10.0f), "Camera: proj() must equal the perspective projection()");
 
 		// The frustum's near plane must agree with the 0..1 range for both projections.
 		for (Camera::Projection projection : {Camera::Projection::Perspective, Camera::Projection::Orthographic})
@@ -518,8 +525,7 @@ namespace
 			camera.yaw = -90.0f;
 			camera.zNear = 2.0f;
 			camera.zFar = 40.0f;
-			camera.projection = projection;
-			const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(camera.proj(1.0f) * camera.view());
+			const lightGraphics::ViewFrustum frustum = lightGraphics::ViewFrustum::fromViewProj(projectionFor(camera, projection, 1.0f) * camera.view());
 			require(frustum.sphereIntersects({0.0f, 0.0f, -2.05f}, 0.0f), "Frustum: a point just past zNear is inside");
 			require(!frustum.sphereIntersects({0.0f, 0.0f, -1.95f}, 0.0f), "Frustum: a point just before zNear is outside");
 			require(frustum.sphereIntersects({0.0f, 0.0f, -39.9f}, 0.0f), "Frustum: a point just before zFar is inside");

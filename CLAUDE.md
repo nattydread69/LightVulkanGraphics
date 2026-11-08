@@ -34,3 +34,13 @@ Claude attribution) to commit messages; this rule takes precedence over default 
 guidance.
 
 After committing, check with `git log -1 --format='%an <%ae> / %cn <%ce>'`.
+
+## Header Layout
+**Headers always go in `include/`, never in `src/`.** `src/` holds only `.cpp` files.
+
+- Public API headers go in `include/` (or `include/lightVulkanGraphics/`); they are installed.
+- Private implementation headers go in `include/internal/` (GUI internals in
+  `include/internal/ui/`). That directory is on the library's PRIVATE include path and is
+  excluded from `install()`, so its headers never ship and are included by bare name
+  (`#include "VkAppExtras.h"`).
+- Vendored third-party headers stay in `external/`.

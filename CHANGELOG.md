@@ -77,7 +77,7 @@ the new shader and render as before).
 
 #### ABI notes
 - The new camera, visibility, emissive, mouse-switch and shadow-centre state lives in a
-  per-application side table (`src/VkAppExtras.*`), like the volume styles: `VkApp`,
+  per-application side table (`include/internal/VkAppExtras.h`, `src/VkAppExtras.cpp`), like the volume styles: `VkApp`,
   `Camera` and `LightSource` keep their 3.0/3.1 layouts (a unit test pins
   `sizeof(Camera)`). Verified by running a program compiled against the pre-3.2 headers
   against this library.

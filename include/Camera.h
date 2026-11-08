@@ -26,7 +26,7 @@
 
 // Data layout is part of the libLightVulkanGraphics.so.3 ABI (Camera is a VkApp
 // member): add behaviour through member functions, never new data members. The
-// 3.2 projection settings live in VkApp's side table (src/VkAppExtras.h).
+// 3.2 projection settings live in VkApp's side table (include/internal/VkAppExtras.h).
 class Camera
 {
 public:
@@ -95,17 +95,7 @@ public:
 	// (everything nearer than (zNear + zFar) / 2 in orthographic views).
 	glm::mat4 proj(float aspect) const
 	{
-		glm::mat4 P;
-		if (projection == Projection::Orthographic)
-		{
-			const float halfHeight = std::max(orthoHeight, 1e-4f) * 0.5f;
-			const float halfWidth = halfHeight * aspect;
-			P = glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, zNear, zFar);
-		}
-		else
-		{
-			P = glm::perspectiveRH_ZO(glm::radians(fov), aspect, zNear, zFar);
-		}
+		glm::mat4 P = glm::perspectiveRH_ZO(glm::radians(fov), aspect, zNear, zFar);
 		P[1][1] *= -1.0f; // Vulkan clip-space fix
 		return P;
 	}
@@ -120,11 +110,6 @@ public:
 		}
 		const float halfHeight = std::max(orthoHeight, 1e-4f) * 0.5f;
 		const float halfWidth = halfHeight * aspect;
-		// Vulkan clip depth is [0, 1]. glm::ortho's default OpenGL [-1, 1] range would
-		// clip the whole near half of the volume (depth is linear), so use the ZO
-		// variant. proj() keeps its historical mapping, where only a sliver next to
-		// the near plane is affected. ViewFrustum's near plane stays conservative for
-		// either convention.
 		glm::mat4 P = glm::orthoRH_ZO(-halfWidth, halfWidth, -halfHeight, halfHeight, zNear, zFar);
 		P[1][1] *= -1.0f;
 		return P;
