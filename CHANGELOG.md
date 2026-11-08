@@ -21,6 +21,42 @@ the new shader and render as before).
   `volumeRenderStyleName()` gives stable names.
 - `RiggedObject::setAnimationTime(seconds)`: poses the current clip at any time, also
   while paused (timeline scrubbing); wraps looping clips, clamps others.
+- **Orthographic cameras**: `setCameraProjection(Camera::Projection::Orthographic)` and
+  `setCameraOrthoHeight(h)` give a parallel projection (visible height `h`, width
+  `h * aspect`) with Vulkan [0, 1] depth; scroll zoom changes the height. Frustum culling
+  works with it. `Camera::projection(aspect, mode, height)` builds the matrix.
+- **Straight-up/down views**: `setCameraLookAt(eye, target, up)` now honours `up` when
+  the view is vertical (it used to produce NaN there); without a usable `up` the yaw
+  direction becomes screen-up. `Camera::up()` / `view(verticalViewUp)` expose this.
+- **Per-object visibility**: `setObjectVisible` / `isObjectVisible` hide an object without
+  removing it (no draw, no shadow, not in culling stats or the automatic shadow centre),
+  keeping indices and handles stable -- for pooled objects.
+- **Emissive flexible shapes**: `setObjectEmissive(index, 0..1)` blends an object towards its
+  flat colour regardless of lights and shadows (16 levels, packed into the instance
+  shape slot, so the instance layout is unchanged; `flexible_shape.*.spv` changed).
+- **Mouse camera switch**: `setMouseCameraEnabled(false)` turns off right-drag look/orbit
+  and wheel zoom for applications with their own mouse handling.
+- **Pinned directional shadow centre**: `setLightShadowCenter(index, center)` /
+  `getLightShadowCenter` (nullopt = the previous automatic centre). Follows the light
+  through index shifts.
+- `LVG_BUILD_UI_SHARED` CMake option: builds LVGUI as `libLightVulkanGraphicsUI.so`
+  instead of a static archive, so consumers that use the GUI link no LGPL code
+  statically (relevant for proprietary applications). Default unchanged (static).
+
+#### Changed
+- Shader search order: shaders next to the loaded library are now found before the
+  build-tree directory baked in at compile time, so an installed or relocated library
+  no longer loads shaders from the tree it was built in.
+
+#### ABI notes
+- The new camera, visibility, emissive, mouse-switch and shadow-centre state lives in a
+  per-application side table (`src/VkAppExtras.*`), like the volume styles: `VkApp`,
+  `Camera` and `LightSource` keep their 3.0/3.1 layouts (a unit test pins
+  `sizeof(Camera)`). Verified by running a program compiled against the pre-3.2 headers
+  against this library.
+- As before, `LVG_BUILD_UI=ON` and `=OFF` builds are not layout-compatible with each
+  other (`VkApp` has `LVG_WITH_UI` members); consumers must match the library's setting,
+  which the exported CMake target does automatically.
 
 ### 3.1.0 (ABI-compatible with 3.0: same `libLightVulkanGraphics.so.3`)
 

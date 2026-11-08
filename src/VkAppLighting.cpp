@@ -18,6 +18,7 @@
 
 #include "VkApp.h"
 #include "RiggedObject.h"
+#include "VkAppExtras.h"
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
@@ -162,6 +163,7 @@ namespace lightGraphics
 			throw std::out_of_range(makeLightIndexMessage("removeLight", index, lights_.size()));
 		}
 
+		detail::appExtras(this).shadowCenters.erase(lightSlotForIndex_[index]);
 		releaseHandleSlot(lightSlots_, freeLightSlots_, lightSlotForIndex_[index]);
 		lightSlotForIndex_.erase(lightSlotForIndex_.begin() + static_cast<std::ptrdiff_t>(index));
 		reindexHandleSlotsFrom(lightSlots_, lightSlotForIndex_, index);
@@ -203,6 +205,7 @@ namespace lightGraphics
 	void VkApp::clearLights()
 	{
 		assertOwnerThread("clearLights");
+		detail::appExtras(this).shadowCenters.clear();
 		const size_t removedCount = lights_.size();
 		for (std::uint32_t slot : lightSlotForIndex_)
 		{
@@ -388,11 +391,12 @@ namespace lightGraphics
 
 	glm::vec3 VkApp::shadowSceneCenter() const
 	{
+		const detail::AppExtras& extras = detail::appExtras(this);
 		glm::vec3 sum(0.0f);
 		size_t count = 0;
 		for (size_t i = 0; i < _objects_.size(); ++i)
 		{
-			if (!renderFlagsFor(i).visible)
+			if (!extras.flagsFor(i).visible)
 			{
 				continue;
 			}
@@ -433,7 +437,11 @@ namespace lightGraphics
 
 		if (light.type == LightType::Directional)
 		{
-			const glm::vec3 center = light.useShadowCenter ? light.shadowCenter : shadowSceneCenter();
+			const detail::AppExtras& extras = detail::appExtras(this);
+			const auto pinned = index < lightSlotForIndex_.size()
+				? extras.shadowCenters.find(lightSlotForIndex_[index])
+				: extras.shadowCenters.end();
+			const glm::vec3 center = pinned != extras.shadowCenters.end() ? pinned->second : shadowSceneCenter();
 			const float nearPlane = std::max(0.001f, light.shadowNear);
 			const float farPlane = std::max(nearPlane + 0.001f, light.shadowFar);
 			const float halfSize = std::max(0.1f, light.shadowOrthoSize);
@@ -500,5 +508,38 @@ namespace lightGraphics
 		}
 
 		return lighting;
+	}
+}
+
+namespace lightGraphics
+{
+	void VkApp::setLightShadowCenter(size_t index, std::optional<glm::vec3> center)
+	{
+		assertOwnerThread("setLightShadowCenter");
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("setLightShadowCenter", index, lights_.size()));
+		}
+		std::unordered_map<std::uint32_t, glm::vec3>& centers = detail::appExtras(this).shadowCenters;
+		if (center)
+		{
+			centers[lightSlotForIndex_[index]] = *center;
+		}
+		else
+		{
+			centers.erase(lightSlotForIndex_[index]);
+		}
+		markLightingDirty();
+	}
+
+	std::optional<glm::vec3> VkApp::getLightShadowCenter(size_t index) const
+	{
+		if (index >= lights_.size())
+		{
+			throw std::out_of_range(makeLightIndexMessage("getLightShadowCenter", index, lights_.size()));
+		}
+		const auto& centers = detail::appExtras(this).shadowCenters;
+		const auto found = centers.find(lightSlotForIndex_[index]);
+		return found != centers.end() ? std::optional<glm::vec3>(found->second) : std::nullopt;
 	}
 }

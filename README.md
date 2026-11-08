@@ -95,6 +95,7 @@ macOS notes:
 Useful CMake options:
 - `-DLVG_BUILD_EXAMPLES=OFF` to skip building the bundled examples
 - `-DLVG_BUILD_UI=OFF` to drop the LVGUI GUI layer entirely (on by default; see [GUI (LVGUI)](#gui-lvgui) below)
+- `-DLVG_BUILD_UI_SHARED=ON` to build LVGUI as a shared library instead of a static archive, so applications that use the GUI link no LGPL code statically (useful for proprietary applications; 3.2+)
 - `-DLVG_ENABLE_WARNINGS=ON` to enable recommended compiler warnings on project targets
 - `-DLVG_WARNINGS_AS_ERRORS=ON` to turn warnings into errors
 - `-DLVG_ENABLE_SANITIZERS=ON` to enable AddressSanitizer and UndefinedBehaviorSanitizer on supported GCC/Clang builds
@@ -381,6 +382,29 @@ The demo scene includes `assets/Worker.fbx`, which is derived from Quaternius as
 - Programmatic:
   - `setCameraLookAt(eye, target)`
   - `setOrbitEnabled(true/false)`, `setOrbitTarget(...)`, `setOrbitRadius(...)`
+  - `setKeyboardCameraEnabled(false)` / `setMouseCameraEnabled(false)` hand the keyboard
+    or mouse entirely to the application (3.2+)
+
+### Orthographic and top-down views (3.2+)
+
+```cpp
+// A true top-down map view: straight down, north (-Z) at the top of the screen.
+gfx.setCameraProjection(Camera::Projection::Orthographic);
+gfx.setCameraOrthoHeight(20.0f);            // 20 world units visible vertically
+gfx.setCameraPlanes(0.5f, 200.0f);
+gfx.setCameraLookAt({x, 50.0f, z}, {x, 0.0f, z}, {0.0f, 0.0f, -1.0f});
+```
+
+Looking exactly straight down is supported: the `up` argument orients the image when the
+view is vertical. Orthographic projection also works at an angle (isometric-style views).
+
+### Pooled and glowing objects (3.2+)
+
+`setObjectVisible(index, false)` hides an object without removing it (handles and indices
+stay stable), which suits pools of projectiles and effects. `setObjectEmissive(index, 1.0f)`
+makes a flexible shape ignore lighting and shadows, for lamps, projectiles and indicators.
+`setLightShadowCenter(lightIndex, center)` pins a directional light's shadow map instead of
+letting it follow the average object position.
 
 ## Shader Assets
 The build compiles GLSL shaders into SPIR-V under `build/spv/`. Installation places the shader payloads under `${DATAROOTDIR}/LightVulkanGraphics/spv`.

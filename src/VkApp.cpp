@@ -19,6 +19,7 @@
 #include "VkApp.h"
 #include "VkAppFramePacing.h"
 #include "VkAppCapture.h"
+#include "VkAppExtras.h"
 #include "FBXLoader.h"
 #include "LightVulkanGraphicsLogging.h"
 #include "RiggedObject.h"
@@ -408,6 +409,7 @@ namespace lightGraphics
 		cleanup();
 		detail::forgetCaptureState(this);
 		detail::forgetVolumeStyles(this);
+		detail::forgetAppExtras(this);
 	}
 
 	void VkApp::assertOwnerThread(const char* where) const
@@ -1366,8 +1368,9 @@ namespace lightGraphics
 		float aspect = swapChainExtent_.width / static_cast<float>(swapChainExtent_.height);
 
 		ubo.model = glm::mat4(1.0f);
-		ubo.view  = camera_.view();
-		ubo.proj  = camera_.proj(aspect);
+		const detail::AppExtras& cameraExtras = detail::appExtras(this);
+		ubo.view  = camera_.view(cameraExtras.verticalViewUp);
+		ubo.proj  = camera_.projection(aspect, cameraExtras.projection, cameraExtras.orthoHeight);
 
 		// Persistently mapped write
 		void* dst = uniformBuffersMapped_[imageIndex];
@@ -1439,7 +1442,7 @@ namespace lightGraphics
 		{
 			if (action == GLFW_PRESS)
 			{
-				if (!mouseCameraEnabled_)
+				if (!detail::appExtras(this).mouseCameraEnabled)
 				{
 					return;
 				}
@@ -1506,7 +1509,7 @@ namespace lightGraphics
 	void VkApp::onScroll(double xoffset, double yoffset)
 	{
 		(void) xoffset;
-		if (!mouseCameraEnabled_)
+		if (!detail::appExtras(this).mouseCameraEnabled)
 		{
 			return;
 		}
@@ -1532,7 +1535,16 @@ namespace lightGraphics
 		}
 		else
 		{
-			camera_.addScroll(static_cast<float>(yoffset));
+			detail::AppExtras& extras = detail::appExtras(this);
+			if (extras.projection == Camera::Projection::Orthographic)
+			{
+				// Orthographic zoom changes the visible height, not the field of view.
+				extras.orthoHeight = std::clamp(extras.orthoHeight * std::pow(0.9f, static_cast<float>(yoffset)), 0.01f, 100000.0f);
+			}
+			else
+			{
+				camera_.addScroll(static_cast<float>(yoffset));
+			}
 		}
 	}
 
@@ -2316,7 +2328,7 @@ namespace lightGraphics
 		camera_.pitch = glm::degrees(pitchRad);
 		// Only consulted when the view is (near) vertical, where world up cannot
 		// orient the image -- see Camera::up().
-		camera_.verticalViewUp = up;
+		detail::appExtras(this).verticalViewUp = up;
 	}
 	void VkApp::setCameraLookAtLevel(const glm::vec3& eye, const glm::vec3& target,
 	                                 const glm::vec3& up)
@@ -2337,18 +2349,21 @@ namespace lightGraphics
 
 	void VkApp::setCameraFov(float fovDeg) { camera_.fov = glm::clamp(fovDeg, 20.0f, 90.0f); }
 	void VkApp::setCameraPlanes(float zNear, float zFar) { camera_.zNear = zNear; camera_.zFar = zFar; }
-	void VkApp::setCameraProjection(Camera::Projection projection) { camera_.projection = projection; }
+	void VkApp::setCameraProjection(Camera::Projection projection) { detail::appExtras(this).projection = projection; }
+	Camera::Projection VkApp::getCameraProjection() const { return detail::appExtras(this).projection; }
+	float VkApp::getCameraOrthoHeight() const { return detail::appExtras(this).orthoHeight; }
+	bool VkApp::getMouseCameraEnabled() const { return detail::appExtras(this).mouseCameraEnabled; }
 	void VkApp::setCameraOrthoHeight(float height)
 	{
 		if (!(height > 0.0f) || !std::isfinite(height))
 		{
 			throw std::invalid_argument("setCameraOrthoHeight: height must be positive and finite");
 		}
-		camera_.orthoHeight = height;
+		detail::appExtras(this).orthoHeight = height;
 	}
 	void VkApp::setMouseCameraEnabled(bool enabled)
 	{
-		mouseCameraEnabled_ = enabled;
+		detail::appExtras(this).mouseCameraEnabled = enabled;
 		if (!enabled && mouseLook_)
 		{
 			// Do not leave the cursor captured by a drag that can no longer end.
@@ -2361,7 +2376,7 @@ namespace lightGraphics
 	}
 	void VkApp::setCameraSensitivity(float sens) { camera_.sensitivity = sens; }
 	glm::vec3 VkApp::getCameraForward() const { return camForward(); }
-	glm::vec3 VkApp::getCameraRight() const { return glm::normalize(glm::cross(camForward(), camera_.up())); }
+	glm::vec3 VkApp::getCameraRight() const { return glm::normalize(glm::cross(camForward(), camera_.up(detail::appExtras(this).verticalViewUp))); }
 	glm::vec3 VkApp::getCameraUp() const { return glm::normalize(glm::cross(getCameraRight(), getCameraForward())); }
 
 	// Orbit camera API
@@ -2598,7 +2613,8 @@ namespace lightGraphics
 		const auto& obj = _objects_[index];
 		Instance instance{};
 		instance.model = getObjectModelMatrix(index);
-		if (!renderFlagsFor(index).visible)
+		const detail::ObjectRenderFlags flags = detail::appExtras(this).flagsFor(index);
+		if (!flags.visible)
 		{
 			// The flexible-shape and shadow passes skip hidden objects outright; this
 			// zero-area transform also hides them in the wireframe/unlit/sphere modes,
@@ -2611,7 +2627,7 @@ namespace lightGraphics
 		// (0..15) above them, so self-illumination needs no change to the instance
 		// layout shared by every instanced pipeline. flexible_shape.vert/.frag decode it;
 		// the other pipelines ignore the slot.
-		const float emissiveLevel = std::round(std::clamp(renderFlagsFor(index).emissive, 0.0f, 1.0f) * 15.0f);
+		const float emissiveLevel = std::round(std::clamp(flags.emissive, 0.0f, 1.0f) * 15.0f);
 		instance.shapeType = static_cast<float>(obj.getType()) + 16.0f * emissiveLevel;
 		return instance;
 	}
@@ -3034,6 +3050,7 @@ namespace lightGraphics
 			vkUnmapMemory(device_, instanceBuf.memory);
 		};
 
+		const detail::AppExtras& shadowExtras = detail::appExtras(this);
 		std::vector<std::vector<size_t>> shapeGroups(8);
 		if (useRegularInstancing)
 		{
@@ -3044,7 +3061,7 @@ namespace lightGraphics
 				{
 					continue;
 				}
-				if (!renderFlagsFor(i).visible)
+				if (!shadowExtras.flagsFor(i).visible)
 				{
 					continue;
 				}
@@ -3388,7 +3405,10 @@ namespace lightGraphics
 				? swapChainExtent_.width / static_cast<float>(swapChainExtent_.height)
 				: 1.0f;
 			const lightGraphics::ViewFrustum frustum =
-				lightGraphics::ViewFrustum::fromViewProj(camera_.proj(aspect) * camera_.view());
+				lightGraphics::ViewFrustum::fromViewProj(
+					camera_.projection(aspect, detail::appExtras(this).projection, detail::appExtras(this).orthoHeight)
+					* camera_.view(detail::appExtras(this).verticalViewUp));
+			const detail::AppExtras& objectExtras = detail::appExtras(this);
 			lastFrustumCulledCount_ = 0;
 			lastFrustumVisibleCount_ = 0;
 
@@ -3397,7 +3417,7 @@ namespace lightGraphics
 				int shapeType = static_cast<int>(_objects_[i].getType());
 				if (shapeType >= 0 && shapeType < 8)
 				{
-					if (!renderFlagsFor(i).visible)
+					if (!objectExtras.flagsFor(i).visible)
 					{
 						continue;
 					}

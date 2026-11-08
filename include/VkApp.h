@@ -369,6 +369,13 @@ namespace lightGraphics
 		void setLightEnabled(size_t index, bool enabled);
 		void setAmbientLight(const glm::vec3& ambientColor);
 		glm::vec3 getAmbientLight() const { return ambientLight_; }
+		// Directional lights: pins the shadow map's centre (its extent is the light's
+		// shadowOrthoSize). By default the centre is the average position of all visible
+		// objects, which drifts as objects move or are added; pin it to a level's centre
+		// or follow the player for a tighter, sharper shadow region. nullopt restores the
+		// default. (3.2+)
+		void setLightShadowCenter(size_t index, std::optional<glm::vec3> center);
+		std::optional<glm::vec3> getLightShadowCenter(size_t index) const;
 		void setShadowRenderingEnabled(bool enabled) { shadowRenderingEnabled_ = enabled; }
 		bool getShadowRenderingEnabled() const { return shadowRenderingEnabled_; }
 
@@ -464,14 +471,14 @@ namespace lightGraphics
 		// visible volume is orthoHeight world units tall (width = height * aspect); the
 		// field of view is ignored and scroll zoom changes the height instead. (3.2+)
 		void setCameraProjection(Camera::Projection projection);
-		Camera::Projection getCameraProjection() const { return camera_.projection; }
+		Camera::Projection getCameraProjection() const;
 		void setCameraOrthoHeight(float height);
-		float getCameraOrthoHeight() const { return camera_.orthoHeight; }
+		float getCameraOrthoHeight() const;
 		// Built-in mouse camera controls (right-drag look/orbit, wheel zoom/dolly). On by
 		// default; applications with their own mouse handling switch them off instead
 		// of intercepting GLFW callbacks. Does not affect the GUI. (3.2+)
 		void setMouseCameraEnabled(bool enabled);
-		bool getMouseCameraEnabled() const { return mouseCameraEnabled_; }
+		bool getMouseCameraEnabled() const;
 		void setCameraSensitivity(float sens);
 		glm::vec3 getCameraForward() const;
 		glm::vec3 getCameraRight() const;
@@ -671,20 +678,6 @@ namespace lightGraphics
 		float scaleFactor = 1.0;
 		uint32_t qFamGfx = 0, qFamPresent = 0;
 		bool keyboardCameraEnabled_ = true; // allow programmatic control toggle
-		bool mouseCameraEnabled_ = true;
-		struct ObjectRenderFlags
-		{
-			bool visible = true;
-			float emissive = 0.0f;
-		};
-		// Index-aligned with _objects_ but grown lazily: entries past its end mean
-		// "default flags", so the many addObject() paths need no changes. removeObject()
-		// and clearObjects() keep it aligned.
-		std::vector<ObjectRenderFlags> objectRenderFlags_;
-		ObjectRenderFlags renderFlagsFor(size_t index) const
-		{
-			return index < objectRenderFlags_.size() ? objectRenderFlags_[index] : ObjectRenderFlags{};
-		}
 		// Orbit state
 		bool orbitEnabled_ = false;
 		glm::vec3 orbitTarget_ = glm::vec3(0.0f);
