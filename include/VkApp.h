@@ -840,6 +840,16 @@ namespace lightGraphics
 		// has no update-in-place path, so this unregisters the stale one first). No-op if
 		// !guiContext_->hasHeadingFont(). See docs/gui/03-text-and-fonts.md, "Headings".
 		void registerHeadingFontTexture();
+		// Pushes any font atlas that gained dynamic glyphs (ui::Font::atlasRevision()) to the
+		// GPU. Called once per frame after the GUI draw list is built, before drawFrame().
+		void syncUiFontAtlases();
+		// Rebuilds uiFrameList_ for this frame: atlas-rendered screen texts followed by the
+		// GUI's own draw list, so one UiRenderer::record() draws both (record() uses
+		// per-frame buffers, so it cannot be called twice per frame). Run after the GUI's
+		// endFrame(); may bake glyphs, so syncUiFontAtlases() must follow.
+		void buildUiFrameList();
+		ui::DrawList uiFrameList_;
+		bool uiFrameListActive_ = false;
 
 	public:
 		// The input hand-off guards (docs/gui/04, "The camera hand-off" and
@@ -1084,6 +1094,8 @@ namespace lightGraphics
 			bool alive = false;
 			ScreenTextDescription description;
 			MeshHandle mesh;
+			// True = drawn from the GUI font atlas each frame (buildUiFrameList()); no mesh.
+			bool atlas = false;
 		};
 
 		struct Texture3DResource

@@ -34,6 +34,19 @@ target_compile_definitions(lvgui_font_tests PRIVATE
 
 add_test(NAME lvgui_font_tests COMMAND lvgui_font_tests)
 
+# Kerning, dynamic glyphs, fallback faces, SDF mode, font styles, file helpers.
+add_executable(lvgui_font_feature_tests
+	test_font_features.cpp
+)
+target_link_libraries(lvgui_font_feature_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_font_feature_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_font_feature_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+	LVG_UI_TEST_MONO_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/DejaVuSansMono.ttf"
+)
+
+add_test(NAME lvgui_font_feature_tests COMMAND lvgui_font_feature_tests)
+
 # Exercises UiRenderer's scissor clamping headlessly -- no device, no window. It needs
 # the Vulkan headers for VkRect2D/VkExtent2D, but creates no Vulkan objects.
 add_executable(lvgui_uirenderer_tests

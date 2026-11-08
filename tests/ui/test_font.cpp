@@ -165,11 +165,14 @@ namespace {
 		for (std::size_t r = 0; r < lvgui::kDefaultGlyphRangeCount; ++r) {
 			const lvgui::GlyphRange& range = lvgui::kDefaultGlyphRanges[r];
 			for (std::uint32_t cp = range.first; cp <= range.last; ++cp) {
-				if (!font.hasGlyph(cp)) {
+				// A codepoint the font itself lacks (DEL, the unassigned U+03A2 hole in
+				// the Greek block) is correctly NOT resident -- it draws as the fallback
+				// glyph. Everything the font does cover must have been pre-baked.
+				if (font.canRender(cp) && !font.hasGlyph(cp)) {
 					std::cerr << "Missing glyph for codepoint 0x" << std::hex << cp
 					          << std::dec << " (range " << r << ")\n";
 				}
-				assert(font.hasGlyph(cp));
+				assert(!font.canRender(cp) || font.hasGlyph(cp));
 				++checked;
 			}
 		}

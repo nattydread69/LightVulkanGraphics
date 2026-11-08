@@ -401,6 +401,29 @@ ScreenTextHandle
 VkApp::createScreenText(const ScreenTextDescription& description)
 {
 	validateScreenTextDescription(description);
+#ifdef LVG_WITH_UI
+	if (description.useFontAtlas && guiContext_ && uiRenderer_)
+	{
+		// Drawn from the GUI font atlas every frame (buildUiFrameList()); nothing to allocate.
+		std::uint32_t const atlasIndex = freeScreenTexts_.empty()
+			? static_cast<std::uint32_t>(screenTexts_.size())
+			: freeScreenTexts_.back();
+		if (freeScreenTexts_.empty())
+		{
+			screenTexts_.emplace_back();
+		}
+		else
+		{
+			freeScreenTexts_.pop_back();
+		}
+		ScreenTextResource& atlasResource = screenTexts_[atlasIndex];
+		atlasResource.description = description;
+		atlasResource.mesh = {};
+		atlasResource.atlas = true;
+		atlasResource.alive = true;
+		return {atlasIndex, atlasResource.generation};
+	}
+#endif
 	MaterialHandle const material = getOrCreateScreenTextMaterial();
 	std::size_t const maximumVertices = std::max<std::size_t>(
 		BACKGROUND_QUAD_VERTICES + checkedCapacity(
@@ -428,6 +451,7 @@ VkApp::createScreenText(const ScreenTextDescription& description)
 	ScreenTextResource& resource = screenTexts_[index];
 	resource.description = description;
 	resource.mesh = mesh;
+	resource.atlas = false;
 	try
 	{
 		updateScreenTextMesh(resource);
@@ -455,6 +479,15 @@ VkApp::updateScreenText(
 	validateScreenTextHandle(screenTexts_, handle);
 	validateScreenTextDescription(description);
 	ScreenTextResource& resource = screenTexts_[handle.index];
+
+	if (resource.atlas)
+	{
+		// Rendering mode is fixed at creation; everything else is just read each frame.
+		ScreenTextDescription updated = description;
+		updated.useFontAtlas = true;
+		resource.description = updated;
+		return;
+	}
 
 	bool const capacityChanged =
 		description.maximumCharacters !=
@@ -548,8 +581,12 @@ VkApp::destroyScreenText(ScreenTextHandle handle)
 {
 	validateScreenTextHandle(screenTexts_, handle);
 	ScreenTextResource& resource = screenTexts_[handle.index];
-	destroyMesh(resource.mesh);
+	if (!resource.atlas)
+	{
+		destroyMesh(resource.mesh);
+	}
 	resource.mesh = {};
+	resource.atlas = false;
 	resource.alive = false;
 	++resource.generation;
 	freeScreenTexts_.push_back(handle.index);
@@ -560,7 +597,7 @@ VkApp::rebuildScreenTextMeshes()
 {
 	for (ScreenTextResource& resource : screenTexts_)
 	{
-		if (resource.alive)
+		if (resource.alive && !resource.atlas)
 		{
 			updateScreenTextMesh(resource);
 		}

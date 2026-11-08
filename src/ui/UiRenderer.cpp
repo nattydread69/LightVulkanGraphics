@@ -114,6 +114,8 @@ void UiRenderer::init(const UiRendererCreateInfo& createInfo, const Font& font) 
 	m_vertexShaderPath = createInfo.vertexShaderPath;
 	m_fragmentShaderPath = createInfo.fragmentShaderPath;
 	m_imageFragmentShaderPath = createInfo.imageFragmentShaderPath;
+	m_sdfFragmentShaderPath = createInfo.sdfFragmentShaderPath;
+	m_textContrast = createInfo.textContrast;
 
 	m_frames.assign(createInfo.framesInFlight, FrameBuffers{});
 
@@ -179,17 +181,24 @@ void UiRenderer::destroyPipeline() {
 		vkDestroyPipeline(m_device, m_imagePipeline, nullptr);
 		m_imagePipeline = VK_NULL_HANDLE;
 	}
+	if (m_sdfPipeline != VK_NULL_HANDLE) {
+		vkDestroyPipeline(m_device, m_sdfPipeline, nullptr);
+		m_sdfPipeline = VK_NULL_HANDLE;
+	}
 	if (m_pipelineLayout != VK_NULL_HANDLE) {
 		vkDestroyPipelineLayout(m_device, m_pipelineLayout, nullptr);
 		m_pipelineLayout = VK_NULL_HANDLE;
 	}
 }
 
-void UiRenderer::destroyAtlas() {
+void UiRenderer::destroyAtlas(bool keepSampler) {
 	if (m_device == VK_NULL_HANDLE) {
 		return;
 	}
-	if (m_atlasSampler != VK_NULL_HANDLE) {
+	// The sampler is shared with every registered texture's descriptor set (see
+	// m_atlasSampler), so an atlas REBUILD must keep it: those sets still hold its handle,
+	// and a recreated sampler would leave them pointing at a destroyed object.
+	if (!keepSampler && m_atlasSampler != VK_NULL_HANDLE) {
 		vkDestroySampler(m_device, m_atlasSampler, nullptr);
 		m_atlasSampler = VK_NULL_HANDLE;
 	}
@@ -316,6 +325,7 @@ VkShaderModule UiRenderer::createShaderModule(const std::string& spvPath) const 
 }
 
 void UiRenderer::createAtlas(const Font& font) {
+	m_atlasRevision = font.atlasRevision();
 	// Read the dimensions from the Font: it retries at 1024x1024 when the requested
 	// atlas cannot fit every glyph, so assuming 512 would truncate the upload.
 	const auto width = static_cast<std::uint32_t>(font.atlasWidth());
@@ -400,6 +410,10 @@ void UiRenderer::createAtlas(const Font& font) {
 	viewInfo.subresourceRange.levelCount = 1;
 	viewInfo.subresourceRange.layerCount = 1;
 	check(vkCreateImageView(m_device, &viewInfo, nullptr, &m_atlasView), "vkCreateImageView");
+
+	if (m_atlasSampler != VK_NULL_HANDLE) {
+		return;   // kept across a rebuildAtlas() -- see destroyAtlas()
+	}
 
 	// CLAMP_TO_EDGE matters: with REPEAT a glyph on the atlas edge samples a sliver of
 	// the opposite edge and produces a faint speckle that is miserable to track down.
@@ -493,21 +507,8 @@ void UiRenderer::destroyRegisteredTexture(RegisteredTexture& tex) {
 	}
 }
 
-TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
-                                      bool colour) {
-	if (m_device == VK_NULL_HANDLE) {
-		throw std::runtime_error("UiRenderer::registerTexture: not initialised");
-	}
-	if (rgbaPixels == nullptr || width == 0 || height == 0) {
-		throw std::runtime_error("UiRenderer::registerTexture: empty pixel buffer");
-	}
-	if (m_textures.size() >= kMaxRegisteredTextures) {
-		throw std::runtime_error("UiRenderer::registerTexture: kMaxRegisteredTextures (" +
-		                          std::to_string(kMaxRegisteredTextures) +
-		                          ") are already registered -- see UiRenderer.h's comment "
-		                          "on that constant");
-	}
-
+UiRenderer::RegisteredTexture UiRenderer::createTextureResources(const std::uint8_t* rgbaPixels,
+                                                                  std::uint32_t width, std::uint32_t height) {
 	// Same staging-buffer-then-copy-then-barrier shape as createAtlas() (this file,
 	// above), duplicated rather than shared -- see RegisteredTexture's header comment on
 	// why this and the atlas are kept structurally separate. RGBA8 here vs. the atlas's
@@ -618,11 +619,63 @@ TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint3
 
 	vkDestroyBuffer(m_device, staging, nullptr);
 	vkFreeMemory(m_device, stagingMemory, nullptr);
+	return tex;
+}
 
-	tex.colour = colour;
+TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
+                                      bool colour) {
+	return registerTexture(rgbaPixels, width, height, colour ? TextureKind::Colour : TextureKind::Coverage);
+}
+
+TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
+                                      TextureKind kind) {
+	if (m_device == VK_NULL_HANDLE) {
+		throw std::runtime_error("UiRenderer::registerTexture: not initialised");
+	}
+	if (rgbaPixels == nullptr || width == 0 || height == 0) {
+		throw std::runtime_error("UiRenderer::registerTexture: empty pixel buffer");
+	}
+	if (m_textures.size() >= kMaxRegisteredTextures) {
+		throw std::runtime_error("UiRenderer::registerTexture: kMaxRegisteredTextures (" +
+		                          std::to_string(kMaxRegisteredTextures) +
+		                          ") are already registered -- see UiRenderer.h's comment "
+		                          "on that constant");
+	}
+
+	RegisteredTexture tex = createTextureResources(rgbaPixels, width, height);
+	tex.kind = kind;
 	TextureId id = m_nextTextureId++;
 	m_textures.emplace(id, tex);
 	return id;
+}
+
+void UiRenderer::updateTexture(TextureId id, const std::uint8_t* rgbaPixels, std::uint32_t width,
+                               std::uint32_t height) {
+	auto it = m_textures.find(id);
+	if (it == m_textures.end()) {
+		throw std::runtime_error("UiRenderer::updateTexture: unknown texture id");
+	}
+	if (rgbaPixels == nullptr || width == 0 || height == 0) {
+		throw std::runtime_error("UiRenderer::updateTexture: empty pixel buffer");
+	}
+	// Build the replacement first so a failure leaves the old texture intact, then wait
+	// for in-flight frames before destroying what they may still sample (same reason as
+	// unregisterTexture()). The id and kind are preserved, so callers keep drawing with
+	// the TextureId they already hold.
+	RegisteredTexture replacement = createTextureResources(rgbaPixels, width, height);
+	replacement.kind = it->second.kind;
+	vkDeviceWaitIdle(m_device);
+	destroyRegisteredTexture(it->second);
+	it->second = replacement;
+}
+
+void UiRenderer::syncAtlas(const Font& font) {
+	if (m_device == VK_NULL_HANDLE || !font.isBaked()) {
+		return;
+	}
+	if (font.atlasRevision() != m_atlasRevision) {
+		rebuildAtlas(font);
+	}
 }
 
 void UiRenderer::unregisterTexture(TextureId id) {
@@ -730,6 +783,15 @@ void UiRenderer::createPipeline() {
 	stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
 	stages[1].module = fragmentModule;
 	stages[1].pName = "main";
+	// constant_id 0 of ui.frag / ui_sdf.frag (kTextContrast). Entries naming a constant a
+	// shader does not declare (ui_image.frag has none) are ignored by Vulkan.
+	VkSpecializationMapEntry contrastEntry{ 0, 0, sizeof(float) };
+	VkSpecializationInfo specialization{};
+	specialization.mapEntryCount = 1;
+	specialization.pMapEntries = &contrastEntry;
+	specialization.dataSize = sizeof(float);
+	specialization.pData = &m_textContrast;
+	stages[1].pSpecializationInfo = &specialization;
 
 	try {
 		check(vkCreatePipelineLayout(m_device, &layoutInfo, nullptr, &m_pipelineLayout),
@@ -752,26 +814,30 @@ void UiRenderer::createPipeline() {
 		check(vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline),
 		      "vkCreateGraphicsPipelines");
 
-		// The colour-image twin: identical state, only the fragment shader differs. A
-		// missing or unloadable ui_image.frag.spv is not an error -- colour textures then
-		// draw through m_pipeline exactly as they did before this pipeline existed.
-		if (!m_imageFragmentShaderPath.empty()) {
-			VkShaderModule imageModule = VK_NULL_HANDLE;
+		// The colour-image and SDF twins: identical state, only the fragment shader
+		// differs. A missing or unloadable ui_image.frag.spv / ui_sdf.frag.spv is not an
+		// error -- those textures then draw through m_pipeline (coverage), as they did
+		// before the twin pipelines existed.
+		auto buildTwin = [&](const std::string& path, VkPipeline& out) {
+			if (path.empty()) return;
+			VkShaderModule module = VK_NULL_HANDLE;
 			try {
-				imageModule = createShaderModule(m_imageFragmentShaderPath);
-				stages[1].module = imageModule;
+				module = createShaderModule(path);
+				stages[1].module = module;
 				if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-				                              &m_imagePipeline) != VK_SUCCESS) {
-					m_imagePipeline = VK_NULL_HANDLE;
+				                              &out) != VK_SUCCESS) {
+					out = VK_NULL_HANDLE;
 				}
 			} catch (...) {
-				m_imagePipeline = VK_NULL_HANDLE;
+				out = VK_NULL_HANDLE;
 			}
 			stages[1].module = fragmentModule;
-			if (imageModule != VK_NULL_HANDLE) {
-				vkDestroyShaderModule(m_device, imageModule, nullptr);
+			if (module != VK_NULL_HANDLE) {
+				vkDestroyShaderModule(m_device, module, nullptr);
 			}
-		}
+		};
+		buildTwin(m_imageFragmentShaderPath, m_imagePipeline);
+		buildTwin(m_sdfFragmentShaderPath, m_sdfPipeline);
 	} catch (...) {
 		vkDestroyShaderModule(m_device, vertexModule, nullptr);
 		vkDestroyShaderModule(m_device, fragmentModule, nullptr);
@@ -803,7 +869,7 @@ void UiRenderer::rebuildAtlas(const Font& font) {
 	// reading them when they are destroyed.
 	vkDeviceWaitIdle(m_device);
 
-	destroyAtlas();
+	destroyAtlas(/*keepSampler=*/true);
 	createAtlas(font);
 
 	VkDescriptorImageInfo imageInfo{};
@@ -949,8 +1015,10 @@ void UiRenderer::record(VkCommandBuffer cmd, const DrawList& list, std::uint32_t
 			auto it = m_textures.find(drawCmd.textureId);
 			if (it != m_textures.end()) {
 				set = it->second.descriptorSet;
-				if (it->second.colour && m_imagePipeline != VK_NULL_HANDLE) {
+				if (it->second.kind == TextureKind::Colour && m_imagePipeline != VK_NULL_HANDLE) {
 					wanted = m_imagePipeline;
+				} else if (it->second.kind == TextureKind::Sdf && m_sdfPipeline != VK_NULL_HANDLE) {
+					wanted = m_sdfPipeline;
 				}
 			}
 			// else: falls back to the atlas set rather than binding VK_NULL_HANDLE (a

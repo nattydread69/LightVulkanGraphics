@@ -37,6 +37,8 @@
 #include "MenuBar.h"
 #include "Panel.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
@@ -77,6 +79,45 @@ struct GuiCreateInfo {
 	// stays inside the single primary Font). Like fontSize, this is a LOGICAL size --
 	// GuiContext folds in contentScale itself before baking, same as the primary font.
 	float       headingFontSize = 0.0f;
+	// Bake the heading face as a signed distance field instead of a plain bitmap. It then
+	// stays crisp at any heading size from one 32px+ bake and across content-scale
+	// changes, at the cost of slightly softer corners at small sizes. No effect unless
+	// headingFontSize > 0. Needs ui_sdf.frag.spv (installed with the other shaders);
+	// without it the heading falls back to a blurry coverage draw.
+	bool        headingFontSdf = false;
+
+	// ---- additional faces (FontStyle::Bold / FontStyle::Monospace) ----
+	// Path to a bold companion of `fontPath` (e.g. Inter-Bold.ttf), baked at `fontSize`.
+	// Empty (default) = no bold face; FontStyle::Bold then resolves to the regular font.
+	std::string boldFontPath;
+	// Path to a monospace face for logs, code and aligned numbers, baked at `fontSize`.
+	// Empty = look for the bundled DejaVuSansMono.ttf with the same search order as the
+	// primary font, and quietly do without if it isn't installed. A non-empty path that
+	// cannot be read throws, like fontPath.
+	std::string monoFontPath;
+	// false = never load a monospace face (saves one atlas). FontStyle::Monospace then
+	// resolves to the regular font.
+	bool        enableMonoFont = true;
+
+	// Faces consulted, in order, for any codepoint the primary face lacks (symbols, CJK,
+	// emoji...), shared by every style. Baked into the same atlas as the glyphs they back,
+	// so there is no extra draw call. A path that cannot be read throws.
+	std::vector<std::string> fallbackFontPaths;
+
+	// Apply pair kerning (default). Disable for strictly metric-compatible layout.
+	bool        kerning = true;
+	// Bake glyphs missing from the default ranges the first time they are drawn
+	// (default). Disable to restrict the atlas to the fixed ranges.
+	bool        dynamicGlyphs = true;
+};
+
+// A resolved style: the Font to measure/draw with, the LOGICAL pixel size to pass as
+// `pixelSize`, and the TextureId to pass to DrawList::addText() (kAtlasTextureId for
+// Regular, or before VkApp has registered the style's atlas).
+struct StyledFont {
+	const Font& font;
+	float pixelSize;
+	TextureId textureId;
 };
 
 struct PlatformHooks {
@@ -162,12 +203,12 @@ public:
 	// and headingFontSize() below are only valid to call when this is true -- a widget
 	// that wants to use the heading face (Label::setHeading()) must check this first and
 	// fall back to the primary font otherwise, since not every consumer configures one.
-	bool hasHeadingFont() const { return m_hasHeadingFont; }
-	const Font& headingFont() const { return m_headingFont; }
+	bool hasHeadingFont() const { return m_styles[1].enabled; }
+	const Font& headingFont() const { return m_styles[1].font; }
 	// The LOGICAL size the heading face was baked at (GuiCreateInfo::headingFontSize),
 	// i.e. what to pass as `pixelSize` to measureText()/addText() on headingFont() --
 	// mirrors how theme.fontSize is the render size for the primary font.
-	float headingFontSize() const { return m_headingFontSizeLogical; }
+	float headingFontSize() const { return m_styles[1].sizeLogical; }
 	// The TextureId the heading atlas is registered under (VkApp::registerUiTexture(),
 	// docs/gui/05-widgets.md, "Image"), or kAtlasTextureId if it hasn't been registered
 	// yet -- GuiContext cannot register it itself (it stays Vulkan-agnostic; see
@@ -177,8 +218,23 @@ public:
 	// bare, headless GuiContext with no VkApp at all) simply batches into the PRIMARY
 	// atlas's command instead -- harmless in a headless test, since no real texture is
 	// ever sampled there anyway.
-	TextureId headingFontTextureId() const { return m_headingFontTextureId; }
-	void setHeadingFontTextureId(TextureId id) { m_headingFontTextureId = id; }
+	TextureId headingFontTextureId() const { return m_styles[1].textureId; }
+	void setHeadingFontTextureId(TextureId id) { m_styles[1].textureId = id; }
+
+	// ---- font styles (regular / heading / bold / monospace) ----
+	// True iff the style has its own baked face (Regular is always true).
+	bool hasStyleFont(FontStyle style) const;
+	// The face, size and texture to use for `style`; Regular if the style isn't available.
+	StyledFont styledFont(FontStyle style) const;
+	bool styleFontIsSdf(FontStyle style) const;
+	// The registered-texture bookkeeping VkApp performs for non-primary faces (the primary
+	// atlas is the renderer's built-in texture 0). Ignored for Regular.
+	TextureId styleFontTextureId(FontStyle style) const;
+	void setStyleFontTextureId(FontStyle style, TextureId id);
+	// True when `style`'s atlas has gained glyphs (Font::atlasRevision()) since the last
+	// markFontUploaded() -- i.e. its GPU copy is stale. VkApp polls this every frame.
+	bool fontNeedsUpload(FontStyle style) const;
+	void markFontUploaded(FontStyle style);
 
 	WidgetId hoveredId() const { return m_hoveredId; }
 	WidgetId activeId()  const { return m_activeId; }
@@ -293,10 +349,22 @@ private:
 	// from the SAME m_fontData as the primary font (headings are a second SIZE of the
 	// same face, not a second font file -- see GuiCreateInfo::headingFontSize), so no
 	// second copy of the font bytes is kept here.
-	Font  m_headingFont;
-	bool  m_hasHeadingFont = false;
-	float m_headingFontSizeLogical = 0.0f;
-	TextureId m_headingFontTextureId = kAtlasTextureId;
+	// Index = FontStyle. [0] (Regular) only carries the upload bookkeeping; the primary
+	// font itself is m_font. Each secondary slot owns its font bytes: bold/mono come from
+	// different files, and the heading face shares m_fontData (copied in for simplicity).
+	struct StyleSlot {
+		Font font;
+		bool enabled = false;
+		bool sdf = false;
+		float sizeLogical = 0.0f;
+		TextureId textureId = kAtlasTextureId;
+		std::vector<std::uint8_t> data;
+		std::uint64_t uploadedRevision = 0;
+	};
+	std::array<StyleSlot, kFontStyleCount> m_styles;
+	void bakeStyle(StyleSlot& slot, float contentScale);
+	// Minimum SDF bake height: distance fields scale well *down* but not far *up*.
+	static constexpr float kMinSdfBakeHeight = 32.0f;
 
 	PlatformHooks m_hooks;
 	std::unique_ptr<UiPlatformGlfw> m_platform;

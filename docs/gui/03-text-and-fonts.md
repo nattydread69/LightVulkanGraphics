@@ -253,13 +253,68 @@ glyph's ink if you want tight visual alignment; but for layout purposes the accu
 
 ## Kerning
 
-`stbtt_GetCodepointKernAdvance` exists. Applying it costs one lookup per character pair.
+Applied by default (`FontOptions::kerning`, on by default; per call
+`TextFlags::NoKerning`). It is context-dependent for the caret, so `offsetAtIndex()` and
+`indexAtOffset()` fold it in the same way `measureText()` and `DrawList::addText()` do: the
+caret before a glyph sits where that glyph is drawn, i.e. after the previous advance *and*
+the pair's kern. Every layout routine goes through `Font::kerningFor()`.
 
-**Recommendation: skip kerning in v1.** UI text is short, small, and mostly labels and
-numbers. Unkerned text at 14px is indistinguishable from kerned text to anyone not
-looking for it, and kerning complicates `offsetAtIndex`/`indexAtOffset` (the caret
-position becomes context-dependent). A candidate for a future revision if it turns out
-to matter in practice.
+`stb_truetype`'s GPOS reader skips Extension lookups, which is how Inter (and most modern
+fonts) store kerning, so `stbtt_GetGlyphKernAdvance` returns 0 for every pair. `Font.cpp`
+therefore carries a small bounds-checked reader for `kern`-feature PairPos lookups (formats
+1 and 2, direct or via Extension) and falls back to stb only for legacy `kern` tables.
+Pairs are cached. Kerning is never applied across two different faces (fallback glyphs), and
+under `TextFlags::Tabular` it is suppressed next to a digit so a live number never moves
+what follows it.
+
+## More than one baked face
+
+Everything below is additive: a default `GuiCreateInfo` behaves as before except that text
+is kerned, symbols outside the pre-baked ranges appear instead of `?`, and a monospace face
+is available if `DejaVuSansMono.ttf` is found next to the other fonts.
+
+- **Dynamic glyphs** (`FontOptions::dynamicGlyphs`, default on). A codepoint no pre-baked
+  range covers is rasterised into the atlas the first time `glyphFor()` is asked for it, as
+  long as some face has it. `Font::hasGlyph()` means *resident*; `Font::canRender()` means
+  *some face covers it*. Each new glyph bumps `Font::atlasRevision()`; `VkApp` re-uploads any
+  atlas whose revision moved (`GuiContext::fontNeedsUpload()` / `markFontUploaded()`) after
+  the frame's draw list is built and before it is recorded. `glyphFor()` references stay
+  valid across later bakes (glyphs live in a deque). When the atlas is full the glyph falls
+  back to the placeholder and one warning is printed.
+- **Fallback faces** (`Font::addFallbackFace()`, `GuiCreateInfo::fallbackFontPaths`).
+  Consulted in order for codepoints the primary face lacks and baked into the *same* atlas, so
+  there is no extra texture bind. Faces are scaled to the same pixel height. The pre-bake step
+  only includes codepoints some face really has (stb used to substitute `.notdef`, which made
+  `hasGlyph()` lie).
+- **Font styles** (`FontStyle::Regular / Heading / Bold / Monospace`). `GuiContext::
+  styledFont(style)` returns the face, logical size and texture id to draw with, resolving an
+  unconfigured style to Regular, so callers never branch. `Label::setFontStyle()` uses it
+  (`setHeading(true)` is now shorthand for `FontStyle::Heading`). Bold comes from
+  `GuiCreateInfo::boldFontPath`; monospace from `monoFontPath` or the bundled DejaVu Sans
+  Mono (`enableMonoFont = false` to skip it). Secondary faces are registered textures; VkApp
+  keeps them in step with rebakes and dynamic glyphs without changing their `TextureId`.
+- **Signed-distance-field mode** (`FontOptions::mode = FontRenderMode::Sdf`,
+  `GuiCreateInfo::headingFontSdf`). The atlas stores distance-to-outline (0.5 on the edge)
+  instead of coverage. `ui_sdf.frag` derives the anti-aliasing width from `fwidth()`, so a
+  heading stays crisp over a wide size range from one bake of at least 32 px. It must be drawn
+  through `UiRenderer::registerTexture(..., TextureKind::Sdf)`; `VkApp` does this for you.
+- **Loading** -- `Font::readFile()`, `Font::bakeFromFile()`, `Font::findSystemFont(name)`
+  (searches the usual Linux/macOS/Windows font directories).
+
+### Drawing quality
+
+- Glyph x positions stay fractional for oversampled bitmaps and SDFs (the 2x data is resolved
+  by the bilinear sampler), so spacing is even rather than rounded to whole pixels. A bake
+  with `oversample = 1` snaps instead.
+- `DrawList::setPixelScale()` (kept current by `GuiContext::beginFrame()`) makes snapping land
+  on *physical* pixels. Previously a 2x display quantised text to every other physical pixel.
+- `ui.frag` / `ui_sdf.frag` bend the coverage curve by the text colour's luminance
+  (`kTextContrast` specialization constant, `UiRendererCreateInfo::textContrast`): blending in
+  gamma space makes light-on-dark text look thin and dark-on-light look heavy. It is turned
+  off automatically for `*_SRGB` swapchains, which already blend linearly.
+- `UiRenderer::rebuildAtlas()` keeps its sampler. It used to recreate it, leaving every
+  registered texture's descriptor set pointing at a destroyed sampler (a validation error that
+  rarely showed because rebuilds were rare).
 
 ## UTF-8 decoding
 
@@ -359,7 +414,11 @@ leaving their (prose) label text untouched.
 
 Write these into the public header docs so expectations are set:
 
-- No CJK, Arabic, Hebrew, Devanagari — no complex shaping, no bidi
+- No complex shaping, ligatures or bidi (Arabic, Hebrew, Devanagari): glyphs are placed
+  one codepoint at a time. CJK *can* be drawn via a fallback face, but with no line-breaking
+  rules. Adding HarfBuzz/FriBidi is a deliberate non-goal for now: it is a heavy dependency
+  for scripts this library's users do not need yet.
+- No LCD sub-pixel anti-aliasing (would need an RGB atlas and dual-source blending)
 - No IME / composition events
 - No line breaking or word wrap in `TextBox` (single-line only); `Label` gets simple
   greedy word wrap at spaces, which is enough

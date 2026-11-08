@@ -96,6 +96,24 @@ struct ScreenTextDescription
 	bool backgroundEnabled = false;
 	glm::vec4 backgroundColor{0.0f, 0.0f, 0.0f, 0.6f};
 	float backgroundPaddingPixels = 6.0f;
+
+	// ---- font-atlas rendering ----
+	// When the GUI is available (built with LVG_WITH_UI and initialised) the text is drawn
+	// from the GUI's real TrueType atlas -- anti-aliased, kerned, full Latin/Greek/punctuation
+	// and anything the GUI's fallback faces cover -- instead of the blocky stb_easy_font
+	// strokes. It is drawn by the UI renderer in the same pass, just under the GUI panels,
+	// so `sortKey` orders it against other screen texts but NOT against scene overlay
+	// meshes. Read at creation: changing it in updateScreenText() has no effect. Set false
+	// to force the legacy stroke font (ASCII only; also the automatic fallback when no GUI
+	// exists).
+	bool useFontAtlas = true;
+	// Atlas rendering only: use the GUI's monospace / bold face (when it has one).
+	bool monospace = false;
+	bool bold = false;
+	// Atlas rendering only: glyph height in framebuffer pixels before `scale`. 0 = the GUI
+	// font size scaled by the display content scale, i.e. exactly the size the atlas was
+	// baked at (crispest).
+	float fontPixelSize = 0.0f;
 };
 
 enum class CullMode

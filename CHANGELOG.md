@@ -6,6 +6,51 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Fonts
+
+> **ABI note.** `ScreenTextDescription` gained fields and `VkApp` gained members, so this
+> release is **not** ABI-compatible with 3.x; bump `LVG_ABI_VERSION` before shipping it.
+> (`LightVulkanGraphicsUI`'s `Font`, `GuiCreateInfo` and `GuiContext` changed layout too.)
+
+#### Added
+- **Kerning.** `Font::kerning()` / `kerningFor()`, applied by `measureText()`,
+  `offsetAtIndex()`, `indexAtOffset()` and `DrawList::addText()`. Reads GPOS `kern`
+  lookups including Extension subtables (which stb_truetype skips, so Inter previously had no
+  kerning at all). `FontOptions::kerning`, `GuiCreateInfo::kerning`, `TextFlags::NoKerning`.
+- **Dynamic glyphs.** Codepoints outside the pre-baked ranges are baked on first use
+  (`FontOptions::dynamicGlyphs`, `Font::canRender()`, `Font::atlasRevision()`); VkApp
+  re-uploads changed atlases automatically.
+- **Wider default glyph set**: dashes, curly quotes, bullet, ellipsis, per mille, euro and the
+  minus sign.
+- **Fallback faces** in the same atlas: `Font::addFallbackFace()`,
+  `GuiCreateInfo::fallbackFontPaths`.
+- **Font styles**: `FontStyle`, `GuiContext::styledFont()`, `Label::setFontStyle()`,
+  `GuiCreateInfo::boldFontPath / monoFontPath / enableMonoFont`. Bundled
+  `assets/fonts/DejaVuSansMono.ttf` (licence in `DejaVu-License.txt`).
+- **SDF text**: `FontOptions::mode = FontRenderMode::Sdf`, `GuiCreateInfo::headingFontSdf`,
+  `shaders/ui_sdf.frag`, `UiRenderer` `TextureKind::Sdf` pipeline.
+- **ScreenText from the font atlas** (default when the GUI is up): anti-aliased, kerned,
+  UTF-8. `ScreenTextDescription::useFontAtlas / monospace / bold / fontPixelSize`. The
+  stb_easy_font path remains for `useFontAtlas = false` and for apps without a GUI.
+- `Font::readFile()`, `bakeFromFile()`, `findSystemFont()`, `setOptions()`
+  (`FontOptions`: render mode, oversampling, SDF padding).
+- `UiRenderer::updateTexture()` and `syncAtlas()`; `DrawList::setPixelScale()`.
+- `examples/font_showcase.cpp` (`font_showcase [shot.png]`), tests in
+  `tests/ui/test_font_features.cpp`.
+
+#### Changed
+- Glyphs are placed at fractional x positions (oversampled bitmaps and SDFs) and snapped to
+  *physical* pixels vertically; quads are no longer stretched by snapping each corner.
+- Text coverage is adjusted by text luminance to offset gamma-space blending (not on sRGB
+  swapchains).
+- `Font::hasGlyph()` now means "resident in the atlas"; codepoints no face has are no longer
+  substituted with `.notdef` (they draw as the fallback glyph, as before for out-of-range ones).
+- Under `TextFlags::Tabular`, kerning is suppressed next to digits.
+
+#### Fixed
+- `UiRenderer::rebuildAtlas()` destroyed the sampler shared with registered textures, leaving
+  their descriptor sets referencing a destroyed object.
+
 ### 3.3.0 (ABI-compatible with 3.0-3.2: same `libLightVulkanGraphics.so.3`)
 
 No class layouts change; the new accessor is inline.

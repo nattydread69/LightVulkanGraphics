@@ -28,24 +28,17 @@ namespace {
 	// asked for one AND the GuiContext it's drawn/measured with actually has one baked
 	// -- a Label must never crash or silently vanish just because a consumer left
 	// GuiCreateInfo::headingFontSize at its disabled 0.0f default.
-	struct LabelFont {
-		const Font& font;
-		float pixelSize;
-		TextureId textureId;
-	};
+	using LabelFont = StyledFont;
 
-	LabelFont resolveLabelFont(const GuiContext& ctx, bool heading) {
-		if (heading && ctx.hasHeadingFont()) {
-			return { ctx.headingFont(), ctx.headingFontSize(), ctx.headingFontTextureId() };
-		}
-		return { ctx.font(), ctx.theme().fontSize, kAtlasTextureId };
+	LabelFont resolveLabelFont(const GuiContext& ctx, FontStyle style) {
+		return ctx.styledFont(style);
 	}
 }
 
 Label::Label(std::string text) : m_text(std::move(text)) {}
 
 Vec2 Label::preferredSize(const GuiContext& ctx) const {
-	LabelFont lf = resolveLabelFont(ctx, m_heading);
+	LabelFont lf = resolveLabelFont(ctx, m_style);
 	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
 	if (!m_wordWrap) {
 		return lf.font.measureText(m_text, lf.pixelSize, flags);
@@ -71,7 +64,7 @@ void Label::draw(DrawList& dl, const GuiContext& ctx) const {
 	const Theme& th = ctx.theme();
 	Color color = m_colorOverride ? *m_colorOverride : (effectivelyEnabled() ? th.text : th.textDisabled);
 	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
-	LabelFont lf = resolveLabelFont(ctx, m_heading);
+	LabelFont lf = resolveLabelFont(ctx, m_style);
 
 	if (m_wordWrap) {
 		auto lines = wrapText(lf.font, m_text, lf.pixelSize, m_bounds.w, flags);

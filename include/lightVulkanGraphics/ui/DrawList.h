@@ -106,6 +106,13 @@ public:
 	void setWhitePixelUV(Vec2 uv) { m_whitePixelUV = uv; }
 	Vec2 whitePixelUV() const { return m_whitePixelUV; }
 
+	// Physical pixels per logical pixel (the content scale). Vertical snapping of glyphs
+	// and fills lands on the PHYSICAL pixel grid with this set; the default 1 snaps to whole
+	// logical pixels, which at 2x content scale would quantise text to every other
+	// physical pixel. GuiContext::beginFrame() keeps it current.
+	void setPixelScale(float scale) { m_pixelScale = scale > 0.0f ? scale : 1.0f; }
+	float pixelScale() const { return m_pixelScale; }
+
 	const std::vector<UiVertex>& vertices() const { return m_vertices; }
 	const std::vector<std::uint32_t>& indices() const { return m_indices; }
 	const std::vector<DrawCmd>& commands() const { return m_commands; }
@@ -116,6 +123,7 @@ private:
 	std::vector<DrawCmd> m_commands;
 	std::vector<Rect> m_clipStack;
 	Vec2 m_whitePixelUV;
+	float m_pixelScale = 1.0f;
 
 	// Closes out the current command if it can't absorb the next primitive: a clip-rect
 	// change (as before) OR a textureId change (addImage() only -- every other add*()

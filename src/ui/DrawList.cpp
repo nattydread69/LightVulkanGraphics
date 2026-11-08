@@ -26,8 +26,8 @@
 namespace lightGraphics::ui {
 
 namespace {
-	Vec2 snapToPixel(Vec2 v) {
-		return { std::round(v.x), std::round(v.y) };
+	Vec2 snapToPixel(Vec2 v, float scale = 1.0f) {
+		return { std::round(v.x * scale) / scale, std::round(v.y * scale) / scale };
 	}
 
 	constexpr int kCircleTableSize = 65;
@@ -269,8 +269,8 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 		std::uint32_t col = packColor(color);
 		std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
-		Vec2 tl = snapToPixel(rect.min());
-		Vec2 br = snapToPixel({ rect.right(), rect.bottom() });
+		Vec2 tl = snapToPixel(rect.min(), m_pixelScale);
+		Vec2 br = snapToPixel({ rect.right(), rect.bottom() }, m_pixelScale);
 
 		m_vertices.push_back(UiVertex(glm::vec2(tl.x, tl.y), wuv, col));
 		m_vertices.push_back(UiVertex(glm::vec2(br.x, tl.y), wuv, col));
@@ -298,7 +298,7 @@ void DrawList::addRectFilled(const Rect& rect, Color color, float rounding) {
 
 		std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 		for (const Vec2& p : perimeter) {
-			Vec2 pos = snapToPixel(p);
+			Vec2 pos = snapToPixel(p, m_pixelScale);
 			m_vertices.push_back(UiVertex(glm::vec2(pos.x, pos.y), wuv, col));
 		}
 
@@ -346,8 +346,8 @@ void DrawList::addRectFilledMultiColor(const Rect& rect, Color tl, Color tr, Col
 
 	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
-	Vec2 min = snapToPixel(rect.min());
-	Vec2 max = snapToPixel({ rect.right(), rect.bottom() });
+	Vec2 min = snapToPixel(rect.min(), m_pixelScale);
+	Vec2 max = snapToPixel({ rect.right(), rect.bottom() }, m_pixelScale);
 
 	m_vertices.push_back(UiVertex(glm::vec2(min.x, min.y), wuv, tl_col));
 	m_vertices.push_back(UiVertex(glm::vec2(max.x, min.y), wuv, tr_col));
@@ -370,8 +370,8 @@ void DrawList::addImage(TextureId textureId, const Rect& rect, Vec2 uv0, Vec2 uv
 	std::uint32_t col = packColor(tint);
 	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
-	Vec2 tl = snapToPixel(rect.min());
-	Vec2 br = snapToPixel({ rect.right(), rect.bottom() });
+	Vec2 tl = snapToPixel(rect.min(), m_pixelScale);
+	Vec2 br = snapToPixel({ rect.right(), rect.bottom() }, m_pixelScale);
 
 	m_vertices.push_back(UiVertex(glm::vec2(tl.x, tl.y), glm::vec2(uv0.x, uv0.y), col));
 	m_vertices.push_back(UiVertex(glm::vec2(br.x, tl.y), glm::vec2(uv1.x, uv0.y), col));
@@ -400,9 +400,9 @@ void DrawList::addTriangleFilled(Vec2 a, Vec2 b, Vec2 c, Color color) {
 	std::uint32_t col = packColor(color);
 	std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 
-	Vec2 sa = snapToPixel(a);
-	Vec2 sb = snapToPixel(b);
-	Vec2 sc = snapToPixel(c);
+	Vec2 sa = snapToPixel(a, m_pixelScale);
+	Vec2 sb = snapToPixel(b, m_pixelScale);
+	Vec2 sc = snapToPixel(c, m_pixelScale);
 	m_vertices.push_back(UiVertex(glm::vec2(sa.x, sa.y), wuv, col));
 	m_vertices.push_back(UiVertex(glm::vec2(sb.x, sb.y), wuv, col));
 	m_vertices.push_back(UiVertex(glm::vec2(sc.x, sc.y), wuv, col));
@@ -430,11 +430,11 @@ void DrawList::addCircleFilled(Vec2 centre, float radius, Color color, int segme
 	for (int i = 0; i <= segments; ++i) {
 		float angle = (i / static_cast<float>(segments)) * 6.28318530718f;
 		Vec2 offset = { std::cos(angle) * radius, std::sin(angle) * radius };
-		Vec2 pos = snapToPixel({ centre.x + offset.x, centre.y + offset.y });
+		Vec2 pos = snapToPixel({ centre.x + offset.x, centre.y + offset.y }, m_pixelScale);
 		m_vertices.push_back(UiVertex(glm::vec2(pos.x, pos.y), wuv, col));
 	}
 
-	Vec2 snappedCentre = snapToPixel(centre);
+	Vec2 snappedCentre = snapToPixel(centre, m_pixelScale);
 	std::uint32_t centreIdx = static_cast<std::uint32_t>(m_vertices.size());
 	m_vertices.push_back(UiVertex(glm::vec2(snappedCentre.x, snappedCentre.y), wuv, col));
 
@@ -468,7 +468,7 @@ void DrawList::addConvexPolyFilled(const Vec2* pts, int count, Color color) {
 	std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
 	for (int i = 0; i < count; ++i) {
-		Vec2 p = snapToPixel(pts[i]);
+		Vec2 p = snapToPixel(pts[i], m_pixelScale);
 		m_vertices.push_back(UiVertex(glm::vec2(p.x, p.y), wuv, col));
 	}
 
@@ -517,10 +517,10 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 
 		std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
-		Vec2 v0 = snapToPixel({ a.x - perp.x, a.y - perp.y });
-		Vec2 v1 = snapToPixel({ a.x + perp.x, a.y + perp.y });
-		Vec2 v2 = snapToPixel({ b.x + perp.x, b.y + perp.y });
-		Vec2 v3 = snapToPixel({ b.x - perp.x, b.y - perp.y });
+		Vec2 v0 = snapToPixel({ a.x - perp.x, a.y - perp.y }, m_pixelScale);
+		Vec2 v1 = snapToPixel({ a.x + perp.x, a.y + perp.y }, m_pixelScale);
+		Vec2 v2 = snapToPixel({ b.x + perp.x, b.y + perp.y }, m_pixelScale);
+		Vec2 v3 = snapToPixel({ b.x - perp.x, b.y - perp.y }, m_pixelScale);
 
 		m_vertices.push_back(UiVertex(glm::vec2(v0.x, v0.y), wuv, col));
 		m_vertices.push_back(UiVertex(glm::vec2(v1.x, v1.y), wuv, col));
@@ -551,10 +551,10 @@ void DrawList::addPolyline(const Vec2* pts, int count, Color color, float thickn
 
 			std::uint32_t baseIdx = static_cast<std::uint32_t>(m_vertices.size());
 
-			Vec2 cv0 = snapToPixel({ a.x - perp.x, a.y - perp.y });
-			Vec2 cv1 = snapToPixel({ a.x + perp.x, a.y + perp.y });
-			Vec2 cv2 = snapToPixel({ b.x + perp.x, b.y + perp.y });
-			Vec2 cv3 = snapToPixel({ b.x - perp.x, b.y - perp.y });
+			Vec2 cv0 = snapToPixel({ a.x - perp.x, a.y - perp.y }, m_pixelScale);
+			Vec2 cv1 = snapToPixel({ a.x + perp.x, a.y + perp.y }, m_pixelScale);
+			Vec2 cv2 = snapToPixel({ b.x + perp.x, b.y + perp.y }, m_pixelScale);
+			Vec2 cv3 = snapToPixel({ b.x - perp.x, b.y - perp.y }, m_pixelScale);
 
 			m_vertices.push_back(UiVertex(glm::vec2(cv0.x, cv0.y), wuv, col));
 			m_vertices.push_back(UiVertex(glm::vec2(cv1.x, cv1.y), wuv, col));
@@ -635,9 +635,18 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 	Vec2 pen = { topLeft.x, topLeft.y + font.ascent(pixelSize) };
 	float scale = (font.bakedPixelSize() > 0.0f) ? pixelSize / font.bakedPixelSize() : 0.0f;
 
+	// Horizontal positions stay fractional for oversampled bitmap fonts and SDFs: the atlas
+	// holds 2x (or distance) data that the bilinear sampler resolves at any sub-pixel
+	// offset, which is what keeps letter spacing even instead of rounding every glyph to a
+	// whole pixel. A 1x bitmap bake has no such data and would only blur, so it snaps.
+	const bool subpixelX = font.isSdf() || font.options().oversample > 1;
+
+	std::uint32_t prev = 0;
 	std::size_t pos = 0;
 	while (pos < utf8.size()) {
 		std::uint32_t cp = decodeUtf8(utf8, pos);
+		pen.x += font.kerningFor(prev, cp, pixelSize, flags);
+		prev = cp;
 		const Glyph& glyph = font.glyphFor(cp);
 		float advance = font.advanceFor(cp, pixelSize, flags);
 
@@ -645,9 +654,13 @@ void DrawList::addText(const Font& font, float pixelSize, Vec2 topLeft, Color co
 		// blend, and it is one less draw-list entry per word gap.
 		if (cp != ' ' && cp != '\t' && glyph.size.x > 0.0f && glyph.size.y > 0.0f) {
 			Vec2 tl = { pen.x + glyph.offset.x * scale, pen.y + glyph.offset.y * scale };
+			// Snap only the top-left, then add the exact size: snapping both corners
+			// independently stretches or squashes a glyph by up to a pixel.
+			tl.y = std::round(tl.y * m_pixelScale) / m_pixelScale;
+			if (!subpixelX) {
+				tl.x = std::round(tl.x * m_pixelScale) / m_pixelScale;
+			}
 			Vec2 br = { tl.x + glyph.size.x * scale, tl.y + glyph.size.y * scale };
-			tl = snapToPixel(tl);
-			br = snapToPixel(br);
 
 			std::uint32_t idx = static_cast<std::uint32_t>(m_vertices.size());
 			m_vertices.push_back(UiVertex({ tl.x, tl.y }, { glyph.uv0.x, glyph.uv0.y }, col));

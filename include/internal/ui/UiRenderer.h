@@ -66,6 +66,20 @@ struct UiRendererCreateInfo {
 	// and multiplies by the vertex colour. Optional -- left empty (or unloadable), colour
 	// textures fall back to the coverage shader above, as before it existed.
 	std::string imageFragmentShaderPath;
+	// Fragment shader for signed-distance-field text (ui_sdf.frag). Optional -- left empty
+	// (or unloadable), SDF textures fall back to the coverage shader and look blurry.
+	std::string sdfFragmentShaderPath;
+	// Strength (0..1) of the luminance-aware coverage curve that compensates for blending
+	// text in gamma space. 1 for UNORM swapchains; 0 for *_SRGB swapchains, whose blending
+	// is already linear.
+	float textContrast = 1.0f;
+};
+
+// How a registered texture is sampled.
+enum class TextureKind {
+	Colour,     // RGBA drawn as-is, tinted by the vertex colour (ui_image.frag)
+	Coverage,   // red channel is alpha coverage for the vertex colour (ui.frag)
+	Sdf,        // red channel is a signed distance field, 0.5 on the edge (ui_sdf.frag)
 };
 
 class UiRenderer {
@@ -120,6 +134,18 @@ public:
 	// coverage for the vertex colour -- which is how the heading-font atlas is drawn.
 	TextureId registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
 	                          bool colour = true);
+	TextureId registerTexture(const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height,
+	                          TextureKind kind);
+
+	// Replaces the pixels (and size) of an already-registered texture while keeping its
+	// TextureId and kind -- what a font whose atlas gained glyphs (Font::atlasRevision())
+	// needs. Waits for the device to go idle, like unregisterTexture(). Throws on an
+	// unknown id; the old texture is left intact if the new one cannot be created.
+	void updateTexture(TextureId id, const std::uint8_t* rgbaPixels, std::uint32_t width, std::uint32_t height);
+
+	// Re-uploads the primary atlas iff `font.atlasRevision()` changed since the last
+	// upload (a dynamic glyph was baked). Cheap when nothing changed. Between frames only.
+	void syncAtlas(const Font& font);
 
 	// True when the colour-image pipeline exists (its shader was found and built).
 	bool hasImagePipeline() const { return m_imagePipeline != VK_NULL_HANDLE; }
@@ -169,7 +195,7 @@ private:
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		VkImageView view = VK_NULL_HANDLE;
 		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-		bool colour = true;   // drawn with the image pipeline (see registerTexture())
+		TextureKind kind = TextureKind::Colour;   // which pipeline draws it (see registerTexture())
 	};
 
 	// Sized into the descriptor pool up front (createDescriptorSet()) rather than grown
@@ -183,8 +209,10 @@ private:
 	void createPipeline();
 	void destroyPipeline();
 	void createAtlas(const Font& font);
-	void destroyAtlas();
+	void destroyAtlas(bool keepSampler = false);
 	void createDescriptorSet();
+	RegisteredTexture createTextureResources(const std::uint8_t* rgbaPixels, std::uint32_t width,
+	                                         std::uint32_t height);
 	void destroyRegisteredTexture(RegisteredTexture&);
 	void ensureCapacity(FrameBuffers& buffers, std::size_t vertexCount, std::size_t indexCount);
 	void destroyFrameBuffers(FrameBuffers& buffers);
@@ -207,11 +235,16 @@ private:
 	std::string m_vertexShaderPath;
 	std::string m_fragmentShaderPath;
 	std::string m_imageFragmentShaderPath;
+	std::string m_sdfFragmentShaderPath;
+	float m_textContrast = 1.0f;
+	std::uint64_t m_atlasRevision = 0;   // Font::atlasRevision() of the last atlas upload
 
 	VkPipeline m_pipeline = VK_NULL_HANDLE;
 	// Same layout, vertex input and blending as m_pipeline; only the fragment shader
 	// differs (ui_image.frag). VK_NULL_HANDLE when that shader is unavailable.
 	VkPipeline m_imagePipeline = VK_NULL_HANDLE;
+	// Same again for signed-distance-field text (ui_sdf.frag); VK_NULL_HANDLE if unavailable.
+	VkPipeline m_sdfPipeline = VK_NULL_HANDLE;
 	VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
 	VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;

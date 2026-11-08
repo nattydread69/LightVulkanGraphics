@@ -462,6 +462,7 @@ if(LVG_BUILD_UI)
 	lvg_compile_shader(vert ui)
 	lvg_compile_shader(frag ui)
 	lvg_compile_shader(frag ui_image)
+	lvg_compile_shader(frag ui_sdf)
 endif()
 
 # Create shader target that depends on all compiled shaders
@@ -794,6 +795,13 @@ if (LVG_BUILD_EXAMPLES)
 		add_executable(file_dialog_demo examples/file_dialog_demo.cpp)
 		lvg_configure_build_tree_example(file_dialog_demo)
 		target_link_libraries(file_dialog_demo PRIVATE LightVulkanGraphics::UI)
+
+		# Every font feature in one window (kerning, dynamic glyphs, fallback faces, SDF
+		# heading, bold/mono styles, atlas-rendered ScreenText); optionally saves a
+		# screenshot -- see the file header.
+		add_executable(font_showcase examples/font_showcase.cpp)
+		lvg_configure_build_tree_example(font_showcase)
+		target_link_libraries(font_showcase PRIVATE LightVulkanGraphics::UI ${GLFW_LIB_TARGET})
 	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.

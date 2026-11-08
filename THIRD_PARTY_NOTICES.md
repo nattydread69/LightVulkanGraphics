@@ -16,6 +16,11 @@ Upstream: https://github.com/nothings/stb
 Licence: SIL Open Font License, Version 1.1. Full text at `assets/fonts/License.txt`.
 Upstream: https://github.com/rsms/inter (static build from the v4.1 release).
 
+`assets/fonts/DejaVuSansMono.ttf` -- DejaVu Sans Mono (Bitstream Vera derivative), the
+default monospace face (`FontStyle::Monospace`). Licence: Bitstream Vera / DejaVu free
+licence, permitting redistribution; full text at `assets/fonts/DejaVu-License.txt`.
+Upstream: https://dejavu-fonts.github.io/
+
 ## Assimp, GLFW, GLM, Vulkan SDK
 
 Consumed as external dependencies and not redistributed as source by this project.

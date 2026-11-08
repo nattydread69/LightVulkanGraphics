@@ -20,6 +20,8 @@
 // real GuiContext. See docs/gui/01-architecture.md for the per-frame contract and
 // docs/gui/02-rendering.md for the Vulkan backend this file wires up.
 
+#include <algorithm>
+#include <string_view>
 #include "VkApp.h"
 
 #ifdef LVG_WITH_UI
@@ -175,13 +177,30 @@ namespace lightGraphics
 			logMessage(LogLevel::Warning, "ui_image.frag.spv not found: LVGUI images will draw as coverage, not colour");
 		}
 
+		// Optional: without it SDF faces (GuiCreateInfo::headingFontSdf) draw as plain coverage.
+		try
+		{
+			rendererInfo.sdfFragmentShaderPath = findShaderPath("ui_sdf.frag.spv");
+		}
+		catch (const std::exception&)
+		{
+			logMessage(LogLevel::Warning, "ui_sdf.frag.spv not found: SDF fonts will look blurry");
+		}
+		// sRGB swapchains blend linearly already; the gamma-space coverage compensation in
+		// ui.frag / ui_sdf.frag would double-correct there.
+		rendererInfo.textContrast =
+			(swapChainImageFormat_ == VK_FORMAT_B8G8R8A8_SRGB || swapChainImageFormat_ == VK_FORMAT_R8G8B8A8_SRGB)
+				? 0.0f
+				: 1.0f;
+
 		uiRenderer_ = std::make_unique<ui::UiRenderer>();
 		uiRenderer_->init(rendererInfo, guiContext_->font());
+		guiContext_->markFontUploaded(ui::FontStyle::Regular);
 
-		// Heading face (docs/gui/03-text-and-fonts.md, "Headings"): GuiContext already
-		// baked a second Font, CPU-side, if GuiCreateInfo::headingFontSize was set --
-		// this is the one-time step that only VkApp (the Vulkan-aware owner) can do,
-		// uploading that atlas as a registered texture and reporting its id back.
+		// Secondary faces (heading / bold / monospace; docs/gui/03-text-and-fonts.md):
+		// GuiContext already baked each configured Font CPU-side -- this is the one-time
+		// step that only VkApp (the Vulkan-aware owner) can do, uploading each atlas as a
+		// registered texture and reporting its id back.
 		registerHeadingFontTexture();
 
 		if (debugOutput)
@@ -189,6 +208,14 @@ namespace lightGraphics
 			std::ostringstream message;
 			message << "LVGUI initialised: atlas " << guiContext_->font().atlasWidth() << 'x'
 			        << guiContext_->font().atlasHeight() << ", font " << guiInfo.fontPath;
+			if (guiContext_->hasStyleFont(ui::FontStyle::Monospace))
+			{
+				message << ", mono face";
+			}
+			if (guiContext_->hasStyleFont(ui::FontStyle::Bold))
+			{
+				message << ", bold face";
+			}
 			if (guiContext_->hasHeadingFont())
 			{
 				message << ", heading atlas " << guiContext_->headingFont().atlasWidth() << 'x'
@@ -269,7 +296,7 @@ namespace lightGraphics
 		// that wait. The swapchain can hold more images than MAX_FRAMES_IN_FLIGHT, so
 		// indexing by imageIndex would also run off the end of the per-frame array.
 		uiRenderer_->record(cmd,
-		                    guiContext_->drawList(),
+		                    uiFrameListActive_ ? uiFrameList_ : guiContext_->drawList(),
 		                    static_cast<std::uint32_t>(currentFrame_),
 		                    swapChainExtent_,
 		                    uiLastDisplaySize_);
@@ -311,34 +338,184 @@ namespace lightGraphics
 		}
 	}
 
+	namespace
+	{
+		// Expands a Font's R8 atlas into the RGBA8 buffer UiRenderer::registerTexture()
+		// takes, replicating each byte into the red channel (the coverage and SDF shaders
+		// read only .r). G/B/A are wasted -- 4x the atlas's real footprint -- an acceptable
+		// cost for the few small secondary atlases.
+		std::vector<std::uint8_t> expandAtlasToRgba(const ui::Font& font)
+		{
+			const std::vector<std::uint8_t>& r8 = font.atlasPixels();
+			std::vector<std::uint8_t> rgba(r8.size() * 4, 0);
+			for (std::size_t i = 0; i < r8.size(); ++i)
+			{
+				rgba[i * 4] = r8[i];
+			}
+			return rgba;
+		}
+
+		constexpr ui::FontStyle kSecondaryStyles[] = {
+			ui::FontStyle::Heading, ui::FontStyle::Bold, ui::FontStyle::Monospace};
+	}
+
 	void VkApp::registerHeadingFontTexture()
 	{
-		if (!guiContext_ || !guiContext_->hasHeadingFont())
+		if (!guiContext_ || !uiRenderer_)
+		{
+			return;
+		}
+		for (ui::FontStyle style : kSecondaryStyles)
+		{
+			if (!guiContext_->hasStyleFont(style))
+			{
+				continue;
+			}
+			const ui::Font& font = guiContext_->styledFont(style).font;
+			const std::vector<std::uint8_t> rgba = expandAtlasToRgba(font);
+			// Coverage faces draw through ui.frag; SDF faces need the distance-field shader.
+			const ui::TextureKind kind = font.isSdf() ? ui::TextureKind::Sdf : ui::TextureKind::Coverage;
+			ui::TextureId id = uiRenderer_->registerTexture(
+				rgba.data(), static_cast<uint32_t>(font.atlasWidth()),
+				static_cast<uint32_t>(font.atlasHeight()), kind);
+			guiContext_->setStyleFontTextureId(style, id);
+			guiContext_->markFontUploaded(style);
+		}
+	}
+
+	void VkApp::buildUiFrameList()
+	{
+		uiFrameListActive_ = false;
+		if (!guiContext_ || !uiRenderer_)
 		{
 			return;
 		}
 
-		// Expands the heading Font's R8 (single-channel coverage) atlas into RGBA8 by
-		// replicating each byte into the red channel and zeroing the rest.
-		// UiRenderer::registerTexture() takes RGBA8. Registered with colour = false, the
-		// texture draws through the coverage shader (shaders/ui.frag), which reads only
-		// the red channel -- `float coverage = texture(uAtlas, vUV).r;` -- exactly like
-		// the primary atlas. (Textures from registerUiTexture() are colour images and
-		// draw through shaders/ui_image.frag instead.) G/B/A are wasted here (4x the
-		// atlas's real memory footprint), an acceptable one-time cost for a single,
-		// typically-small heading atlas.
-		const ui::Font& heading = guiContext_->headingFont();
-		const std::vector<std::uint8_t>& r8 = heading.atlasPixels();
-		std::vector<std::uint8_t> rgba(r8.size() * 4, 0);
-		for (std::size_t i = 0; i < r8.size(); ++i)
+		std::vector<const ScreenTextResource*> items;
+		for (const ScreenTextResource& resource : screenTexts_)
 		{
-			rgba[i * 4] = r8[i];
+			if (resource.alive && resource.atlas && resource.description.visible &&
+			    !resource.description.text.empty())
+			{
+				items.push_back(&resource);
+			}
+		}
+		if (items.empty())
+		{
+			return;
+		}
+		std::stable_sort(items.begin(), items.end(), [](const ScreenTextResource* a, const ScreenTextResource* b) {
+			return a->description.sortKey < b->description.sortKey;
+		});
+
+		// Screen-text coordinates are framebuffer pixels; the GUI list is logical pixels.
+		const float contentScale = (uiLastDisplaySize_.x > 0.0f)
+			? static_cast<float>(swapChainExtent_.width) / uiLastDisplaySize_.x
+			: 1.0f;
+		const float inv = 1.0f / contentScale;
+
+		uiFrameList_.clear();
+		uiFrameList_.setWhitePixelUV(guiContext_->font().whitePixelUV());
+		uiFrameList_.setPixelScale(contentScale);
+
+		for (const ScreenTextResource* item : items)
+		{
+			const ScreenTextDescription& d = item->description;
+			const ui::FontStyle style = d.monospace ? ui::FontStyle::Monospace
+			                                        : (d.bold ? ui::FontStyle::Bold : ui::FontStyle::Regular);
+			const ui::StyledFont sf = guiContext_->styledFont(style);
+			const float size = (d.fontPixelSize > 0.0f ? d.fontPixelSize * inv : sf.pixelSize) * d.scale;
+			const float lineHeight = sf.font.lineHeight(size);
+
+			std::vector<std::string_view> lines;
+			for (std::size_t start = 0; start <= d.text.size();)
+			{
+				std::size_t end = d.text.find('\n', start);
+				if (end == std::string::npos)
+				{
+					end = d.text.size();
+				}
+				lines.emplace_back(d.text.data() + start, end - start);
+				start = end + 1;
+			}
+
+			float width = 0.0f;
+			for (std::string_view line : lines)
+			{
+				width = std::max(width, sf.font.measureText(line, size).x);
+			}
+			const float height = lineHeight * static_cast<float>(lines.size());
+			const ui::Vec2 origin{d.positionPixels.x * inv, d.positionPixels.y * inv};
+
+			if (d.backgroundEnabled)
+			{
+				// Cover the shadow too, as the stroke-font path always has.
+				ui::Vec2 lo = origin;
+				ui::Vec2 hi{origin.x + width, origin.y + height};
+				if (d.shadowEnabled)
+				{
+					lo.x = std::min(lo.x, origin.x + d.shadowOffsetPixels.x * inv);
+					lo.y = std::min(lo.y, origin.y + d.shadowOffsetPixels.y * inv);
+					hi.x = std::max(hi.x, origin.x + width + d.shadowOffsetPixels.x * inv);
+					hi.y = std::max(hi.y, origin.y + height + d.shadowOffsetPixels.y * inv);
+				}
+				const float pad = d.backgroundPaddingPixels * inv;
+				uiFrameList_.addRectFilled(
+					ui::Rect{lo.x - pad, lo.y - pad, hi.x - lo.x + 2.0f * pad, hi.y - lo.y + 2.0f * pad},
+					ui::Color::fromFloats(d.backgroundColor.r, d.backgroundColor.g, d.backgroundColor.b,
+					                      d.backgroundColor.a));
+			}
+
+			auto drawPass = [&](ui::Vec2 offset, const glm::vec4& color) {
+				const ui::Color c = ui::Color::fromFloats(color.r, color.g, color.b, color.a);
+				float y = origin.y + offset.y;
+				for (std::string_view line : lines)
+				{
+					if (!line.empty())
+					{
+						uiFrameList_.addText(sf.font, size, {origin.x + offset.x, y}, c, line,
+						                     ui::TextFlags::None, sf.textureId);
+					}
+					y += lineHeight;
+				}
+			};
+			if (d.shadowEnabled)
+			{
+				drawPass({d.shadowOffsetPixels.x * inv, d.shadowOffsetPixels.y * inv}, d.shadowColor);
+			}
+			drawPass({0.0f, 0.0f}, d.color);
 		}
 
-		// Registered as coverage (colour = false): ui.frag reads its red channel as alpha.
-		ui::TextureId id = uiRenderer_->registerTexture(rgba.data(), static_cast<uint32_t>(heading.atlasWidth()),
-		                                                static_cast<uint32_t>(heading.atlasHeight()), false);
-		guiContext_->setHeadingFontTextureId(id);
+		uiFrameList_.append(guiContext_->drawList());
+		uiFrameListActive_ = true;
+	}
+
+	void VkApp::syncUiFontAtlases()
+	{
+		if (!guiContext_ || !uiRenderer_)
+		{
+			return;
+		}
+		// Dynamic glyphs (Font::atlasRevision()) are baked while the frame's draw list is
+		// being built; push any atlas that changed to the GPU before it is recorded.
+		if (guiContext_->fontNeedsUpload(ui::FontStyle::Regular))
+		{
+			uiRenderer_->syncAtlas(guiContext_->font());
+			guiContext_->markFontUploaded(ui::FontStyle::Regular);
+		}
+		for (ui::FontStyle style : kSecondaryStyles)
+		{
+			if (!guiContext_->hasStyleFont(style) || !guiContext_->fontNeedsUpload(style))
+			{
+				continue;
+			}
+			const ui::Font& font = guiContext_->styledFont(style).font;
+			const std::vector<std::uint8_t> rgba = expandAtlasToRgba(font);
+			uiRenderer_->updateTexture(guiContext_->styleFontTextureId(style), rgba.data(),
+			                           static_cast<uint32_t>(font.atlasWidth()),
+			                           static_cast<uint32_t>(font.atlasHeight()));
+			guiContext_->markFontUploaded(style);
+		}
 	}
 
 } // namespace lightGraphics

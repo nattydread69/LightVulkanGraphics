@@ -94,6 +94,20 @@ namespace {
 		}
 	}
 
+	std::vector<std::uint8_t> readFontFileOrThrow(const std::string& path, const char* what) {
+		std::ifstream file(path, std::ios::binary | std::ios::ate);
+		if (!file) {
+			throw std::runtime_error(std::string("GuiContext: could not open ") + what + " file: " + path);
+		}
+		std::streamsize size = file.tellg();
+		file.seekg(0, std::ios::beg);
+		std::vector<std::uint8_t> data(static_cast<std::size_t>(size));
+		if (!file.read(reinterpret_cast<char*>(data.data()), size)) {
+			throw std::runtime_error(std::string("GuiContext: could not read ") + what + " file: " + path);
+		}
+		return data;
+	}
+
 	// Fallback search for the bundled Inter font when GuiCreateInfo::fontPath is left
 	// empty -- only ever exercised by a caller constructing a bare GuiContext directly,
 	// without VkApp. Every VkApp-based consumer already gets a resolved path from
@@ -112,7 +126,7 @@ namespace {
 	// "a GUI that silently renders nothing is worse than one that refuses to start, so
 	// name every path that was tried" (the same requirement VkApp::findFontPath()
 	// already meets for its own, separate copy of this search).
-	std::string findBundledFontPath(std::ostringstream& tried) {
+	std::string findBundledFontPath(std::ostringstream& tried, const char* fileName = "Inter-Regular.ttf") {
 		std::vector<std::filesystem::path> searchRoots;
 
 		if (auto envPath = getEnvironmentVariable("LIGHT_VULKAN_GRAPHICS_FONT_PATH")) {
@@ -132,7 +146,7 @@ namespace {
 		searchRoots.emplace_back("/usr/share/LightVulkanGraphics/fonts");
 
 		for (const auto& root : searchRoots) {
-			std::filesystem::path candidate = root / "Inter-Regular.ttf";
+			std::filesystem::path candidate = root / fileName;
 			tried << "\n  " << candidate.string();
 			if (std::ifstream(candidate, std::ios::binary).good()) {
 				return candidate.string();
@@ -175,17 +189,23 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 			"found. Searched:" + triedPaths.str());
 	}
 
-	std::ifstream file(fontPath, std::ios::binary | std::ios::ate);
-	if (!file) {
-		throw std::runtime_error("GuiContext: could not open font file: " + fontPath);
-	}
-	std::streamsize size = file.tellg();
-	file.seekg(0, std::ios::beg);
-	m_fontData.resize(static_cast<std::size_t>(size));
-	if (!file.read(reinterpret_cast<char*>(m_fontData.data()), size)) {
-		throw std::runtime_error("GuiContext: could not read font file: " + fontPath);
-	}
+	m_fontData = readFontFileOrThrow(fontPath, "font");
 
+	// Faces shared by every style as codepoint fallbacks (symbols, CJK...). Loaded once;
+	// each Font keeps its own copy because it parses them at bake time.
+	std::vector<std::vector<std::uint8_t>> fallbackFaces;
+	for (const std::string& path : info.fallbackFontPaths) {
+		fallbackFaces.push_back(readFontFileOrThrow(path, "fallback font"));
+	}
+	FontOptions baseOptions;
+	baseOptions.kerning = info.kerning;
+	baseOptions.dynamicGlyphs = info.dynamicGlyphs;
+	auto configure = [&](Font& font, FontOptions options) {
+		font.setOptions(options);
+		for (const auto& face : fallbackFaces) font.addFallbackFace(face);
+	};
+
+	configure(m_font, baseOptions);
 	m_font.bake(m_fontData, m_fontSizeLogical, m_atlasWidth, m_atlasHeight, 1.0f);
 	verifyInternalGlyphsBaked(m_font);
 
@@ -194,14 +214,104 @@ GuiContext::GuiContext(const GuiCreateInfo& info, PlatformHooks hooks)
 
 	// Heading face: an independent second bake from the SAME font bytes, at a second
 	// (larger) logical size -- see GuiCreateInfo::headingFontSize's comment. Left
-	// disabled (m_hasHeadingFont stays false) when the consumer never opted in; nothing
-	// downstream (Label::setHeading(), VkAppUi.cpp's texture registration) touches
-	// m_headingFont unless hasHeadingFont() is true first.
+	// disabled when the consumer never opted in; nothing downstream (Label, VkApp's
+	// texture registration) touches the slot unless hasStyleFont() is true first.
 	if (info.headingFontSize > 0.0f) {
-		m_headingFontSizeLogical = info.headingFontSize;
-		m_headingFont.bake(m_fontData, m_headingFontSizeLogical, m_atlasWidth, m_atlasHeight, 1.0f);
-		m_hasHeadingFont = true;
+		StyleSlot& slot = m_styles[static_cast<std::size_t>(FontStyle::Heading)];
+		slot.data = m_fontData;
+		slot.sizeLogical = info.headingFontSize;
+		slot.sdf = info.headingFontSdf;
+		FontOptions options = baseOptions;
+		if (slot.sdf) {
+			options.mode = FontRenderMode::Sdf;
+		}
+		configure(slot.font, options);
+		slot.enabled = true;
+		bakeStyle(slot, 1.0f);
 	}
+
+	// Bold: an explicit companion file, same logical size as the body text.
+	if (!info.boldFontPath.empty()) {
+		StyleSlot& slot = m_styles[static_cast<std::size_t>(FontStyle::Bold)];
+		slot.data = readFontFileOrThrow(info.boldFontPath, "bold font");
+		slot.sizeLogical = m_fontSizeLogical;
+		configure(slot.font, baseOptions);
+		slot.enabled = true;
+		bakeStyle(slot, 1.0f);
+	}
+
+	// Monospace: explicit path (must load), or the bundled DejaVu Sans Mono if present.
+	if (info.enableMonoFont) {
+		std::string monoPath = info.monoFontPath;
+		bool explicitPath = !monoPath.empty();
+		if (!explicitPath) {
+			std::ostringstream ignored;
+			monoPath = findBundledFontPath(ignored, "DejaVuSansMono.ttf");
+		}
+		if (!monoPath.empty()) {
+			StyleSlot& slot = m_styles[static_cast<std::size_t>(FontStyle::Monospace)];
+			slot.data = readFontFileOrThrow(monoPath, "monospace font");
+			slot.sizeLogical = m_fontSizeLogical;
+			configure(slot.font, baseOptions);
+			slot.enabled = true;
+			bakeStyle(slot, 1.0f);
+		}
+	}
+}
+
+void GuiContext::bakeStyle(StyleSlot& slot, float contentScale) {
+	float bakeHeight = slot.sizeLogical * contentScale;
+	int w = m_atlasWidth, h = m_atlasHeight;
+	if (slot.sdf) {
+		// An SDF is baked once at a generous height and scaled at draw time; give it the
+		// room that needs rather than relying on the 512 -> 1024 retry.
+		bakeHeight = std::max(bakeHeight, kMinSdfBakeHeight);
+		w = std::max(w, 1024);
+		h = std::max(h, 1024);
+	}
+	slot.font.bake(slot.data, bakeHeight, w, h, contentScale);
+}
+
+bool GuiContext::hasStyleFont(FontStyle style) const {
+	return style == FontStyle::Regular || m_styles[static_cast<std::size_t>(style)].enabled;
+}
+
+StyledFont GuiContext::styledFont(FontStyle style) const {
+	if (style != FontStyle::Regular) {
+		const StyleSlot& slot = m_styles[static_cast<std::size_t>(style)];
+		if (slot.enabled) {
+			return { slot.font, slot.sizeLogical, slot.textureId };
+		}
+	}
+	return { m_font, m_theme.fontSize, kAtlasTextureId };
+}
+
+bool GuiContext::styleFontIsSdf(FontStyle style) const {
+	return style != FontStyle::Regular && m_styles[static_cast<std::size_t>(style)].enabled &&
+	       m_styles[static_cast<std::size_t>(style)].sdf;
+}
+
+TextureId GuiContext::styleFontTextureId(FontStyle style) const {
+	return style == FontStyle::Regular ? kAtlasTextureId : m_styles[static_cast<std::size_t>(style)].textureId;
+}
+
+void GuiContext::setStyleFontTextureId(FontStyle style, TextureId id) {
+	if (style != FontStyle::Regular) {
+		m_styles[static_cast<std::size_t>(style)].textureId = id;
+	}
+}
+
+bool GuiContext::fontNeedsUpload(FontStyle style) const {
+	const Font& font = (style == FontStyle::Regular) ? m_font : m_styles[static_cast<std::size_t>(style)].font;
+	if (style != FontStyle::Regular && !m_styles[static_cast<std::size_t>(style)].enabled) {
+		return false;
+	}
+	return font.atlasRevision() != m_styles[static_cast<std::size_t>(style)].uploadedRevision;
+}
+
+void GuiContext::markFontUploaded(FontStyle style) {
+	const Font& font = (style == FontStyle::Regular) ? m_font : m_styles[static_cast<std::size_t>(style)].font;
+	m_styles[static_cast<std::size_t>(style)].uploadedRevision = font.atlasRevision();
 }
 
 GuiContext::~GuiContext() = default;
@@ -261,14 +371,15 @@ void GuiContext::rebakeFont(float contentScale) {
 	m_drawList.setWhitePixelUV(m_font.whitePixelUV());
 	m_overlayList.setWhitePixelUV(m_font.whitePixelUV());
 
-	// Re-bake the heading face too, at the SAME new contentScale -- otherwise a monitor
+	// Re-bake every secondary face too, at the SAME new contentScale -- otherwise a monitor
 	// switch would leave headings blurry/undersized relative to the now-correctly-rebaked
 	// primary font. VkApp's per-frame atlasNeedsRebuild() check (VkApp.cpp) is what
-	// notices this flag and re-registers m_headingFontTextureId's GPU texture from the
-	// freshly baked pixels -- this function only redoes the CPU-side bake.
-	if (m_hasHeadingFont) {
-		m_headingFont.bake(m_fontData, m_headingFontSizeLogical * contentScale, m_atlasWidth, m_atlasHeight,
-		                    contentScale);
+	// notices this flag and re-uploads their GPU textures from the freshly baked pixels --
+	// this function only redoes the CPU-side bake.
+	for (std::size_t i = 1; i < kFontStyleCount; ++i) {
+		if (m_styles[i].enabled) {
+			bakeStyle(m_styles[i], contentScale);
+		}
 	}
 
 	m_atlasNeedsRebuild = true;
@@ -291,6 +402,8 @@ void GuiContext::beginFrame(Vec2 displaySize, float contentScale, float deltaTim
 
 	m_lastDisplaySize = displaySize;
 	m_platform->beginFrame(displaySize, contentScale, deltaTime);
+	m_drawList.setPixelScale(contentScale);
+	m_overlayList.setPixelScale(contentScale);
 
 	// Rebake past ~1% content-scale drift (docs/gui/06, "DPI and content scale").
 	float baked = m_font.contentScaleAtBake();

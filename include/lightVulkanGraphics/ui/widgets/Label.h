@@ -50,7 +50,11 @@ public:
 	// is drawn/measured with was never configured with a heading font
 	// (GuiCreateInfo::headingFontSize left at its 0.0f default): NOT every consumer
 	// opts in, and a Label should never crash or render nothing just because one didn't.
-	void setHeading(bool heading) { m_heading = heading; }
+	void setHeading(bool heading) { m_style = heading ? FontStyle::Heading : FontStyle::Regular; }
+	// Which baked face to draw with (Regular, Heading, Bold, Monospace). A style the
+	// GuiContext has no face for resolves to Regular. Supersedes setHeading().
+	void setFontStyle(FontStyle style) { m_style = style; }
+	FontStyle fontStyle() const { return m_style; }
 
 	Vec2 preferredSize(const GuiContext&) const override;
 	void draw(DrawList&, const GuiContext&) const override;
@@ -63,7 +67,7 @@ private:
 	Align m_align = Align::Start;
 	bool  m_wordWrap = false;
 	bool  m_tabular = false;
-	bool  m_heading = false;
+	FontStyle m_style = FontStyle::Regular;
 	std::optional<Color> m_colorOverride;
 };
 

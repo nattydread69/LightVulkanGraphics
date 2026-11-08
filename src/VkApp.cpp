@@ -1068,16 +1068,28 @@ namespace lightGraphics
 					{
 						uiRenderer_->rebuildAtlas(guiContext_->font());
 
-						// The heading face (docs/gui/03-text-and-fonts.md, "Headings") has no
-						// analogous in-place rebuild: it isn't the primary atlas, it's a
-						// registerUiTexture()-registered image, and that API is register/
-						// unregister only. GuiContext::rebakeFont() already redid its CPU-side
-						// pixels (same rebake pass that set atlasNeedsRebuild() in the first
-						// place); drop the stale GPU texture and upload the new one.
-						if (guiContext_->hasHeadingFont())
+						guiContext_->markFontUploaded(ui::FontStyle::Regular);
+
+						// The secondary faces (heading / bold / monospace) are not the primary
+						// atlas but registered textures; GuiContext::rebakeFont() already redid
+						// their CPU-side pixels in the same pass. Re-register in place via
+						// syncUiFontAtlases() below (ids stay stable), which also covers faces
+						// whose size changed.
+						for (ui::FontStyle style : {ui::FontStyle::Heading, ui::FontStyle::Bold, ui::FontStyle::Monospace})
 						{
-							unregisterUiTexture(guiContext_->headingFontTextureId());
-							registerHeadingFontTexture();
+							if (guiContext_->hasStyleFont(style) && guiContext_->fontNeedsUpload(style))
+							{
+								const ui::Font& font = guiContext_->styledFont(style).font;
+								std::vector<std::uint8_t> rgba(font.atlasPixels().size() * 4, 0);
+								for (std::size_t i = 0; i < font.atlasPixels().size(); ++i)
+								{
+									rgba[i * 4] = font.atlasPixels()[i];
+								}
+								uiRenderer_->updateTexture(guiContext_->styleFontTextureId(style), rgba.data(),
+								                           static_cast<uint32_t>(font.atlasWidth()),
+								                           static_cast<uint32_t>(font.atlasHeight()));
+								guiContext_->markFontUploaded(style);
+							}
 						}
 
 						guiContext_->acknowledgeAtlasRebuild();
@@ -1116,6 +1128,8 @@ namespace lightGraphics
 			if (guiContext_)
 			{
 				guiContext_->endFrame();
+				buildUiFrameList();
+				syncUiFontAtlases();
 			}
 #endif
 

@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <glm/glm.hpp>
 
@@ -156,6 +157,17 @@ constexpr bool hasFlag(PanelFlags flags, PanelFlags bit) {
 	return static_cast<std::uint32_t>(flags & bit) != 0;
 }
 
+// Which baked face a widget draws with. A style whose face was not configured (see the
+// GuiCreateInfo fields in GuiContext.h) transparently resolves to Regular, so callers never need to
+// check availability first -- hasStyleFont() exists for those who want to.
+enum class FontStyle {
+	Regular   = 0,
+	Heading   = 1,   // GuiCreateInfo::headingFontSize
+	Bold      = 2,   // GuiCreateInfo::boldFontPath
+	Monospace = 3,   // GuiCreateInfo::monoFontPath / bundled DejaVu Sans Mono
+};
+inline constexpr std::size_t kFontStyleCount = 4;
+
 enum class TextFlags : std::uint32_t {
 	None    = 0,
 	// Pads every ASCII digit's ('0'-'9') pen advance out to the widest digit's own
@@ -164,6 +176,9 @@ enum class TextFlags : std::uint32_t {
 	// docs/gui/03-text-and-fonts.md, "Tabular figures". A no-op if the font has no
 	// digits baked (Font::advanceFor() falls back to the glyph's own advance).
 	Tabular = 1 << 0,
+	// Ignore the font's pair kerning for this call (monospace-style alignment of
+	// arbitrary text, or matching an externally computed layout).
+	NoKerning = 1 << 1,
 };
 
 constexpr TextFlags operator|(TextFlags a, TextFlags b) {
