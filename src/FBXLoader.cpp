@@ -582,8 +582,12 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         }
     }
 
+    // FBX only. A glTF skin is evaluated as jointWorld * inverseBind (the glTF
+    // specification), so the armature node's own scale/rotation is part of the result and
+    // must not be cancelled: doing so rendered an FBX-converted glTF (armature scale 100
+    // over centimetre-baked data) at 1/100 size and lying on its side.
     if (auto it = model->boneMapping.find("CharacterArmature");
-        it != model->boneMapping.end())
+        !isGltfSource && it != model->boneMapping.end())
     {
         const glm::mat4 armatureGlobal =
             computeGlobalTransformForNode(model->bones, it->second);

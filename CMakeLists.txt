@@ -5,6 +5,15 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Single-config generators with no build type would install "noconfig" CMake export
+# files that nothing selects, and each build type writes its own Targets-<config>.cmake,
+# so a stale one can pin consumers to an old library. Default to Release so a plain
+# configure produces and installs the release library. Pass -DCMAKE_BUILD_TYPE=...
+# explicitly for Debug or RelWithDebInfo.
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+	set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
 option(LVG_BUILD_EXAMPLES "Build bundled example executables" ON)
 option(LVG_BUILD_VOLUME_EXAMPLES "Build volume rendering examples" ON)
 option(LVG_BUILD_VULKAN_INTEGRATION_TESTS "Build Vulkan tests that require a GPU" OFF)
