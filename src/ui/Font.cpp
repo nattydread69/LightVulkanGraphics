@@ -268,10 +268,30 @@ std::vector<std::uint8_t> Font::readFile(const std::string& path) {
 	return data;
 }
 
+namespace {
+	// std::getenv is a hard MSVC error under /WX (C4996); same _dupenv_s/getenv
+	// split as GuiContext.cpp.
+	std::string getEnvironmentVariable(const char* name) {
+#if defined(_WIN32)
+		char* value = nullptr;
+		std::size_t length = 0;
+		if (_dupenv_s(&value, &length, name) != 0 || value == nullptr) {
+			return {};
+		}
+		std::string result(value);
+		free(value);
+		return result;
+#else
+		const char* value = std::getenv(name);
+		return value ? std::string(value) : std::string();
+#endif
+	}
+}
+
 std::string Font::findSystemFont(const std::string& fileName) {
 	namespace fs = std::filesystem;
 	std::vector<fs::path> roots;
-	if (const char* home = std::getenv("HOME")) {
+	if (const std::string home = getEnvironmentVariable("HOME"); !home.empty()) {
 		roots.push_back(fs::path(home) / ".fonts");
 		roots.push_back(fs::path(home) / ".local/share/fonts");
 		roots.push_back(fs::path(home) / "Library/Fonts");
@@ -280,7 +300,7 @@ std::string Font::findSystemFont(const std::string& fileName) {
 	roots.push_back("/usr/local/share/fonts");
 	roots.push_back("/Library/Fonts");
 	roots.push_back("/System/Library/Fonts");
-	if (const char* winDir = std::getenv("WINDIR")) {
+	if (const std::string winDir = getEnvironmentVariable("WINDIR"); !winDir.empty()) {
 		roots.push_back(fs::path(winDir) / "Fonts");
 	}
 	for (const fs::path& root : roots) {
