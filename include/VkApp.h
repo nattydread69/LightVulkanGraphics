@@ -592,6 +592,35 @@ namespace lightGraphics
 			const void* data,
 			std::size_t byteSize);
 		void destroyTexture3D(Texture3DHandle handle);
+		// Overwrites sub-boxes of an existing texture (3.3). All updates go through one
+		// staging buffer and one submission, so streaming many small pieces is cheap.
+		void updateTexture3DRegions(
+			Texture3DHandle handle,
+			const std::vector<Texture3DRegionUpdate>& regions);
+
+		// ---- bricked (sparse) volumes (3.3); see VolumeRendering.h ----
+		BrickedTextureHandle createBrickedTexture(const BrickedTextureDescription& description);
+		// Throws if a volume still uses it.
+		void destroyBrickedTexture(BrickedTextureHandle handle);
+		// The atlas: pass it as VolumeRenderDescription::volumeTexture, then attach the bricks
+		// with setVolumeBricks. Owned by the bricked texture; do not destroy it yourself.
+		Texture3DHandle brickedAtlas(BrickedTextureHandle handle) const;
+		// Makes the bricks resident (replacing any that were) and returns how many fit; with
+		// `allowEviction` the least recently used bricks make room. Bricks that did not fit
+		// are left non-resident.
+		std::size_t uploadBricks(
+			BrickedTextureHandle handle,
+			const std::vector<BrickUpload>& bricks,
+			bool allowEviction = true);
+		void evictBricks(BrickedTextureHandle handle, const std::vector<glm::uvec3>& bricks);
+		void evictAllBricks(BrickedTextureHandle handle);
+		[[nodiscard]] bool isBrickResident(BrickedTextureHandle handle, glm::uvec3 brick) const;
+		[[nodiscard]] std::size_t residentBrickCount(BrickedTextureHandle handle) const;
+		[[nodiscard]] std::size_t brickCapacity(BrickedTextureHandle handle) const;
+		[[nodiscard]] glm::uvec3 brickGrid(BrickedTextureHandle handle) const;
+		// Renders `volume` through `bricks`: its volumeTexture must be the atlas, and its
+		// volumeMin/Max span the whole `voxels` extent. An invalid handle detaches.
+		void setVolumeBricks(VolumeHandle volume, BrickedTextureHandle bricks);
 
 		TransferFunctionHandle createTransferFunction(
 			const std::vector<TransferFunctionPoint>& points);
@@ -1392,6 +1421,10 @@ namespace lightGraphics
 			const MaterialDescription& description,
 			VkPipelineLayout layout);
 		void createVolumeDescriptor(VolumeResource& volume);
+		Texture3DHandle createTexture3DInternal(
+			const Texture3DDescription& description,
+			const void* data,
+			std::size_t byteSize);
 		void rebuildOrderedDrawResources();
 		// onlyOverlayAndAbove selects which half of orderedDrawResources_ (already
 		// sorted by RenderLayer ordinal, see rebuildOrderedDrawResources()) to

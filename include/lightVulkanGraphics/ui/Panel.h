@@ -35,6 +35,9 @@
 #include <utility>
 #include <vector>
 
+// Defined from 3.3: Panel::dragMoving() and GuiContext::displaySize() (what docking needs).
+#define LVG_UI_HAS_DOCK_SUPPORT 1
+
 namespace lightGraphics::ui {
 
 class DrawList;
@@ -79,6 +82,9 @@ public:
 	Rect bounds() const { return m_bounds; }
 	void setFlags(PanelFlags flags) { m_flags = flags; }
 	PanelFlags flags() const { return m_flags; }
+	// True while the title bar is being dragged past the click threshold, i.e. the panel is
+	// following the pointer. Lets a host implement drop targets (docking) on release.
+	bool dragMoving() const { return m_dragging && m_dragArmed; }
 	void setVisible(bool visible) { m_visible = visible; }
 	bool visible() const { return m_visible; }
 	void setCollapsed(bool collapsed) { m_collapsed = collapsed; }

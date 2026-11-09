@@ -22,11 +22,16 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <filesystem>
 #include <string>
 #include <vector>
+
+// Defined from 3.3: bricked (sparse) volumes, BrickPool, updateTexture3DRegions.
+#define LVG_HAS_BRICKED_VOLUMES 1
 
 namespace lightGraphics
 {
@@ -49,6 +54,7 @@ struct ScreenTextTag;
 struct Texture3DTag;
 struct TransferFunctionTag;
 struct VolumeTag;
+struct BrickedTextureTag;
 
 using MeshHandle = ResourceHandle<MeshTag>;
 using MaterialHandle = ResourceHandle<MaterialTag>;
@@ -56,6 +62,7 @@ using ScreenTextHandle = ResourceHandle<ScreenTextTag>;
 using Texture3DHandle = ResourceHandle<Texture3DTag>;
 using TransferFunctionHandle = ResourceHandle<TransferFunctionTag>;
 using VolumeHandle = ResourceHandle<VolumeTag>;
+using BrickedTextureHandle = ResourceHandle<BrickedTextureTag>;
 
 struct MeshVertex
 {
@@ -287,6 +294,99 @@ struct VolumeRenderDescription
 	float referenceStepLength = 1.0f;
 	bool normalizeOpacityByStepLength = true;
 };
+
+
+// ---------------------------------------------------------------------------------------
+// Bricked (sparse) volumes (3.3)
+//
+// A volume too large for one 3D texture -- or one that is mostly empty -- is split into
+// cubic bricks of `brickSize` voxels. Only the bricks the application chooses to make
+// resident occupy GPU memory: they live in an atlas (a single Texture3D) and an indirection
+// texture (one RGBA8 texel per brick) tells the ray marcher where each one is. Samples in a
+// non-resident brick read as zero, so empty space costs nothing but a lookup.
+//
+// Every brick is stored with a one-voxel border copied from its neighbours
+// ((brickSize + 2)^3 samples), so hardware trilinear filtering is seamless across brick
+// faces. At the volume's outer faces the application replicates the edge voxels.
+// ---------------------------------------------------------------------------------------
+
+struct Texture3DRegionUpdate
+{
+	glm::uvec3 offset{0u};
+	glm::uvec3 extent{1u};
+	const void* data = nullptr;
+	// Must equal extent.x * extent.y * extent.z * the texture's texel size.
+	std::size_t byteSize = 0;
+};
+
+struct BrickedTextureDescription
+{
+	// Size of the whole volume in voxels (any size; not limited by maxImageDimension3D).
+	glm::uvec3 voxels{0u};
+	// Voxels per brick edge, excluding the 1-voxel border. 8..254.
+	std::uint32_t brickSize = 64;
+	// Scalar format of the atlas. RGBA8_UNORM is allowed (colour volumes).
+	TextureFormat format = TextureFormat::R16_UNORM;
+	// Atlas capacity in bricks per axis (1..255). The atlas is
+	// atlasBricks * (brickSize + 2) texels per axis and must fit the device's 3D limit.
+	glm::uvec3 atlasBricks{8u};
+};
+
+struct BrickUpload
+{
+	// Brick coordinates in the brick grid (voxel / brickSize).
+	glm::uvec3 brick{0u};
+	// (brickSize + 2)^3 samples in the atlas format, x fastest; the border comes first.
+	const void* data = nullptr;
+	std::size_t byteSize = 0;
+};
+
+// Which atlas slot holds which brick, with least-recently-used eviction. Pure bookkeeping
+// (no Vulkan), exposed so applications can plan uploads and so it can be tested alone.
+class BrickPool
+{
+public:
+	BrickPool(glm::uvec3 gridBricks, glm::uvec3 atlasBricks);
+
+	struct Placement
+	{
+		glm::uvec3 slot{0u};
+		// True when another brick had to be evicted to make room.
+		bool evicted = false;
+		glm::uvec3 evictedBrick{0u};
+	};
+
+	// Slot for `brick`: its current one (marked used), a free one, or -- when
+	// `allowEviction` -- that of the least recently used brick. Empty when full.
+	std::optional<Placement> acquire(glm::uvec3 brick, bool allowEviction);
+	bool release(glm::uvec3 brick);
+	void touch(glm::uvec3 brick);
+	[[nodiscard]] bool resident(glm::uvec3 brick) const;
+	[[nodiscard]] std::optional<glm::uvec3> slotOf(glm::uvec3 brick) const;
+	[[nodiscard]] std::size_t residentCount() const noexcept { return resident_; }
+	[[nodiscard]] std::size_t capacity() const noexcept { return slotBrick_.size(); }
+	[[nodiscard]] glm::uvec3 grid() const noexcept { return grid_; }
+	[[nodiscard]] glm::uvec3 atlasBricks() const noexcept { return atlas_; }
+	// RGBA8 indirection texel: slot x, y, z and 255 (resident), or all zero.
+	[[nodiscard]] static std::array<std::uint8_t, 4> encode(const std::optional<glm::uvec3>& slot);
+
+private:
+	[[nodiscard]] std::size_t brickIndex(glm::uvec3 brick) const;
+	[[nodiscard]] std::size_t slotIndex(glm::uvec3 slot) const;
+	[[nodiscard]] glm::uvec3 slotCoordinate(std::size_t index) const;
+
+	glm::uvec3 grid_;
+	glm::uvec3 atlas_;
+	std::vector<std::int64_t> brickSlot_;   // per brick: slot index or -1
+	std::vector<std::int64_t> slotBrick_;   // per slot: brick index or -1
+	std::vector<std::uint64_t> slotUsed_;   // per slot: last use tick
+	std::vector<std::size_t> freeSlots_;
+	std::uint64_t tick_ = 0;
+	std::size_t resident_ = 0;
+};
+
+void validateBrickedTextureDescription(const BrickedTextureDescription& description);
+[[nodiscard]] glm::uvec3 brickGridSize(const BrickedTextureDescription& description);
 
 void validateMeshData(const MeshData& meshData);
 void validateScreenTextDescription(

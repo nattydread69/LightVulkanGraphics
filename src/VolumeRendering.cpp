@@ -183,6 +183,179 @@ void validateTexture3DDescription(const Texture3DDescription& description)
 	(void)textureFormatByteSize(description.format);
 }
 
+// ------------------------------------------------------------------ bricked volumes
+
+glm::uvec3 brickGridSize(const BrickedTextureDescription& description)
+{
+	const std::uint32_t b = std::max(description.brickSize, 1u);
+	return {(description.voxels.x + b - 1) / b, (description.voxels.y + b - 1) / b,
+		(description.voxels.z + b - 1) / b};
+}
+
+void validateBrickedTextureDescription(const BrickedTextureDescription& description)
+{
+	if (description.voxels.x == 0 || description.voxels.y == 0 || description.voxels.z == 0)
+	{
+		throw std::invalid_argument("Bricked texture dimensions must be non-zero");
+	}
+	if (description.brickSize < 8 || description.brickSize > 254)
+	{
+		throw std::invalid_argument("Bricked texture brickSize must be 8..254");
+	}
+	for (int axis = 0; axis < 3; ++axis)
+	{
+		if (description.atlasBricks[axis] == 0 || description.atlasBricks[axis] > 255)
+		{
+			throw std::invalid_argument("Bricked texture atlasBricks must be 1..255 per axis");
+		}
+	}
+	(void)textureFormatByteSize(description.format);
+}
+
+BrickPool::BrickPool(glm::uvec3 gridBricks, glm::uvec3 atlasBricks)
+	: grid_(gridBricks), atlas_(atlasBricks)
+{
+	if (gridBricks.x == 0 || gridBricks.y == 0 || gridBricks.z == 0 ||
+		atlasBricks.x == 0 || atlasBricks.y == 0 || atlasBricks.z == 0)
+	{
+		throw std::invalid_argument("BrickPool dimensions must be non-zero");
+	}
+	const std::size_t bricks = static_cast<std::size_t>(grid_.x) * grid_.y * grid_.z;
+	const std::size_t slots = static_cast<std::size_t>(atlas_.x) * atlas_.y * atlas_.z;
+	brickSlot_.assign(bricks, -1);
+	slotBrick_.assign(slots, -1);
+	slotUsed_.assign(slots, 0);
+	freeSlots_.reserve(slots);
+	for (std::size_t s = slots; s > 0; --s)
+	{
+		freeSlots_.push_back(s - 1); // pop_back hands out slot 0 first
+	}
+}
+
+std::size_t BrickPool::brickIndex(glm::uvec3 brick) const
+{
+	if (brick.x >= grid_.x || brick.y >= grid_.y || brick.z >= grid_.z)
+	{
+		throw std::out_of_range("Brick index outside the brick grid");
+	}
+	return (static_cast<std::size_t>(brick.z) * grid_.y + brick.y) * grid_.x + brick.x;
+}
+
+std::size_t BrickPool::slotIndex(glm::uvec3 slot) const
+{
+	return (static_cast<std::size_t>(slot.z) * atlas_.y + slot.y) * atlas_.x + slot.x;
+}
+
+glm::uvec3 BrickPool::slotCoordinate(std::size_t index) const
+{
+	const std::size_t plane = static_cast<std::size_t>(atlas_.x) * atlas_.y;
+	return {static_cast<std::uint32_t>(index % atlas_.x),
+		static_cast<std::uint32_t>((index % plane) / atlas_.x),
+		static_cast<std::uint32_t>(index / plane)};
+}
+
+std::optional<BrickPool::Placement> BrickPool::acquire(glm::uvec3 brick, bool allowEviction)
+{
+	const std::size_t b = brickIndex(brick);
+	++tick_;
+	if (brickSlot_[b] >= 0)
+	{
+		const std::size_t s = static_cast<std::size_t>(brickSlot_[b]);
+		slotUsed_[s] = tick_;
+		return Placement{slotCoordinate(s), false, {}};
+	}
+	std::size_t slot = 0;
+	Placement placement;
+	if (!freeSlots_.empty())
+	{
+		slot = freeSlots_.back();
+		freeSlots_.pop_back();
+	}
+	else if (allowEviction)
+	{
+		bool found = false;
+		for (std::size_t s = 0; s < slotBrick_.size(); ++s)
+		{
+			if (slotBrick_[s] >= 0 && (!found || slotUsed_[s] < slotUsed_[slot]))
+			{
+				slot = s;
+				found = true;
+			}
+		}
+		if (!found)
+		{
+			return std::nullopt;
+		}
+		const std::size_t old = static_cast<std::size_t>(slotBrick_[slot]);
+		const std::size_t plane = static_cast<std::size_t>(grid_.x) * grid_.y;
+		placement.evicted = true;
+		placement.evictedBrick = {static_cast<std::uint32_t>(old % grid_.x),
+			static_cast<std::uint32_t>((old % plane) / grid_.x),
+			static_cast<std::uint32_t>(old / plane)};
+		brickSlot_[old] = -1;
+		--resident_;
+	}
+	else
+	{
+		return std::nullopt;
+	}
+	slotBrick_[slot] = static_cast<std::int64_t>(b);
+	slotUsed_[slot] = tick_;
+	brickSlot_[b] = static_cast<std::int64_t>(slot);
+	++resident_;
+	placement.slot = slotCoordinate(slot);
+	return placement;
+}
+
+bool BrickPool::release(glm::uvec3 brick)
+{
+	const std::size_t b = brickIndex(brick);
+	if (brickSlot_[b] < 0)
+	{
+		return false;
+	}
+	const std::size_t s = static_cast<std::size_t>(brickSlot_[b]);
+	brickSlot_[b] = -1;
+	slotBrick_[s] = -1;
+	freeSlots_.push_back(s);
+	--resident_;
+	return true;
+}
+
+void BrickPool::touch(glm::uvec3 brick)
+{
+	const std::size_t b = brickIndex(brick);
+	if (brickSlot_[b] >= 0)
+	{
+		slotUsed_[static_cast<std::size_t>(brickSlot_[b])] = ++tick_;
+	}
+}
+
+bool BrickPool::resident(glm::uvec3 brick) const
+{
+	return brickSlot_[brickIndex(brick)] >= 0;
+}
+
+std::optional<glm::uvec3> BrickPool::slotOf(glm::uvec3 brick) const
+{
+	const std::int64_t s = brickSlot_[brickIndex(brick)];
+	if (s < 0)
+	{
+		return std::nullopt;
+	}
+	return slotCoordinate(static_cast<std::size_t>(s));
+}
+
+std::array<std::uint8_t, 4> BrickPool::encode(const std::optional<glm::uvec3>& slot)
+{
+	if (!slot)
+	{
+		return {0, 0, 0, 0};
+	}
+	return {static_cast<std::uint8_t>(slot->x), static_cast<std::uint8_t>(slot->y),
+		static_cast<std::uint8_t>(slot->z), 255};
+}
+
 std::vector<TransferFunctionPoint> normalizeTransferFunctionPoints(
 	const std::vector<TransferFunctionPoint>& points)
 {

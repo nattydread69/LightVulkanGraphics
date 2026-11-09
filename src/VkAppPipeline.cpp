@@ -252,7 +252,7 @@ namespace lightGraphics
 		samplerLayoutInfo.pBindings = &samplerBinding;
 		VK_CHECK(vkCreateDescriptorSetLayout(device_, &samplerLayoutInfo, nullptr, &textureSetLayout_));
 
-		std::array<VkDescriptorSetLayoutBinding, 2> volumeBindings{};
+		std::array<VkDescriptorSetLayoutBinding, 3> volumeBindings{}; // atlas/volume, transfer, brick index
 		for (std::uint32_t index = 0; index < volumeBindings.size(); ++index)
 		{
 			volumeBindings[index].binding = index;

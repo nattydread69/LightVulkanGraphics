@@ -6,6 +6,24 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### GUI
+- `Panel::dragMoving()` and `GuiContext::displaySize()`, so a host can implement drop targets such as docking.
+
+### Bricked volumes
+#### Added
+- **Sparse, bricked volumes**: `createBrickedTexture`, `uploadBricks`, `evictBricks`,
+  `evictAllBricks`, `setVolumeBricks`, `brickedAtlas`, residency queries and
+  `BrickedTextureDescription` / `BrickUpload` (see `docs/volume_rendering.md`). A volume
+  larger than one 3D texture, or mostly empty, renders from an atlas of resident bricks
+  through a brick-index texture; every render style is supported and matches the
+  single-texture picture exactly.
+- `BrickPool` (slot allocation with LRU eviction), `updateTexture3DRegions` (batched partial
+  updates), `brickGridSize`, `validateBrickedTextureDescription`.
+- `volume_bricked_integration_test` (GPU: bricked vs plain, all styles, eviction) and
+  `BrickPool` unit tests.
+- The volume descriptor set gained a third binding (the brick index); shaders using it must
+  be rebuilt with the library.
+
 ### Fonts
 
 > **ABI note.** `ScreenTextDescription` gained fields and `VkApp` gained members, so this

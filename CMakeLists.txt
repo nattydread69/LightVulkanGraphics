@@ -882,6 +882,15 @@ if (BUILD_TESTING)
 			NAME volume_vulkan_integration_test
 			COMMAND volume_vulkan_integration_test
 		)
+		add_executable(volume_bricked_integration_test
+			tests/volume_bricked_integration.cpp
+		)
+		lvg_configure_build_tree_example(volume_bricked_integration_test)
+		target_link_libraries(volume_bricked_integration_test PRIVATE glfw)
+		add_test(
+			NAME volume_bricked_integration_test
+			COMMAND volume_bricked_integration_test
+		)
 	endif()
 
 	if (LVG_BUILD_UI)

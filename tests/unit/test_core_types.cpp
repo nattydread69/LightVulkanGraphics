@@ -912,6 +912,50 @@ namespace
 			"Texture3D validation should reject zero dimensions");
 	}
 
+	void testBrickPool()
+	{
+		using lightGraphics::BrickPool;
+		BrickPool pool({4, 3, 2}, {2, 1, 1}); // 24 bricks, 2 slots
+		require(pool.capacity() == 2 && pool.residentCount() == 0, "BrickPool: starts empty");
+		const auto a = pool.acquire({0, 0, 0}, false);
+		const auto b = pool.acquire({3, 2, 1}, false);
+		require(a && b && a->slot != b->slot && !a->evicted && !b->evicted, "BrickPool: free slots are handed out first");
+		require(pool.residentCount() == 2 && pool.resident({3, 2, 1}), "BrickPool: bricks become resident");
+		require(!pool.acquire({1, 1, 1}, false), "BrickPool: a full pool refuses without eviction");
+		// Re-acquiring keeps the slot and refreshes recency, so {3,2,1} is now the oldest.
+		const auto again = pool.acquire({0, 0, 0}, false);
+		require(again && again->slot == a->slot && !again->evicted, "BrickPool: same brick keeps its slot");
+		const auto c = pool.acquire({1, 1, 1}, true);
+		require(c && c->evicted && c->evictedBrick == glm::uvec3(3, 2, 1) && c->slot == b->slot,
+			"BrickPool: the least recently used brick is evicted");
+		require(!pool.resident({3, 2, 1}) && pool.resident({1, 1, 1}) && pool.residentCount() == 2,
+			"BrickPool: eviction updates residency");
+		pool.touch({1, 1, 1});
+		const auto d = pool.acquire({2, 0, 0}, true);
+		require(d && d->evictedBrick == glm::uvec3(0, 0, 0), "BrickPool: touch protects a brick from eviction");
+		require(pool.release({2, 0, 0}) && !pool.release({2, 0, 0}) && pool.residentCount() == 1,
+			"BrickPool: release frees once");
+		require(!pool.slotOf({2, 0, 0}).has_value() && pool.slotOf({1, 1, 1}).has_value(), "BrickPool: slotOf");
+		const auto enc = BrickPool::encode(glm::uvec3(3, 4, 5));
+		require(enc[0] == 3 && enc[1] == 4 && enc[2] == 5 && enc[3] == 255, "BrickPool: resident texel encoding");
+		require(BrickPool::encode(std::nullopt) == std::array<std::uint8_t, 4>{0, 0, 0, 0}, "BrickPool: empty texel encoding");
+		requireThrows<std::out_of_range>([&] { (void)pool.resident({4, 0, 0}); }, "BrickPool: out-of-grid brick");
+		requireThrows<std::invalid_argument>([] { BrickPool({0, 1, 1}, {1, 1, 1}); }, "BrickPool: zero grid");
+
+		lightGraphics::BrickedTextureDescription description;
+		description.voxels = {130, 64, 1};
+		description.brickSize = 64;
+		require(lightGraphics::brickGridSize(description) == glm::uvec3(3, 1, 1), "brickGridSize rounds up");
+		lightGraphics::validateBrickedTextureDescription(description);
+		description.brickSize = 4;
+		requireThrows<std::invalid_argument>([&] { lightGraphics::validateBrickedTextureDescription(description); },
+			"BrickedTexture: tiny bricks are rejected");
+		description.brickSize = 64;
+		description.atlasBricks = {256, 1, 1};
+		requireThrows<std::invalid_argument>([&] { lightGraphics::validateBrickedTextureDescription(description); },
+			"BrickedTexture: slot coordinates must fit a byte");
+	}
+
 	void testTransferFunctionSampling()
 	{
 		const std::vector<lightGraphics::TransferFunctionPoint> points{
@@ -1554,6 +1598,7 @@ int main()
 		testMeshValidation();
 		testScreenTextMesh();
 		testTexture3DValidation();
+		testBrickPool();
 		testTransferFunctionSampling();
 		testMaterialClippingAndVolumeValidation();
 		testVolumeOpacityAndRenderOrdering();

@@ -80,3 +80,50 @@ app.setVolumeStyle(volume, style);
 With `VolumeColorSource::TextureRgba` the texture's RGB colours every style and its alpha
 is the scalar. Gradients use central differences one texel apart (6 extra fetches per
 shaded sample, only where the sample contributes).
+
+## Bricked (sparse) volumes (3.3)
+
+A volume that is larger than one 3D texture, or mostly empty, is split into cubic bricks.
+Only the bricks you make resident use GPU memory: they live in an **atlas** (one `Texture3D`)
+and a small **brick index** texture tells the ray marcher where each one is. Samples in a
+non-resident brick read as zero. Every render style works unchanged, and the picture is
+identical to the same data in one texture (the integration test compares all five styles
+pixel for pixel).
+
+```cpp
+lightGraphics::BrickedTextureDescription bd;
+bd.voxels = {4000, 3000, 2500};          // whole volume; not limited by maxImageDimension3D
+bd.brickSize = 64;                       // voxels per edge, 8..254
+bd.format = lightGraphics::TextureFormat::R16_UNORM;
+bd.atlasBricks = {10, 10, 9};            // capacity: 900 bricks = 660 x 660 x 594 texels
+auto bricks = app.createBrickedTexture(bd);
+
+// Each brick is (brickSize + 2)^3 samples: a one-voxel border copied from the neighbouring
+// bricks (edge voxels replicated at the volume's faces) keeps trilinear filtering seamless.
+std::vector<lightGraphics::BrickUpload> uploads = {{{bx, by, bz}, samples, byteSize}, /* ... */};
+std::size_t placed = app.uploadBricks(bricks, uploads);   // evicts least recently used if full
+
+lightGraphics::VolumeRenderDescription vd;
+vd.volumeTexture = app.brickedAtlas(bricks);             // the atlas is the volume texture
+vd.transferFunction = transfer;
+vd.volumeMin = {...}; vd.volumeMax = {...};              // world box of the whole volume
+auto volume = app.createVolume(vd);
+app.setVolumeBricks(volume, bricks);                     // sample through the brick index
+app.drawVolume(volume, {lightGraphics::RenderLayer::Volume, 0.0f});
+```
+
+`evictBricks`, `evictAllBricks`, `isBrickResident`, `residentBrickCount`, `brickCapacity` and
+`brickGrid` manage residency; `setVolumeBricks(volume, {})` detaches. Choosing *which* bricks to
+keep is the application's job -- typically the bricks that are not transparent under the
+current transfer function, at a resolution level whose non-empty bricks fit the atlas.
+
+`BrickPool` (the slot bookkeeping with LRU eviction) and `updateTexture3DRegions` (batched
+partial updates of any `Texture3D`, one staging buffer and one submission) are public too.
+The atlas and index are owned by the bricked texture: `destroyBrickedTexture` frees them and
+`destroyTexture3D` refuses them. Limits: `atlasBricks` is at most 255 per axis, and
+`atlasBricks * (brickSize + 2)` and the brick grid must fit `maxImageDimension3D`.
+
+Implementation notes: the brick index is an RGBA8 texture (slot x, y, z and 255 when
+resident) read with `texelFetch`; the shader's `fetchTexel()` replaces direct texture reads.
+The volume's voxel counts travel in the unused `w` components of the push block. Non-bricked
+volumes take the original path unchanged.

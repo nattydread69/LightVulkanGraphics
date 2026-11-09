@@ -2,6 +2,9 @@
 
 layout(set = 1, binding = 0) uniform sampler3D volumeTexture;
 layout(set = 1, binding = 1) uniform sampler2D transferFunction;
+// Bricked volumes (3.3): volumeTexture is then an atlas of (brickSize + 2)^3 bricks and this
+// holds, per brick, the atlas slot in rgb and 255 in alpha when the brick is resident.
+layout(set = 1, binding = 2) uniform sampler3D brickIndex;
 
 // Spare components carry the render style (lightVulkanGraphics 3.2) so the block keeps
 // its 128-byte size:
@@ -12,6 +15,9 @@ layout(set = 1, binding = 1) uniform sampler2D transferFunction;
 //            3 isosurface, 4 average (radiograph)
 //   volumeMinimum.w  isovalue (normalised scalar) for the isosurface style
 //   volumeMaximum.w  shading strength 0..1 (0 = flat)
+//   flags.z          brick size in voxels when the volume is bricked, else 0; the
+//                    volume's voxel counts are then cameraWorld.w, clipBoxMinimum.w and
+//                    clipBoxMaximum.w
 layout(push_constant) uniform VolumePushConstants
 {
 	vec4 cameraWorld;
@@ -48,10 +54,51 @@ bool textureColor()
 	return flagEnabled(6);
 }
 
+bool isBricked()
+{
+	return volume.flags.z > 0;
+}
+
+vec3 brickedVoxels()
+{
+	return vec3(volume.cameraWorld.w, volume.clipBoxMinimum.w, volume.clipBoxMaximum.w);
+}
+
+// One filtered sample at a position in the volume's normalised 0..1 space. A bricked
+// volume maps it through the brick index into the atlas; bricks that are not resident read
+// as zero. Each stored brick carries a one-voxel border, so the hardware's trilinear filter
+// never reaches into another brick.
+vec4 fetchTexel(vec3 p)
+{
+	if (!isBricked())
+	{
+		return texture(volumeTexture, p);
+	}
+	float brick = float(volume.flags.z);
+	vec3 voxel = clamp(p, vec3(0.0), vec3(1.0)) * brickedVoxels();
+	ivec3 grid = textureSize(brickIndex, 0);
+	ivec3 cell = clamp(ivec3(floor(voxel / brick)), ivec3(0), grid - ivec3(1));
+	vec4 entry = texelFetch(brickIndex, cell, 0);
+	if (entry.a < 0.5)
+	{
+		return vec4(0.0);
+	}
+	vec3 slot = floor(entry.rgb * 255.0 + 0.5);
+	vec3 local = clamp(voxel - vec3(cell) * brick, vec3(0.0), vec3(brick));
+	vec3 atlasSize = vec3(textureSize(volumeTexture, 0));
+	return textureLod(volumeTexture, (slot * (brick + 2.0) + local + 1.0) / atlasSize, 0.0);
+}
+
+// Texture-space distance between neighbouring voxels.
+vec3 voxelStep()
+{
+	return isBricked() ? 1.0 / brickedVoxels() : 1.0 / vec3(textureSize(volumeTexture, 0));
+}
+
 // The normalised scalar at a texture position (alpha in RGBA mode).
 float scalarAt(vec3 p)
 {
-	vec4 texel = texture(volumeTexture, p);
+	vec4 texel = fetchTexel(p);
 	return clamp((textureColor() ? texel.a : texel.r) * volume.settings.x, 0.0, 1.0);
 }
 
@@ -69,7 +116,7 @@ bool insideVolume(vec3 samplePosition)
 // World-space gradient of the scalar (central differences, one texel apart).
 vec3 gradientAt(vec3 p, vec3 extent)
 {
-	vec3 texel = 1.0 / vec3(textureSize(volumeTexture, 0));
+	vec3 texel = voxelStep();
 	vec3 g = vec3(
 		scalarAt(p + vec3(texel.x, 0.0, 0.0)) - scalarAt(p - vec3(texel.x, 0.0, 0.0)),
 		scalarAt(p + vec3(0.0, texel.y, 0.0)) - scalarAt(p - vec3(0.0, texel.y, 0.0)),
@@ -98,7 +145,7 @@ vec4 colourOf(vec3 p, float scalar)
 	vec4 c = texture(transferFunction, vec2(scalar, 0.5));
 	if (textureColor())
 	{
-		c.rgb = texture(volumeTexture, p).rgb;
+		c.rgb = fetchTexel(p).rgb;
 	}
 	return c;
 }

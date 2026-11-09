@@ -26,7 +26,9 @@
 #include <cstring>
 #include <stdexcept>
 #include <cmath>
+#include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 
 namespace lightGraphics
@@ -133,10 +135,15 @@ namespace
 
 namespace detail
 {
+	void forgetBrickedTextures(const void* app);
+
 	void forgetVolumeStyles(const void* app)
 	{
-		std::lock_guard<std::mutex> lock(volumeStyleMutex());
-		volumeStyles().erase(app);
+		{
+			std::lock_guard<std::mutex> lock(volumeStyleMutex());
+			volumeStyles().erase(app);
+		}
+		forgetBrickedTextures(app);
 	}
 }
 
@@ -484,6 +491,84 @@ void VkApp::destroyMaterial(MaterialHandle handle)
 	freeMaterials_.push_back(handle.index);
 }
 
+// ------------------------------------------------------------------ bricked volumes
+// State lives in side tables (like the 3.2 render styles) so VkApp's layout does not grow.
+
+namespace
+{
+	struct BrickedState
+	{
+		std::uint32_t generation = 1;
+		bool alive = false;
+		BrickedTextureDescription description;
+		Texture3DHandle atlas;
+		Texture3DHandle indirection;
+		std::unique_ptr<BrickPool> pool;
+		std::size_t texelBytes = 0;
+	};
+
+	struct AppBricks
+	{
+		std::vector<BrickedState> textures;
+		std::vector<std::uint32_t> free;
+		// volume slot -> bricked texture attached to it
+		std::unordered_map<std::uint32_t, BrickedTextureHandle> attached;
+	};
+
+	std::mutex& brickMutex()
+	{
+		static std::mutex m;
+		return m;
+	}
+
+	std::unordered_map<const void*, AppBricks>& brickTables()
+	{
+		static std::unordered_map<const void*, AppBricks> tables;
+		return tables;
+	}
+
+	// Caller holds the mutex.
+	BrickedState& brickedState(const void* app, BrickedTextureHandle handle, const char* what)
+	{
+		auto it = brickTables().find(app);
+		if (it == brickTables().end() || handle.index >= it->second.textures.size() ||
+			!it->second.textures[handle.index].alive ||
+			it->second.textures[handle.index].generation != handle.generation)
+		{
+			throw std::invalid_argument(std::string(what) + " received an invalid or stale bricked texture handle");
+		}
+		return it->second.textures[handle.index];
+	}
+
+	bool atlasOwnedByBricks(const void* app, Texture3DHandle texture)
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		auto it = brickTables().find(app);
+		if (it == brickTables().end())
+		{
+			return false;
+		}
+		for (const BrickedState& b : it->second.textures)
+		{
+			if (b.alive && ((b.atlas.index == texture.index && b.atlas.generation == texture.generation) ||
+				(b.indirection.index == texture.index && b.indirection.generation == texture.generation)))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+namespace detail
+{
+	void forgetBrickedTextures(const void* app)
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		brickTables().erase(app);
+	}
+}
+
 Texture3DHandle VkApp::createTexture3D(
 	const Texture3DDescription& description,
 	const void* sourceData,
@@ -498,6 +583,16 @@ Texture3DHandle VkApp::createTexture3D(
 	{
 		throw std::invalid_argument("Texture3D upload byte size does not match its description");
 	}
+	return createTexture3DInternal(description, sourceData, byteSize);
+}
+
+// `sourceData` may be null: the image is then created uninitialised (contents undefined),
+// ready for region updates. Used by bricked atlases, which are far too large to stage.
+Texture3DHandle VkApp::createTexture3DInternal(
+	const Texture3DDescription& description,
+	const void* sourceData,
+	std::size_t byteSize)
+{
 	const std::uint32_t index = freeTextures3D_.empty()
 		? static_cast<std::uint32_t>(textures3D_.size())
 		: freeTextures3D_.back();
@@ -512,14 +607,17 @@ Texture3DHandle VkApp::createTexture3D(
 	Texture3DResource& texture = textures3D_[index];
 	texture.description = description;
 	detail::Buffer staging;
-	createBuffer(byteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-		staging);
-	void* mapped = nullptr;
-	checkVk(vkMapMemory(device_, staging.memory, 0, byteSize, 0, &mapped),
-		"Failed to map Texture3D staging memory");
-	std::memcpy(mapped, sourceData, byteSize);
-	vkUnmapMemory(device_, staging.memory);
+	if (sourceData != nullptr)
+	{
+		createBuffer(byteSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+			staging);
+		void* mapped = nullptr;
+		checkVk(vkMapMemory(device_, staging.memory, 0, byteSize, 0, &mapped),
+			"Failed to map Texture3D staging memory");
+		std::memcpy(mapped, sourceData, byteSize);
+		vkUnmapMemory(device_, staging.memory);
+	}
 
 	const VkFormat format = textureFormat(description.format);
 	VkFormatProperties formatProperties{};
@@ -529,7 +627,7 @@ Texture3DHandle VkApp::createTexture3D(
 		VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
 	if ((formatProperties.optimalTilingFeatures & requiredFeatures) != requiredFeatures)
 	{
-		destroyBuffer(device_, staging);
+		if (sourceData != nullptr) destroyBuffer(device_, staging);
 		freeTextures3D_.push_back(index);
 		throw std::runtime_error(
 			"Selected Vulkan device cannot linearly sample the requested Texture3D format");
@@ -561,8 +659,11 @@ Texture3DHandle VkApp::createTexture3D(
 			"Failed to bind Texture3D image memory");
 		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-		copyBufferToImage3D(staging.buffer, texture.image,
-			description.width, description.height, description.depth);
+		if (sourceData != nullptr)
+		{
+			copyBufferToImage3D(staging.buffer, texture.image,
+				description.width, description.height, description.depth);
+		}
 		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 		VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -592,7 +693,7 @@ Texture3DHandle VkApp::createTexture3D(
 		// of this slot could collide with a still-outstanding stale handle
 		// from a previous (successfully created and destroyed) texture at
 		// the same index.
-		destroyBuffer(device_, staging);
+		if (sourceData != nullptr) destroyBuffer(device_, staging);
 		vkDestroySampler(device_, texture.sampler, nullptr);
 		vkDestroyImageView(device_, texture.view, nullptr);
 		vkDestroyImage(device_, texture.image, nullptr);
@@ -605,7 +706,7 @@ Texture3DHandle VkApp::createTexture3D(
 		freeTextures3D_.push_back(index);
 		throw;
 	}
-	destroyBuffer(device_, staging);
+	if (sourceData != nullptr) destroyBuffer(device_, staging);
 	texture.alive = true;
 	return {index, texture.generation};
 }
@@ -651,6 +752,10 @@ void VkApp::destroyTexture3D(Texture3DHandle handle)
 	{
 		throw std::invalid_argument("Texture3D handle is invalid or stale");
 	}
+	if (atlasOwnedByBricks(this, handle))
+	{
+		throw std::logic_error("Texture3D belongs to a bricked texture; use destroyBrickedTexture");
+	}
 	for (const VolumeResource& volume : volumes_)
 	{
 		if (volume.alive && volume.description.volumeTexture.index == handle.index &&
@@ -669,6 +774,363 @@ void VkApp::destroyTexture3D(Texture3DHandle handle)
 	texture = Texture3DResource{};
 	texture.generation = nextGeneration;
 	freeTextures3D_.push_back(handle.index);
+}
+
+void VkApp::updateTexture3DRegions(
+	Texture3DHandle handle,
+	const std::vector<Texture3DRegionUpdate>& regions)
+{
+	if (handle.index >= textures3D_.size() || !textures3D_[handle.index].alive ||
+		textures3D_[handle.index].generation != handle.generation)
+	{
+		throw std::invalid_argument("Texture3D handle is invalid or stale");
+	}
+	if (regions.empty())
+	{
+		return;
+	}
+	Texture3DResource& texture = textures3D_[handle.index];
+	const std::size_t texel = textureFormatByteSize(texture.description.format);
+	std::size_t total = 0;
+	for (const Texture3DRegionUpdate& r : regions)
+	{
+		if (r.data == nullptr || r.extent.x == 0 || r.extent.y == 0 || r.extent.z == 0 ||
+			static_cast<std::uint64_t>(r.offset.x) + r.extent.x > texture.description.width ||
+			static_cast<std::uint64_t>(r.offset.y) + r.extent.y > texture.description.height ||
+			static_cast<std::uint64_t>(r.offset.z) + r.extent.z > texture.description.depth)
+		{
+			throw std::invalid_argument("Texture3D region lies outside the texture");
+		}
+		const std::size_t bytes = static_cast<std::size_t>(r.extent.x) * r.extent.y * r.extent.z * texel;
+		if (r.byteSize != bytes)
+		{
+			throw std::invalid_argument("Texture3D region byte size does not match its extent");
+		}
+		total += bytes;
+	}
+	detail::Buffer staging;
+	createBuffer(total, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+		VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+		staging);
+	std::vector<VkBufferImageCopy> copies;
+	copies.reserve(regions.size());
+	try
+	{
+		void* mapped = nullptr;
+		checkVk(vkMapMemory(device_, staging.memory, 0, total, 0, &mapped),
+			"Failed to map Texture3D region staging memory");
+		std::size_t cursor = 0;
+		for (const Texture3DRegionUpdate& r : regions)
+		{
+			std::memcpy(static_cast<char*>(mapped) + cursor, r.data, r.byteSize);
+			VkBufferImageCopy copy{};
+			copy.bufferOffset = cursor;
+			copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			copy.imageSubresource.layerCount = 1;
+			copy.imageOffset = {static_cast<std::int32_t>(r.offset.x),
+				static_cast<std::int32_t>(r.offset.y), static_cast<std::int32_t>(r.offset.z)};
+			copy.imageExtent = {r.extent.x, r.extent.y, r.extent.z};
+			copies.push_back(copy);
+			cursor += r.byteSize;
+		}
+		vkUnmapMemory(device_, staging.memory);
+		const VkFormat format = textureFormat(texture.description.format);
+		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+		vkCmdCopyBufferToImage(commandBuffer, staging.buffer, texture.image,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			static_cast<std::uint32_t>(copies.size()), copies.data());
+		endSingleTimeCommands(commandBuffer);
+		transitionImageLayout(texture.image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+	}
+	catch (...)
+	{
+		destroyBuffer(device_, staging);
+		throw;
+	}
+	destroyBuffer(device_, staging);
+}
+
+BrickedTextureHandle VkApp::createBrickedTexture(const BrickedTextureDescription& description)
+{
+	validateBrickedTextureDescription(description);
+	const std::uint32_t padded = description.brickSize + 2;
+	VkPhysicalDeviceProperties properties{};
+	vkGetPhysicalDeviceProperties(physicalDevice_, &properties);
+	const glm::uvec3 atlasTexels = description.atlasBricks * padded;
+	const std::uint32_t limit = properties.limits.maxImageDimension3D;
+	if (atlasTexels.x > limit || atlasTexels.y > limit || atlasTexels.z > limit)
+	{
+		throw std::invalid_argument("Brick atlas of " + std::to_string(atlasTexels.x) + "x" +
+			std::to_string(atlasTexels.y) + "x" + std::to_string(atlasTexels.z) +
+			" texels exceeds the device's maxImageDimension3D (" + std::to_string(limit) +
+			"); use fewer or smaller bricks");
+	}
+	const glm::uvec3 grid = brickGridSize(description);
+	if (grid.x > limit || grid.y > limit || grid.z > limit)
+	{
+		throw std::invalid_argument("Brick grid exceeds the device's maxImageDimension3D; use larger bricks");
+	}
+	Texture3DDescription atlasDescription;
+	atlasDescription.width = atlasTexels.x;
+	atlasDescription.height = atlasTexels.y;
+	atlasDescription.depth = atlasTexels.z;
+	atlasDescription.format = description.format;
+	const Texture3DHandle atlas = createTexture3DInternal(atlasDescription, nullptr, 0);
+	Texture3DHandle indirection;
+	try
+	{
+		Texture3DDescription indexDescription;
+		indexDescription.width = grid.x;
+		indexDescription.height = grid.y;
+		indexDescription.depth = grid.z;
+		indexDescription.format = TextureFormat::RGBA8_UNORM;
+		const std::vector<std::uint8_t> zeros(texture3DByteSize(indexDescription), 0);
+		indirection = createTexture3D(indexDescription, zeros.data(), zeros.size());
+	}
+	catch (...)
+	{
+		destroyTexture3D(atlas);
+		throw;
+	}
+	std::lock_guard<std::mutex> lock(brickMutex());
+	AppBricks& table = brickTables()[this];
+	std::uint32_t index;
+	if (table.free.empty())
+	{
+		index = static_cast<std::uint32_t>(table.textures.size());
+		table.textures.emplace_back();
+	}
+	else
+	{
+		index = table.free.back();
+		table.free.pop_back();
+	}
+	BrickedState& state = table.textures[index];
+	state.description = description;
+	state.atlas = atlas;
+	state.indirection = indirection;
+	state.pool = std::make_unique<BrickPool>(grid, description.atlasBricks);
+	state.texelBytes = textureFormatByteSize(description.format);
+	state.alive = true;
+	return {index, state.generation};
+}
+
+void VkApp::destroyBrickedTexture(BrickedTextureHandle handle)
+{
+	Texture3DHandle atlas;
+	Texture3DHandle indirection;
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		BrickedState& state = brickedState(this, handle, "destroyBrickedTexture");
+		for (const VolumeResource& volume : volumes_)
+		{
+			if (volume.alive && volume.description.volumeTexture.index == state.atlas.index &&
+				volume.description.volumeTexture.generation == state.atlas.generation)
+			{
+				throw std::logic_error("Bricked texture is still used by a volume");
+			}
+		}
+		for (const auto& [slot, attached] : brickTables()[this].attached)
+		{
+			if (attached.index == handle.index && attached.generation == handle.generation &&
+				slot < volumes_.size() && volumes_[slot].alive)
+			{
+				throw std::logic_error("Bricked texture is still used by a volume");
+			}
+		}
+		atlas = state.atlas;
+		indirection = state.indirection;
+		state.alive = false;
+		state.pool.reset();
+		++state.generation;
+		brickTables()[this].free.push_back(handle.index);
+	}
+	destroyTexture3D(atlas);
+	destroyTexture3D(indirection);
+}
+
+Texture3DHandle VkApp::brickedAtlas(BrickedTextureHandle handle) const
+{
+	std::lock_guard<std::mutex> lock(brickMutex());
+	return brickedState(this, handle, "brickedAtlas").atlas;
+}
+
+std::size_t VkApp::uploadBricks(
+	BrickedTextureHandle handle,
+	const std::vector<BrickUpload>& bricks,
+	bool allowEviction)
+{
+	// Regions are applied in one copy command, so no two may overlap: when a slot or an
+	// index texel is written twice in one batch (a brick evicted by a later one), the last
+	// write replaces the first.
+	struct IndexWrite
+	{
+		glm::uvec3 brick;
+		std::array<std::uint8_t, 4> texel;
+	};
+	std::vector<IndexWrite> indexWrites;
+	std::vector<Texture3DRegionUpdate> atlasRegions;
+	std::unordered_map<std::uint64_t, std::size_t> atlasAt;   // slot -> position
+	std::unordered_map<std::uint64_t, std::size_t> indexAt;   // brick -> position
+	Texture3DHandle atlas;
+	Texture3DHandle indirection;
+	std::size_t placed = 0;
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		BrickedState& state = brickedState(this, handle, "uploadBricks");
+		atlas = state.atlas;
+		indirection = state.indirection;
+		const std::uint32_t padded = state.description.brickSize + 2;
+		const std::size_t expected = static_cast<std::size_t>(padded) * padded * padded * state.texelBytes;
+		const glm::uvec3 grid = state.pool->grid();
+		const glm::uvec3 slots = state.pool->atlasBricks();
+		auto writeIndex = [&](glm::uvec3 brick, const std::optional<glm::uvec3>& slot)
+		{
+			const std::uint64_t key = (static_cast<std::uint64_t>(brick.z) * grid.y + brick.y) * grid.x + brick.x;
+			const IndexWrite write{brick, BrickPool::encode(slot)};
+			auto found = indexAt.find(key);
+			if (found == indexAt.end())
+			{
+				indexAt[key] = indexWrites.size();
+				indexWrites.push_back(write);
+			}
+			else
+			{
+				indexWrites[found->second] = write;
+			}
+		};
+		for (const BrickUpload& upload : bricks)
+		{
+			if (upload.data == nullptr || upload.byteSize != expected)
+			{
+				throw std::invalid_argument("Brick upload must hold (brickSize + 2)^3 samples");
+			}
+			const auto placement = state.pool->acquire(upload.brick, allowEviction);
+			if (!placement)
+			{
+				continue;
+			}
+			++placed;
+			if (placement->evicted)
+			{
+				writeIndex(placement->evictedBrick, std::nullopt);
+			}
+			writeIndex(upload.brick, placement->slot);
+			const Texture3DRegionUpdate region{placement->slot * padded, {padded, padded, padded}, upload.data, upload.byteSize};
+			const std::uint64_t slotKey = (static_cast<std::uint64_t>(placement->slot.z) * slots.y +
+				placement->slot.y) * slots.x + placement->slot.x;
+			auto found = atlasAt.find(slotKey);
+			if (found == atlasAt.end())
+			{
+				atlasAt[slotKey] = atlasRegions.size();
+				atlasRegions.push_back(region);
+			}
+			else
+			{
+				atlasRegions[found->second] = region;
+			}
+		}
+	}
+	std::vector<Texture3DRegionUpdate> indexRegions;
+	indexRegions.reserve(indexWrites.size());
+	for (const IndexWrite& write : indexWrites)
+	{
+		indexRegions.push_back({write.brick, {1u, 1u, 1u}, write.texel.data(), 4});
+	}
+	updateTexture3DRegions(atlas, atlasRegions);
+	updateTexture3DRegions(indirection, indexRegions);
+	return placed;
+}
+
+void VkApp::evictBricks(BrickedTextureHandle handle, const std::vector<glm::uvec3>& bricks)
+{
+	std::vector<Texture3DRegionUpdate> regions;
+	const std::array<std::uint8_t, 4> empty = BrickPool::encode(std::nullopt);
+	Texture3DHandle indirection;
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		BrickedState& state = brickedState(this, handle, "evictBricks");
+		indirection = state.indirection;
+		for (const glm::uvec3& brick : bricks)
+		{
+			if (state.pool->release(brick))
+			{
+				regions.push_back({brick, {1u, 1u, 1u}, empty.data(), 4});
+			}
+		}
+	}
+	updateTexture3DRegions(indirection, regions);
+}
+
+void VkApp::evictAllBricks(BrickedTextureHandle handle)
+{
+	std::vector<glm::uvec3> all;
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		BrickedState& state = brickedState(this, handle, "evictAllBricks");
+		const glm::uvec3 g = state.pool->grid();
+		for (std::uint32_t z = 0; z < g.z; ++z)
+			for (std::uint32_t y = 0; y < g.y; ++y)
+				for (std::uint32_t x = 0; x < g.x; ++x)
+					if (state.pool->resident({x, y, z})) all.push_back({x, y, z});
+	}
+	evictBricks(handle, all);
+}
+
+bool VkApp::isBrickResident(BrickedTextureHandle handle, glm::uvec3 brick) const
+{
+	std::lock_guard<std::mutex> lock(brickMutex());
+	return brickedState(this, handle, "isBrickResident").pool->resident(brick);
+}
+
+std::size_t VkApp::residentBrickCount(BrickedTextureHandle handle) const
+{
+	std::lock_guard<std::mutex> lock(brickMutex());
+	return brickedState(this, handle, "residentBrickCount").pool->residentCount();
+}
+
+std::size_t VkApp::brickCapacity(BrickedTextureHandle handle) const
+{
+	std::lock_guard<std::mutex> lock(brickMutex());
+	return brickedState(this, handle, "brickCapacity").pool->capacity();
+}
+
+glm::uvec3 VkApp::brickGrid(BrickedTextureHandle handle) const
+{
+	std::lock_guard<std::mutex> lock(brickMutex());
+	return brickedState(this, handle, "brickGrid").pool->grid();
+}
+
+void VkApp::setVolumeBricks(VolumeHandle volumeHandle, BrickedTextureHandle bricks)
+{
+	if (volumeHandle.index >= volumes_.size() || !volumes_[volumeHandle.index].alive ||
+		volumes_[volumeHandle.index].generation != volumeHandle.generation)
+	{
+		throw std::invalid_argument("setVolumeBricks received an invalid or stale volume handle");
+	}
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		AppBricks& table = brickTables()[this];
+		if (!bricks.isValid())
+		{
+			table.attached.erase(volumeHandle.index);
+		}
+		else
+		{
+			const BrickedState& state = brickedState(this, bricks, "setVolumeBricks");
+			const Texture3DHandle atlas = volumes_[volumeHandle.index].description.volumeTexture;
+			if (atlas.index != state.atlas.index || atlas.generation != state.atlas.generation)
+			{
+				throw std::invalid_argument(
+					"setVolumeBricks: the volume's volumeTexture must be the bricked texture's atlas");
+			}
+			table.attached[volumeHandle.index] = bricks;
+		}
+	}
+	createVolumeDescriptor(volumes_[volumeHandle.index]);
 }
 
 TransferFunctionHandle VkApp::createTransferFunction(
@@ -877,6 +1339,11 @@ void VkApp::destroyVolume(VolumeHandle handle)
 	}
 	destroyMesh(volume.proxyMesh);
 	forgetStyle(this, handle.index);
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		auto it = brickTables().find(this);
+		if (it != brickTables().end()) { it->second.attached.erase(handle.index); }
+	}
 	volume.alive = false;
 	volume.visible = false;
 	++volume.generation;
@@ -898,11 +1365,29 @@ void VkApp::createVolumeDescriptor(VolumeResource& volume)
 	const Texture3DResource& texture = textures3D_[volume.description.volumeTexture.index];
 	const TransferFunctionResource& transfer =
 		transferFunctions_[volume.description.transferFunction.index];
-	std::array<VkDescriptorImageInfo, 2> imageInfos{};
+	std::array<VkDescriptorImageInfo, 3> imageInfos{};
 	imageInfos[0] = {texture.sampler, texture.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
 	imageInfos[1] = {transfer.texture->sampler, transfer.texture->view,
 		VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-	std::array<VkWriteDescriptorSet, 2> writes{};
+	// Binding 2 is the brick index when the volume is bricked; otherwise any texture will do
+	// (the shader does not read it), so the volume's own is bound.
+	imageInfos[2] = imageInfos[0];
+	{
+		std::lock_guard<std::mutex> lock(brickMutex());
+		auto it = brickTables().find(this);
+		if (it != brickTables().end())
+		{
+			const std::uint32_t slot = static_cast<std::uint32_t>(&volume - volumes_.data());
+			auto attached = it->second.attached.find(slot);
+			if (attached != it->second.attached.end())
+			{
+				const BrickedState& state = brickedState(this, attached->second, "createVolumeDescriptor");
+				const Texture3DResource& index = textures3D_[state.indirection.index];
+				imageInfos[2] = {index.sampler, index.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+			}
+		}
+	}
+	std::array<VkWriteDescriptorSet, 3> writes{};
 	for (std::uint32_t index = 0; index < writes.size(); ++index)
 	{
 		writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -1152,6 +1637,24 @@ void VkApp::drawVolumeResource(
 		push.volumeMinimum.w = std::clamp(style.isoValue, 0.0f, 1.0f);
 		push.volumeMaximum.w = std::clamp(style.shadingStrength, 0.0f, 1.0f);
 		push.flags = glm::ivec4(flags | (style.shading ? 128 : 0), static_cast<int>(style.style), 0, 0);
+		{
+			// Bricked volumes: flags.z = brick size, and the volume's voxel counts ride in the
+			// otherwise unused w components of cameraWorld and the clip-box limits.
+			std::lock_guard<std::mutex> lock(brickMutex());
+			auto it = brickTables().find(this);
+			if (it != brickTables().end())
+			{
+				auto attached = it->second.attached.find(slot);
+				if (attached != it->second.attached.end())
+				{
+					const BrickedState& state = brickedState(this, attached->second, "drawVolume");
+					push.flags.z = static_cast<int>(state.description.brickSize);
+					push.cameraWorld.w = static_cast<float>(state.description.voxels.x);
+					push.clipBoxMinimum.w = static_cast<float>(state.description.voxels.y);
+					push.clipBoxMaximum.w = static_cast<float>(state.description.voxels.z);
+				}
+			}
+		}
 		vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, volumePipeline_);
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
 			volumePipelineLayout_, 0, 1, &descriptorSets_[imageIndex], 0, nullptr);

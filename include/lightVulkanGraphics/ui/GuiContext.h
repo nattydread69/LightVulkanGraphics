@@ -238,6 +238,8 @@ public:
 
 	WidgetId hoveredId() const { return m_hoveredId; }
 	WidgetId activeId()  const { return m_activeId; }
+	// Size of the display in logical pixels as of the last beginFrame() ((0, 0) before it).
+	Vec2 displaySize() const { return m_lastDisplaySize; }
 	WidgetId focusedId() const { return m_focusedId; }
 	void     setFocus(Widget*);
 	void     clearFocus();
