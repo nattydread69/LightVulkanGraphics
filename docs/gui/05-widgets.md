@@ -948,6 +948,8 @@ once and shown/hidden (the "Modal panels" pattern below). Both derive from
   folder that looks empty doesn't look broken.
 - **Remembered between `open()` calls** on the same dialog object: folder, sort column
   and direction, file type, Hidden. The search text is cleared on each `open()`.
+- **New folder.** The **+** button beside Up reveals a name field; Enter or **Create** makes
+  the folder in the current one and selects it. Disabled with navigation off.
 - **Open.** Confirms an existing file only (Open, double-click, or Enter — the list has
   focus as soon as the dialog opens). Open with nothing selected says "Select a file
   first."
@@ -962,7 +964,8 @@ once and shown/hidden (the "Modal panels" pattern below). Both derive from
 
 `onConfirm` fires once with the full path; `onCancel` fires for Cancel, the title-bar X
 and Escape (all `requestClose()`), never after a confirm. The parts are reachable for
-restyling and tests — `fileList()`, `pathField()`, `upButton()`, `searchField()`,
+restyling and tests — `fileList()`, `pathField()`, `upButton()`, `newFolderButton()`,
+`newFolderField()`, `newFolderCreateButton()`, `searchField()`,
 `fileTypeDropDown()`, `hiddenFilesToggle()`, `statusLabel()`, `confirmButton()`,
 `cancelButton()`, plus `filenameField()`, `overwritePanel()`, `replaceButton()` and
 `keepExistingButton()` on `SaveFileDialog`.

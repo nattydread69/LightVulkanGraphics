@@ -21,6 +21,9 @@ option(LVG_ENABLE_WARNINGS "Enable recommended compiler warnings for project tar
 option(LVG_WARNINGS_AS_ERRORS "Treat warnings as errors for project targets" OFF)
 option(LVG_ENABLE_SANITIZERS "Enable Address/Undefined sanitizers for supported toolchains" OFF)
 option(LVG_BUILD_UI "Build the LVGUI GUI layer" ON)
+# LGPL consumers can keep the library replaceable by opting into a shared build.
+# Static is the default for release-oriented application bundles.
+option(LVG_BUILD_SHARED "Build the core LightVulkanGraphics library as a shared library" OFF)
 # By default LVGUI is a static archive in the core library's link interface, so any
 # consumer that instantiates widgets statically links LGPL code. A shared LVGUI
 # keeps the whole library dynamically linked, which proprietary consumers need.
@@ -395,14 +398,18 @@ file(GLOB_RECURSE LVGUI_EXCLUDED_SOURCES
 )
 list(REMOVE_ITEM SOURCES ${LVGUI_EXCLUDED_SOURCES})
 
-add_library(${PROJECT_NAME} SHARED ${SOURCES})
+if(LVG_BUILD_SHARED)
+	add_library(${PROJECT_NAME} SHARED ${SOURCES})
+	set_target_properties(${PROJECT_NAME} PROPERTIES
+		VERSION ${PROJECT_VERSION}
+		SOVERSION ${LVG_ABI_VERSION})
+else()
+	add_library(${PROJECT_NAME} STATIC ${SOURCES})
+endif()
 set_target_properties(${PROJECT_NAME} PROPERTIES
 	OUTPUT_NAME "LightVulkanGraphics"
-	VERSION ${PROJECT_VERSION}
-	SOVERSION ${LVG_ABI_VERSION}
 	EXPORT_NAME ${LVG_PACKAGE_NAME}
-    DEBUG_POSTFIX ""
-)
+	DEBUG_POSTFIX "")
 add_library(${LVG_PACKAGE_NAME} ALIAS ${PROJECT_NAME})
 add_library(${LVG_PACKAGE_NAME}::${LVG_PACKAGE_NAME} ALIAS ${PROJECT_NAME})
 

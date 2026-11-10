@@ -23,7 +23,8 @@
 // (the About-dialog pattern in docs/gui/05-widgets.md, "Panel", "Modal panels"),
 // holding, top to bottom:
 //
-//   [^] [ /current/folder/path                              ]   navigation row
+//   [^][+] [ /current/folder/path                           ]   navigation row
+//   [ New folder name          ] [Create]      (shown by [+])   new-folder row
 //   [ Search...                ] [ Files (*.csv)  v ] Hidden [ ]  filter row
 //   +-----------------------------------------------------------+
 //   | Name ^                       |     Size | Modified         |  FileListView
@@ -34,6 +35,8 @@
 //   3 files, 1 folder                                            status line
 //                                          [  Open  ] [ Cancel ] buttons
 //
+// [+] reveals a name field that creates a sub-folder of the current one (disabled when
+// navigation is off).
 // Folders can be entered by double-click/Enter and left with the Up button/Backspace, or
 // a path typed into the path field -- unless setNavigationEnabled(false) pins the dialog
 // to its starting folder. The file list grows with the dialog when it is resized.
@@ -58,6 +61,7 @@ class Button;
 class Checkbox;
 class DropDown;
 class Label;
+class Row;
 class TextBox;
 
 // One entry in the dialog's file-type dropdown.
@@ -130,6 +134,9 @@ public:
 	FileListView* fileList() const { return m_fileList; }
 	TextBox* pathField() const { return m_pathField; }
 	Button* upButton() const { return m_upButton; }
+	Button* newFolderButton() const { return m_newFolderButton; }
+	TextBox* newFolderField() const { return m_newFolderField; }
+	Button* newFolderCreateButton() const { return m_newFolderCreateButton; }
 	TextBox* searchField() const { return m_searchField; }
 	DropDown* fileTypeDropDown() const { return m_typeDropDown; }
 	Checkbox* hiddenFilesToggle() const { return m_hiddenToggle; }
@@ -187,6 +194,8 @@ private:
 	void updateStatusSummary();
 	void syncNavigationControls();
 	void rebuildTypeDropDown();
+	void toggleNewFolderRow();
+	void createFolder();
 
 	std::string m_directory;
 	std::string m_typedPath;   // the path field's text as of its last commit
@@ -204,6 +213,10 @@ private:
 	FileListView* m_fileList = nullptr;
 	TextBox* m_pathField = nullptr;
 	Button* m_upButton = nullptr;
+	Button* m_newFolderButton = nullptr;
+	Row* m_newFolderRow = nullptr;
+	TextBox* m_newFolderField = nullptr;
+	Button* m_newFolderCreateButton = nullptr;
 	TextBox* m_searchField = nullptr;
 	DropDown* m_typeDropDown = nullptr;
 	Checkbox* m_hiddenToggle = nullptr;

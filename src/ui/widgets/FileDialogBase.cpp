@@ -152,10 +152,13 @@ FileDialogBase::FileDialogBase(GuiContext& context, std::string title, std::stri
 
 	// ---- navigation row: [Up] [path] ----
 	auto* navRow = m_panel->add<Row>();
-	navRow->setWeights({ 1.0f, 13.0f });
+	navRow->setWeights({ 1.0f, 1.0f, 12.0f });
 	m_upButton = navRow->add<Button>("\xE2\x86\x91");   // U+2191 UPWARDS ARROW
 	m_upButton->setTooltip("Up one folder (Backspace)");
 	m_upButton->setOnClick([this] { navigateUp(); });
+	m_newFolderButton = navRow->add<Button>("+");
+	m_newFolderButton->setTooltip("Create a new folder here");
+	m_newFolderButton->setOnClick([this] { toggleNewFolderRow(); });
 	m_pathField = navRow->add<TextBox>("");
 	m_pathField->setTooltip("Type a folder and press Enter to go there");
 	// Enter goes to the typed folder; clicking away instead puts back the folder actually
@@ -172,6 +175,16 @@ FileDialogBase::FileDialogBase(GuiContext& context, std::string title, std::stri
 			setStatus("Folder not found: " + m_typedPath, true);
 		}
 	});
+
+	// ---- new-folder row (hidden until [+] is clicked): [name] [Create] ----
+	m_newFolderRow = m_panel->add<Row>();
+	m_newFolderRow->setWeights({ 5.0f, 1.0f });
+	m_newFolderRow->setVisible(false);
+	m_newFolderField = m_newFolderRow->add<TextBox>("");
+	m_newFolderField->setPlaceholder("New folder name");
+	m_newFolderField->setOnSubmit([this](std::string_view) { createFolder(); });
+	m_newFolderCreateButton = m_newFolderRow->add<Button>("Create");
+	m_newFolderCreateButton->setOnClick([this] { createFolder(); });
 
 	// ---- filter row: [search] [file type] Hidden [ ] ----
 	auto* filterRow = m_panel->add<Row>();
@@ -316,6 +329,37 @@ void FileDialogBase::navigateUp() {
 	navigateTo(toUtf8(current.parent_path()), toUtf8(current.filename()));
 }
 
+void FileDialogBase::toggleNewFolderRow() {
+	bool const show = m_navigationEnabled && !m_newFolderRow->visible();
+	m_newFolderRow->setVisible(show);
+	if (show) {
+		m_newFolderField->setText("", false);
+		m_context.setFocus(m_newFolderField);
+	}
+}
+
+void FileDialogBase::createFolder() {
+	std::string const name(m_newFolderField->text());
+	if (name.empty() || name == "." || name == ".." ||
+	    name.find_first_of("/\\") != std::string::npos) {
+		setStatus("Enter a folder name (no / or \\).", true);
+		return;
+	}
+	if (existsInDirectory(name)) {
+		setStatus("\"" + name + "\" already exists here.", true);
+		return;
+	}
+	std::error_code ec;
+	if (!fs::create_directory(fromUtf8(m_directory) / fromUtf8(name), ec) || ec) {
+		setStatus("Couldn't create folder: " + (ec ? ec.message() : std::string("unknown error")), true);
+		return;
+	}
+	m_newFolderRow->setVisible(false);
+	m_newFolderField->setText("", false);
+	rescan();
+	m_fileList->selectName(name, false);
+}
+
 void FileDialogBase::refresh() {
 	rescan();
 }
@@ -403,6 +447,10 @@ void FileDialogBase::syncNavigationControls() {
 	m_pathField->setReadOnly(!m_navigationEnabled);
 	bool const atRoot = !fromUtf8(m_directory).has_relative_path();
 	m_upButton->setEnabled(m_navigationEnabled && !atRoot);
+	m_newFolderButton->setEnabled(m_navigationEnabled);
+	if (!m_navigationEnabled) {
+		m_newFolderRow->setVisible(false);
+	}
 }
 
 void FileDialogBase::rescan() {

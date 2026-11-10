@@ -9,10 +9,27 @@ include(CMakeFindDependencyMacro)
 # Find required dependencies
 find_dependency(Vulkan REQUIRED)
 find_dependency(glm REQUIRED CONFIG)
+# Static archives retain unresolved references to their private link dependencies.
+# These targets therefore have to exist before the exported target file is loaded.
+if(NOT @LVG_BUILD_SHARED@)
+    find_dependency(glfw3 REQUIRED CONFIG)
+    # LVG accepts manually discovered Assimp installations at build time, so do
+    # not require an Assimp CMake package at consumption time. Several system
+    # packages ship broken exported targets even though their shared library and
+    # headers are usable.
+    if(NOT TARGET assimp::assimp)
+        find_path(_LVG_ASSIMP_INCLUDE_DIR NAMES assimp/Importer.hpp REQUIRED)
+        find_library(_LVG_ASSIMP_LIBRARY NAMES assimp REQUIRED)
+        add_library(assimp::assimp UNKNOWN IMPORTED GLOBAL)
+        set_target_properties(assimp::assimp PROPERTIES
+            IMPORTED_LOCATION "${_LVG_ASSIMP_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${_LVG_ASSIMP_INCLUDE_DIR}")
+    endif()
+endif()
 # LightVulkanGraphicsUI privately links glfw (see CMakeLists.txt's
 # LVG_GLFW_INSTALL_TARGET) -- only required when this install actually built the
 # UI layer, mirroring the LVG_BUILD_UI-gated install rules for its targets/headers.
-if(@LVG_BUILD_UI@)
+if(@LVG_BUILD_UI@ AND @LVG_BUILD_SHARED@)
     find_dependency(glfw3 REQUIRED CONFIG)
 endif()
 

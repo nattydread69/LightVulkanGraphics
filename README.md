@@ -93,6 +93,7 @@ macOS notes:
 ## Project Options
 
 Useful CMake options:
+- `-DLVG_BUILD_SHARED=ON` to build the core as a shared library (the default is a static archive)
 - `-DLVG_BUILD_EXAMPLES=OFF` to skip building the bundled examples
 - `-DLVG_BUILD_UI=OFF` to drop the LVGUI GUI layer entirely (on by default; see [GUI (LVGUI)](#gui-lvgui) below)
 - `-DLVG_BUILD_UI_SHARED=ON` to build LVGUI as a shared library instead of a static archive, so applications that use the GUI link no LGPL code statically (useful for proprietary applications; 3.2+)
@@ -289,6 +290,11 @@ annular arrow lying in its actual plane of rotation, rather than only as a
 conventional axial arrow perpendicular to that plane. Built on the custom
 mesh API, so it needs no Vulkan device to build or test. See
 `docs/rotation_glyphs.md` and the `rotation_glyph_example` target below.
+
+## Rigged Models
+A rig that is fine in its T-pose but distorted when animated is usually a bind-pose problem.
+See `docs/rigged_skinning.md` for the skinning correction modes, the diagnostic log lines,
+`LIGHT_VULKAN_GRAPHICS_RIGGED_SKINNING_MODE`, and a known pitfall with FBX written by assimp.
 
 ## Included Demo Targets
 - `demoVulkanGraphics`: bundled shape demo that ships in this repository and builds with the library

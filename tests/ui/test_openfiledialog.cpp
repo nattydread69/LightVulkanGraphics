@@ -322,6 +322,30 @@ namespace {
 		std::cout << "✓ testFoldersAreListedFirstAndDoubleClickEntersThem\n";
 	}
 
+	void testNewFolderButtonCreatesAndSelectsAFolder() {
+		TempDir dir;
+		dir.mkdir("existing");
+
+		lvgui::GuiContext ctx(testCreateInfo(), lvgui::PlatformHooks{});
+		lvgui::OpenFileDialog dlg(ctx, dir.path.string(), ".csv");
+		dlg.open();
+		step(ctx);
+
+		clickAt(ctx, centre(dlg.newFolderButton()));
+		step(ctx);
+
+		dlg.newFolderField()->setText("existing", false);
+		clickAt(ctx, centre(dlg.newFolderCreateButton()));
+		assert(fileList(dlg)->entries().size() == 1);   // name clash: nothing created
+
+		dlg.newFolderField()->setText("made", false);
+		clickAt(ctx, centre(dlg.newFolderCreateButton()));
+		assert(std::filesystem::is_directory(dir.path / "made"));
+		assert(selectedName(fileList(dlg)) == "made");
+
+		std::cout << "✓ testNewFolderButtonCreatesAndSelectsAFolder\n";
+	}
+
 	void testUpButtonAndBackspaceReturnToTheParentSelectingTheFolderLeft() {
 		TempDir dir;
 		dir.mkdir("one");
@@ -629,6 +653,7 @@ int main() {
 	testEscapeAlsoFiresOnCancel();
 	testReopenRefreshesFileListingAndClearsSelection();
 	testFoldersAreListedFirstAndDoubleClickEntersThem();
+	testNewFolderButtonCreatesAndSelectsAFolder();
 	testUpButtonAndBackspaceReturnToTheParentSelectingTheFolderLeft();
 	testOpenButtonOnAFolderEntersItInsteadOfConfirming();
 	testDoubleClickOrEnterOnAFileConfirmsIt();
