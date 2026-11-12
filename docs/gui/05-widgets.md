@@ -1750,3 +1750,27 @@ non-interactive, exactly matching "modal blocks INTERACTION, not the rest of the
 the bar stays visually present (drawn even on top of the modal backdrop) rather than
 flickering out of existence — there is just nothing it will do in response to a click
 while a modal has the floor.
+
+## AboutBox
+
+```cpp
+class AboutBox {
+public:
+    explicit AboutBox(GuiContext&, std::string title = "About");
+    void setImage(TextureId, Vec2 size);  void clearImage();   // centred, not stretched
+    void setName(std::string);            // heading face
+    void setVersion(std::string);         // dimmed, under the name
+    void setDescription(std::string);     // word-wrapped; "\n" = new line, blank line = gap
+    void setFooter(std::string);          // dimmed small print: copyright, licence
+    void setTitle(std::string);  void setWidth(float);   // default 420
+    void setOnClose(std::function<void()>);
+    void open();  void close();  bool isOpen() const;
+    Panel* panel() const;  Button* okButton() const;
+};
+```
+
+A Modal|Closable|Movable panel built once and toggled with `open()`/`close()`, like the
+file dialogs. The texture comes from `VkApp::registerUiTexture()` and is not owned by the
+box. Setters rebuild the contents immediately (also while open); the height is computed
+from the wrapped text, since the panel is neither Scrollable nor Resizable. `onClose`
+fires for OK, the title-bar X and Escape, not for a programmatic `close()`.

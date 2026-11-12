@@ -6,7 +6,15 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Splash screen
+- `SplashScreen`: a borderless image window with its own minimal Vulkan instance/device, so it can
+  be shown before `VkApp::init()` and kept alive (`pump()`) through a slow start-up, then
+  `close()`d (optionally after a minimum display time). Never throws; returns `nullptr` when
+  unavailable. See `examples/splash_demo.cpp`.
+
 ### GUI
+- `AboutBox`: a modal About dialog showing a centred graphic, name, version, word-wrapped
+  description and footer, with OK/Escape/X to close. Shown in `gui_demo` under Help > About.
 - `Panel::dragMoving()` and `GuiContext::displaySize()`, so a host can implement drop targets such as docking.
 
 ### Bricked volumes

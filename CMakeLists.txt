@@ -783,6 +783,10 @@ if (LVG_BUILD_EXAMPLES)
 		lvg_configure_build_tree_example(fbx_model_inspector)
 		target_link_libraries(fbx_model_inspector PRIVATE LightVulkanGraphics::UI)
 
+		# Splash screen shown before VkApp::init() (no GUI dependency).
+		add_executable(splash_demo examples/splash_demo.cpp)
+		lvg_configure_build_tree_example(splash_demo)
+
 		# Instance-count/render-mode benchmark scene with an LVGUI performance overlay --
 		# see the same LightVulkanGraphicsUI-linking rationale on gui_demo just above.
 		add_executable(perf_overlay_demo examples/perf_overlay_demo.cpp)

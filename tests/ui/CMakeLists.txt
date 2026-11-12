@@ -245,6 +245,18 @@ target_compile_definitions(lvgui_savefiledialog_tests PRIVATE
 
 add_test(NAME lvgui_savefiledialog_tests COMMAND lvgui_savefiledialog_tests)
 
+# AboutBox -- headless, same pattern as the dialog tests above: no Vulkan device.
+add_executable(lvgui_aboutbox_tests
+	test_aboutbox.cpp
+)
+target_link_libraries(lvgui_aboutbox_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_aboutbox_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_aboutbox_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_aboutbox_tests COMMAND lvgui_aboutbox_tests)
+
 # OpenFileDialog -- headless, same pattern as tests above. SaveFileDialog's
 # counterpart; exercises real directory scanning against a temp directory it
 # creates/removes itself.

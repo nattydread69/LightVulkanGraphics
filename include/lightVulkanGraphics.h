@@ -25,6 +25,7 @@
 #include "RotationGlyph.h"
 #include "SceneGraph.h"
 #include "VkApp.h"
+#include "SplashScreen.h"
 #include <string>
 #include <vector>
 #include <tuple>

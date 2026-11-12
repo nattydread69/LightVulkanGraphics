@@ -145,6 +145,29 @@ int main()
 			{ "Text (*.md, *.txt, *.csv, *.json)", { ".md", ".txt", ".csv", ".json" } },
 		});
 
+		// AboutBox: a modal panel with a graphic, name, version, wrapped text and a footer.
+		// The logo is a generated 96x96 RGBA tile uploaded via registerUiTexture().
+		constexpr int kLogoSize = 96;
+		std::vector<std::uint8_t> logoPixels(static_cast<std::size_t>(kLogoSize) * kLogoSize * 4);
+		for (int y = 0; y < kLogoSize; ++y) {
+			for (int x = 0; x < kLogoSize; ++x) {
+				float const dx = (x - kLogoSize * 0.5f) / (kLogoSize * 0.5f);
+				float const dy = (y - kLogoSize * 0.5f) / (kLogoSize * 0.5f);
+				float const r = std::sqrt(dx * dx + dy * dy);
+				lvgui::Color c = lvgui::Color::fromHSV(220.0f + 80.0f * (y / float(kLogoSize)), 0.7f, 0.95f);
+				std::uint8_t* p = &logoPixels[(static_cast<std::size_t>(y) * kLogoSize + x) * 4];
+				p[0] = c.r; p[1] = c.g; p[2] = c.b;
+				p[3] = r < 0.95f ? 0xFF : 0x00;   // round logo; transparent corners
+			}
+		}
+		lvgui::AboutBox aboutBox(gui);
+		aboutBox.setName("LVGUI Demo");
+		aboutBox.setVersion("Version 1.0");
+		aboutBox.setDescription("A tour of the lightVulkanGraphics GUI widgets.\n\nThe About box shows a graphic, "
+		                        "text that wraps to the box width, and a footer line.");
+		aboutBox.setFooter("Copyright (C) 2026 Dr. Nathanael John Inkson. LGPL-3.0-or-later.");
+		aboutBox.setImage(app.registerUiTexture(logoPixels.data(), kLogoSize, kLogoSize), { 96.0f, 96.0f });
+
 		// docs/gui/05-widgets.md, "MenuBar": a single, global row of dropdown menus fixed
 		// to the window's top edge -- unlike TabBar, which groups widgets within one
 		// panel. Every panel below is positioned well clear of its default height
@@ -163,6 +186,9 @@ int main()
 
 			auto view = gui.menuBar().addMenu("View");
 			view.addItem("Reset Camera", [&app] { app.setCameraLookAt({ 4.0f, 2.5f, 6.0f }, { 0.0f, 0.0f, 0.0f }); });
+
+			auto help = gui.menuBar().addMenu("Help");
+			help.addItem("About", [&aboutBox] { aboutBox.open(); });
 		}
 
 		// A second, smaller panel behind the main one, purely so clicking it demonstrates
