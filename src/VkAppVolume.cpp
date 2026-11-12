@@ -372,19 +372,6 @@ void VkApp::clearMeshDraws()
 	rebuildOrderedDrawResources();
 }
 
-void VkApp::waitIdleBeforeResourceDestroy()
-{
-	// Same guard as removeRiggedObject(): frames still in flight may reference the
-	// resource, and freeing it under them is a use-after-free on the GPU.
-	if (sceneFinalized_ && device_ != VK_NULL_HANDLE)
-	{
-		const VkResult result = vkDeviceWaitIdle(device_);
-		if (result != VK_SUCCESS)
-		{
-			throw std::runtime_error("vkDeviceWaitIdle failed before destroying a resource");
-		}
-	}
-}
 
 void VkApp::destroyMesh(MeshHandle handle)
 {
@@ -397,7 +384,6 @@ void VkApp::destroyMesh(MeshHandle handle)
 	{
 		throw std::invalid_argument("Mesh handle is stale");
 	}
-	waitIdleBeforeResourceDestroy();
 	meshDrawRequests_.erase(
 		std::remove_if(meshDrawRequests_.begin(), meshDrawRequests_.end(),
 			[handle](const MeshDrawRequest& request)
@@ -407,8 +393,15 @@ void VkApp::destroyMesh(MeshHandle handle)
 			}),
 		meshDrawRequests_.end());
 	rebuildOrderedDrawResources();
-	destroyBuffer(device_, mesh.vertexBuffer);
-	destroyBuffer(device_, mesh.indexBuffer);
+	// Frames in flight may still draw it: destroy the buffers once they have completed
+	// (see retire()) instead of idling the device.
+	retire([this, vertexBuffer = mesh.vertexBuffer, indexBuffer = mesh.indexBuffer]() mutable
+	{
+		destroyBuffer(device_, vertexBuffer);
+		destroyBuffer(device_, indexBuffer);
+	});
+	mesh.vertexBuffer = {};
+	mesh.indexBuffer = {};
 	mesh.alive = false;
 	++mesh.generation;
 	freeCustomMeshes_.push_back(handle.index);
@@ -472,7 +465,6 @@ void VkApp::destroyMaterial(MaterialHandle handle)
 	{
 		throw std::invalid_argument("Material handle is invalid or stale");
 	}
-	waitIdleBeforeResourceDestroy();
 	MaterialResource& material = materials_[handle.index];
 	meshDrawRequests_.erase(
 		std::remove_if(meshDrawRequests_.begin(), meshDrawRequests_.end(),
@@ -482,8 +474,11 @@ void VkApp::destroyMaterial(MaterialHandle handle)
 					request.material.generation == handle.generation;
 			}), meshDrawRequests_.end());
 	rebuildOrderedDrawResources();
-	vkDestroyPipeline(device_, material.pipeline, nullptr);
-	vkDestroyPipelineLayout(device_, material.layout, nullptr);
+	retire([device = device_, pipeline = material.pipeline, layout = material.layout]()
+	{
+		vkDestroyPipeline(device, pipeline, nullptr);
+		vkDestroyPipelineLayout(device, layout, nullptr);
+	});
 	material.pipeline = VK_NULL_HANDLE;
 	material.layout = VK_NULL_HANDLE;
 	material.alive = false;
@@ -764,13 +759,16 @@ void VkApp::destroyTexture3D(Texture3DHandle handle)
 			throw std::logic_error("Texture3D is still referenced by a volume");
 		}
 	}
-	waitIdleBeforeResourceDestroy();
 	Texture3DResource& texture = textures3D_[handle.index];
 	const std::uint32_t nextGeneration = texture.generation + 1;
-	vkDestroySampler(device_, texture.sampler, nullptr);
-	vkDestroyImageView(device_, texture.view, nullptr);
-	vkDestroyImage(device_, texture.image, nullptr);
-	vkFreeMemory(device_, texture.memory, nullptr);
+	retire([device = device_, sampler = texture.sampler, view = texture.view,
+		image = texture.image, memory = texture.memory]()
+	{
+		vkDestroySampler(device, sampler, nullptr);
+		vkDestroyImageView(device, view, nullptr);
+		vkDestroyImage(device, image, nullptr);
+		vkFreeMemory(device, memory, nullptr);
+	});
 	texture = Texture3DResource{};
 	texture.generation = nextGeneration;
 	freeTextures3D_.push_back(handle.index);
@@ -1188,9 +1186,11 @@ void VkApp::destroyTransferFunction(TransferFunctionHandle handle)
 			throw std::logic_error("Transfer function is still referenced by a volume");
 		}
 	}
-	waitIdleBeforeResourceDestroy();
 	TransferFunctionResource& transfer = transferFunctions_[handle.index];
-	destroyTexture(*transfer.texture);
+	if (transfer.texture)
+	{
+		retire([this, texture = transfer.texture]() { destroyTexture(*texture); });
+	}
 	transfer.texture.reset();
 	transfer.points.clear();
 	transfer.alive = false;
@@ -1330,11 +1330,16 @@ void VkApp::destroyVolume(VolumeHandle handle)
 	{
 		throw std::invalid_argument("Volume handle is invalid or stale");
 	}
-	waitIdleBeforeResourceDestroy();
 	VolumeResource& volume = volumes_[handle.index];
 	if (volume.descriptor != VK_NULL_HANDLE)
 	{
-		vkFreeDescriptorSets(device_, textureDescriptorPool_, 1, &volume.descriptor);
+		retire([this, descriptor = volume.descriptor]() mutable
+		{
+			if (textureDescriptorPool_ != VK_NULL_HANDLE)
+			{
+				vkFreeDescriptorSets(device_, textureDescriptorPool_, 1, &descriptor);
+			}
+		});
 		volume.descriptor = VK_NULL_HANDLE;
 	}
 	destroyMesh(volume.proxyMesh);

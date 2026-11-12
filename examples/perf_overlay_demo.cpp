@@ -42,18 +42,27 @@
 // See docs/gui_usage.md for a guide to the GUI layer and docs/gui/05-widgets.md for the
 // full per-widget spec.
 
+#include "RiggedAnimation.h"
+#include "RiggedObject.h"
 #include "VkApp.h"
 #include <lightVulkanGraphics/ui/Ui.h>
 
+#include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <exception>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -142,6 +151,17 @@ struct BenchmarkScene
 
 	float animTime = 0.0f;
 
+	// Animated rigged characters (assets/Worker.fbx, loaded once and shared): the
+	// skinning load, alongside the flexible-shape instances above.
+	std::vector<std::shared_ptr<lightGraphics::RiggedObject>> characters;
+	std::vector<lightGraphics::RiggedObjectHandle> characterHandles;
+	std::shared_ptr<lightGraphics::RiggedModel> characterModel;
+	bool characterModelFailed = false;
+	int characterAnimation = -1;
+	// --serial-animation: update characters one by one on this thread, for comparison.
+	bool serialAnimation = false;
+	lvgui::Label* characterLabel = nullptr;
+
 	std::deque<float> frameTimesMs;
 	static constexpr std::size_t kFrameWindow = 120; // 2s at 60fps
 
@@ -191,6 +211,87 @@ struct BenchmarkScene
 		}
 		updateScratch.resize(handles.size());
 		frameCamera(cols, spacing);
+		positionCharacters();
+	}
+
+	// Characters stand in a square block on top of the shape field, centred on the
+	// origin the camera looks at, facing the camera.
+	void positionCharacters()
+	{
+		const int perRow = gridColumns(characters.size());
+		constexpr float kCharacterSpacing = 1.3f;
+		constexpr float kStandHeight = 0.75f; // just above the bobbing 0.6-unit shapes
+		const glm::quat upright = glm::angleAxis(glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		const glm::quat faceCamera = glm::angleAxis(glm::radians(45.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		for (std::size_t i = 0; i < characters.size(); ++i)
+		{
+			glm::vec3 position = gridPosition(i, perRow, kCharacterSpacing);
+			position.y = kStandHeight;
+			characters[i]->setPosition(position);
+			characters[i]->setRotation(faceCamera * upright);
+		}
+	}
+
+	bool ensureCharacterModel()
+	{
+		if (characterModel)
+		{
+			return true;
+		}
+		if (characterModelFailed)
+		{
+			return false;
+		}
+		const std::filesystem::path modelPath =
+			std::filesystem::path(__FILE__).parent_path().parent_path() / "assets" / "Worker.fbx";
+		auto first = std::make_shared<lightGraphics::RiggedObject>(
+			glm::vec3(0.0f), glm::vec3(1.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+			"BenchCharacter", 1.0f, modelPath.string());
+		if (!first->getModel())
+		{
+			std::cerr << "[perf-overlay] Could not load " << modelPath << ": "
+			          << first->getLastError() << std::endl;
+			characterModelFailed = true;
+			return false;
+		}
+		characterModel = first->getModel();
+		characterAnimation = first->getAnimationCount() > 23 ? 23 : (first->getAnimationCount() > 0 ? 0 : -1);
+		return true;
+	}
+
+	void setCharacterCount(std::size_t newCount)
+	{
+		newCount = std::min<std::size_t>(newCount, 512);
+		if (newCount > 0 && !ensureCharacterModel())
+		{
+			newCount = 0;
+		}
+		while (characters.size() < newCount)
+		{
+			auto character = std::make_shared<lightGraphics::RiggedObject>(
+				glm::vec3(0.0f), glm::vec3(1.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f),
+				"BenchCharacter", 1.0f, characterModel);
+			if (characterAnimation >= 0)
+			{
+				character->playAnimation(characterAnimation, true);
+				// Staggered so every character has its own pose each frame.
+				character->setAnimationTime(0.37f * static_cast<float>(characters.size()));
+			}
+			characters.push_back(character);
+			positionCharacters();
+			characterHandles.push_back(app.addRiggedObjectHandle(character));
+		}
+		while (characters.size() > newCount)
+		{
+			app.removeRiggedObject(characterHandles.back());
+			characterHandles.pop_back();
+			characters.pop_back();
+		}
+		positionCharacters();
+		if (characterLabel)
+		{
+			characterLabel->setText(std::to_string(characters.size()) + " animated character(s)");
+		}
 	}
 
 	// Frames the camera so the whole grid stays in view regardless of instance count --
@@ -279,6 +380,21 @@ struct BenchmarkScene
 			}
 			app.updateObjectPositions(updateScratch);
 		}
+		if (animate)
+		{
+			if (serialAnimation)
+			{
+				for (const auto& character : characters)
+				{
+					character->updateAnimation(deltaTime);
+				}
+			}
+			else
+			{
+				// All characters at once, on LVG's worker threads (same result).
+				lightGraphics::updateAnimations(characters, deltaTime);
+			}
+		}
 
 		float frameMs = deltaTime * 1000.0f;
 		frameTimesMs.push_back(frameMs);
@@ -336,15 +452,161 @@ struct BenchmarkScene
 	}
 };
 
+// Scripted measurement (--bench SECONDS): after --warmup seconds, records the interval
+// between update callbacks (one per frame) for SECONDS, prints one "BENCH" line and closes
+// the window. Run with LVG_PRESENT_MODE=uncapped so frames are not held at the monitor's
+// refresh rate; LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu compares CPU skinning.
+struct BenchRecorder
+{
+	double benchSeconds = 0.0;
+	double warmupSeconds = 3.0;
+	bool started = false;
+	bool finished = false;
+	std::chrono::steady_clock::time_point startTime{};
+	std::chrono::steady_clock::time_point lastFrameTime{};
+	double cpuStart = 0.0;
+	std::vector<double> frameMs;
+
+	static double processCpuSeconds()
+	{
+		return static_cast<double>(std::clock()) / static_cast<double>(CLOCKS_PER_SEC);
+	}
+
+	// Returns true once the measurement is complete (the caller closes the window).
+	bool sample(std::size_t instances, std::size_t characters)
+	{
+		if (benchSeconds <= 0.0 || finished)
+		{
+			return false;
+		}
+		const auto now = std::chrono::steady_clock::now();
+		if (!started)
+		{
+			started = true;
+			startTime = now;
+			return false;
+		}
+		const double sinceStart = std::chrono::duration<double>(now - startTime).count();
+		if (sinceStart < warmupSeconds)
+		{
+			lastFrameTime = now;
+			cpuStart = processCpuSeconds();
+			return false;
+		}
+		frameMs.push_back(std::chrono::duration<double, std::milli>(now - lastFrameTime).count());
+		lastFrameTime = now;
+		if (sinceStart < warmupSeconds + benchSeconds)
+		{
+			return false;
+		}
+
+		finished = true;
+		const double cpuSeconds = processCpuSeconds() - cpuStart;
+		std::vector<double> sorted = frameMs;
+		std::sort(sorted.begin(), sorted.end());
+		double total = 0.0;
+		for (double ms : sorted)
+		{
+			total += ms;
+		}
+		const std::size_t count = sorted.size();
+		auto percentile = [&](double p)
+		{
+			return sorted[std::min(count - 1, static_cast<std::size_t>(p * static_cast<double>(count - 1) + 0.5))];
+		};
+		const double meanMs = total / static_cast<double>(count);
+		std::cout << std::fixed << std::setprecision(3)
+		          << "BENCH instances=" << instances
+		          << " characters=" << characters
+		          << " frames=" << count
+		          << " mean_ms=" << meanMs
+		          << " fps=" << 1000.0 / meanMs
+		          << " p50_ms=" << percentile(0.50)
+		          << " p95_ms=" << percentile(0.95)
+		          << " p99_ms=" << percentile(0.99)
+		          << " max_ms=" << sorted.back()
+		          << " cpu_ms_per_frame=" << 1000.0 * cpuSeconds / static_cast<double>(count)
+		          << std::endl;
+		return true;
+	}
+};
+
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+	std::size_t initialInstances = 1000;
+	std::size_t initialCharacters = 0;
+	BenchRecorder bench;
+	// --static: nothing moves, so --capture is deterministic. --no-cull: frustum culling
+	// off, which must not change the picture (culled objects are off-screen), so the pair
+	// of captures checks culling and the shadow pass. --capture: save the 30th frame as a
+	// PNG and exit.
+	bool staticScene = false;
+	bool serialAnimation = false;
+	// --churn K: every K frames remove one character and add one back, to measure the
+	// hitch of adding or removing rigged objects in a live scene (see BENCH max_ms).
+	int churnEvery = 0;
+	bool noCull = false;
+	std::string capturePath;
+	for (int i = 1; i < argc; ++i)
+	{
+		const std::string arg = argv[i];
+		const bool hasValue = i + 1 < argc;
+		if (arg == "--instances" && hasValue)
+		{
+			initialInstances = static_cast<std::size_t>(std::max(1, std::atoi(argv[++i])));
+		}
+		else if (arg == "--characters" && hasValue)
+		{
+			initialCharacters = static_cast<std::size_t>(std::max(0, std::atoi(argv[++i])));
+		}
+		else if (arg == "--bench" && hasValue)
+		{
+			bench.benchSeconds = std::max(0.0, std::atof(argv[++i]));
+		}
+		else if (arg == "--warmup" && hasValue)
+		{
+			bench.warmupSeconds = std::max(0.0, std::atof(argv[++i]));
+		}
+		else if (arg == "--churn" && hasValue)
+		{
+			churnEvery = std::max(0, std::atoi(argv[++i]));
+		}
+		else if (arg == "--serial-animation")
+		{
+			serialAnimation = true;
+		}
+		else if (arg == "--static")
+		{
+			staticScene = true;
+		}
+		else if (arg == "--no-cull")
+		{
+			noCull = true;
+		}
+		else if (arg == "--capture" && hasValue)
+		{
+			capturePath = argv[++i];
+		}
+		else
+		{
+			std::cout << "Usage: perf_overlay_demo [--instances N] [--characters N]"
+			             " [--bench SECONDS] [--warmup SECONDS] [--static] [--no-cull]"
+			             " [--capture OUT.png] [--churn FRAMES] [--serial-animation]" << std::endl;
+			return 1;
+		}
+	}
+
 	try
 	{
 		lightGraphics::VkApp app;
 		app.init(1280, 800, "Performance Overlay");
 		app.setKeyboardCameraEnabled(true);
+		if (noCull)
+		{
+			app.setFrustumCullingEnabled(false);
+		}
 		app.finalizeScene();
 
 		if (!app.hasGui())
@@ -356,6 +618,8 @@ int main()
 
 		auto& gui = app.gui();
 		BenchmarkScene scene{ app };
+		scene.animate = !staticScene;
+		scene.serialAnimation = serialAnimation;
 
 		{
 			auto view = gui.menuBar().addMenu("View");
@@ -404,6 +668,15 @@ int main()
 
 		scene.liveCountLabel = sceneSection->add<lvgui::Label>("0 instance(s)");
 
+		auto* characterSlider = sceneSection->add<lvgui::SliderInt>("Characters", 0, 512,
+			static_cast<int>(initialCharacters));
+		characterSlider->setScale(lvgui::SliderScale::Logarithmic);
+		characterSlider->setTooltip("Animated rigged characters (Worker.fbx), applied on release. "
+			"Each is skinned every frame: on the GPU by default, on the CPU with "
+			"LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu.");
+		characterSlider->setOnCommit([&scene](int v) { scene.setCharacterCount(static_cast<std::size_t>(v)); });
+		scene.characterLabel = sceneSection->add<lvgui::Label>("0 animated character(s)");
+
 		static bool animateState = scene.animate;
 		auto* animateCheckbox = sceneSection->add<lvgui::Checkbox>("Animate (per-frame position updates)", animateState);
 		animateCheckbox->bind(&animateState);
@@ -442,8 +715,8 @@ int main()
 		});
 
 		auto* fixedNote = sceneSection->add<lvgui::Label>(
-			"Note: this build fixes MSAA at 1 sample and V-Sync on (FIFO) -- neither is a "
-			"runtime option in the renderer today.");
+			"Note: MSAA is fixed at 1 sample, and frames are paced to the monitor's refresh "
+			"rate. Launch with LVG_PRESENT_MODE=uncapped to measure beyond it.");
 		fixedNote->setWordWrap(true);
 		fixedNote->setColor(lvgui::Color{ 0x9A, 0xA3, 0xAF, 0xFF });
 
@@ -467,7 +740,28 @@ int main()
 		// only ever excludes the rare case a modal is open. Also this demo's most reliable
 		// path for scripted testing: `xdotool key Left` cycles the render-mode radio group
 		// where a synthetic click on a specific radio button is not.
-		app.setUpdateCallback([&scene, &gui, countSlider](float deltaTime) {
+		int captureFrame = 0;
+		bool captureRequested = false;
+		int churnFrame = 0;
+		app.setUpdateCallback([&scene, &gui, &app, &bench, countSlider, &capturePath, &captureFrame,
+			&captureRequested, churnEvery, &churnFrame](float deltaTime) {
+			if (!capturePath.empty() && !captureRequested && ++captureFrame >= 30)
+			{
+				captureRequested = true;
+				app.requestFrameCapture([&app, &capturePath](const lightGraphics::CapturedFrame& frame)
+				{
+					std::string error;
+					if (!frame.ok || !lightGraphics::VkApp::writePng(capturePath, frame, &error))
+					{
+						std::cout << "CAPTURE failed: " << (frame.ok ? error : frame.error) << std::endl;
+					}
+					else
+					{
+						std::cout << "CAPTURE wrote " << capturePath << std::endl;
+					}
+					glfwSetWindowShouldClose(app.getWindowPointer(), GLFW_TRUE);
+				});
+			}
 			if (!gui.wantsKeyboard())
 			{
 				for (const lvgui::KeyEvent& ev : gui.input().keyQueue)
@@ -493,10 +787,27 @@ int main()
 				}
 			}
 			scene.tick(deltaTime);
+			if (churnEvery > 0 && !scene.characters.empty() && ++churnFrame % churnEvery == 0)
+			{
+				const std::size_t count = scene.characters.size();
+				scene.setCharacterCount(count - 1);
+				scene.setCharacterCount(count);
+			}
+			if (bench.sample(scene.handles.size(), scene.characters.size()))
+			{
+				glfwSetWindowShouldClose(app.getWindowPointer(), GLFW_TRUE);
+			}
 		});
 
 		// Seed the initial grid now that every widget it touches has been created.
-		scene.setInstanceCount(scene.targetCount);
+		const auto setupStart = std::chrono::steady_clock::now();
+		scene.setInstanceCount(initialInstances);
+		countSlider->setValue(static_cast<int>(scene.targetCount), false);
+		scene.setCharacterCount(initialCharacters);
+		std::cout << "SETUP instances=" << scene.handles.size()
+		          << " characters=" << scene.characters.size() << " ms="
+		          << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - setupStart).count()
+		          << std::endl;
 
 		app.run();
 		return 0;

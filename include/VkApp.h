@@ -29,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <vector>
 #include <functional>
 #include <memory>
@@ -48,6 +49,7 @@ struct GLFWwindow;
 namespace lightGraphics::detail
 {
 	enum class RiggedSkinningBindCorrectionMode : int;
+	struct ObjectRenderFlags;
 
 	struct Vertex
 	{
@@ -185,6 +187,7 @@ namespace lightGraphics
 	class SceneGraph;
 	struct EmbeddedTextureData;
 	struct RiggedMesh;
+	struct Bone;
 	struct RiggedModel;
 	struct DecodedTexturePixels;
 
@@ -810,6 +813,12 @@ namespace lightGraphics
 		VkPipelineLayout riggedPipelineLayout_ = VK_NULL_HANDLE;
 
 	private:
+		// GPU skinning compute pipeline (rigged_skin.comp); see ensureSkinningPipeline().
+		VkDescriptorSetLayout skinSetLayout_ = VK_NULL_HANDLE;
+		VkPipelineLayout skinPipelineLayout_ = VK_NULL_HANDLE;
+		VkPipeline skinPipeline_ = VK_NULL_HANDLE;
+		bool skinPipelineAttempted_ = false;
+
 		RenderMode currentRenderMode_ = RenderMode::FLEXIBLE_SHAPES;
 
 		// Custom shader path (overrides automatic detection)
@@ -1017,6 +1026,24 @@ namespace lightGraphics
 		detail::Buffer instanceBufs_[MAX_FRAMES_IN_FLIGHT]{};
 		void* instanceBufferMappedPerFrame_[MAX_FRAMES_IN_FLIGHT]{}; // Persistently mapped per frame
 		VkDeviceSize instanceBufferSizes_[MAX_FRAMES_IN_FLIGHT]{}; // Size per frame
+		// Per-frame instance buffer layout, written during recordCommandBuffer() from
+		// instanceDataCache_ (no per-pass rebuild):
+		//   [0, N)      main flexible-shape pass: opaque groups, then overlay, then
+		//               transparent objects (frustum-culled, so at most N in total);
+		//   [N, N + S)  shadow casters (not culled; S <= N).
+		// N = object count; the buffers are sized for 2N. The shadow range used to start
+		// at 0 too, so the main pass overwrote it during recording and shadow draws read
+		// the main pass's (culled, reordered) instances.
+		// Scratch for the per-frame shape grouping, kept so the vectors' capacity is
+		// reused instead of reallocated every frame.
+		std::vector<std::vector<size_t>> shadowShapeGroupsScratch_;
+		std::vector<std::vector<size_t>> mainShapeGroupsScratch_;
+		std::vector<std::vector<size_t>> overlayShapeGroupsScratch_;
+		std::vector<std::vector<size_t>> transparentShapeGroupsScratch_;
+		std::vector<detail::Instance> instanceWriteScratch_;
+		// False until updateInstanceDataOptimized() has rebuilt every object's cache entry
+		// once after finalizeScene(): before it, setters do not mark objects dirty.
+		bool instanceCacheBuiltSinceFinalize_ = false;
 		// Set for every frame index whenever instanceDataCache_ changes, cleared only
 		// for the one index updateInstanceDataOptimized() actually memcpy's into this
 		// call -- see that function's own comment for why a global instanceDataDirty_
@@ -1053,9 +1080,28 @@ namespace lightGraphics
 			// happens every single frame forever for a mesh that's never animated
 			// (e.g. a static background mesh loaded via the rigged-object path) or
 			// simply held in a static pose.
+			//
+			// Cleared only once a frame that rebuilt that index's buffer has been
+			// submitted (markRiggedFrameSubmitted()): the copy or skinning dispatch is
+			// recorded into the frame's own command buffer (recordRiggedUploads()), and
+			// a command buffer recorded but never submitted (createCommandBuffers())
+			// must not count.
 			bool vertexBufferNeedsSync[MAX_FRAMES_IN_FLIGHT]{};
 			uint32_t indexCount = 0;
 			std::shared_ptr<detail::Texture> texture;
+			// GPU skinning (rigged_skin.comp; RiggedInstanceRenderData::gpuSkinning):
+			// the mesh's RiggedVertex data, uploaded once with its bone indices already
+			// remapped through uniqueBoneIndex; one descriptor set per frame in flight
+			// binding it, the instance's bone buffer for that frame and that frame's
+			// vertexBuffers[] entry (the output).
+			detail::Buffer skinSourceBuffer;
+			VkDescriptorSet skinDescriptorSets[MAX_FRAMES_IN_FLIGHT]{};
+			uint32_t vertexCount = 0;
+			// Mesh bone i's entry in RiggedInstanceRenderData::uniqueBoneMatrices.
+			std::vector<uint32_t> uniqueBoneIndex;
+			// Bones rigged_skin.comp may read for this mesh this frame: the instance's
+			// unique count, or 0 when the mesh is not skinned (no bones, or no pose).
+			uint32_t skinBoneCount = 0;
 		};
 		// The mesh's own MeshTranslucency if set, else its texture's
 		// hasTranslucentTexels. Read every frame, so an app can change a mesh's
@@ -1087,8 +1133,44 @@ namespace lightGraphics
 			// held static pose) instead of re-blending every vertex every frame.
 			std::vector<glm::mat4> lastBoneTransforms;
 			bool hasLastBoneTransforms = false;
+			// True: vertices are skinned on the GPU by rigged_skin.comp, and only the
+			// final bone matrices travel from the CPU (boneBuffers, persistently
+			// mapped, one per frame in flight). False: the CPU blends every vertex and
+			// uploads it through RiggedMeshRenderData::vertexUploadBuffers.
+			bool gpuSkinning = false;
+			// Distinct final bone matrices across all of this instance's meshes. Meshes
+			// usually share one skeleton and bind pose (Worker.fbx: 12 meshes reference 744
+			// mesh bones, all from 85 skeleton bones), so each distinct matrix is built once
+			// per frame from a representative mesh bone. Two mesh bones share an entry only
+			// when every input buildRiggedFinalBoneMatrix() reads differs in neither (same
+			// skeleton bone, bit-identical offset and mesh bind matrices), so the shared
+			// result is exactly what each would have produced.
+			struct UniqueBone
+			{
+				const RiggedMesh* mesh = nullptr;
+				const Bone* bone = nullptr;
+			};
+			std::vector<UniqueBone> uniqueBones;
+			std::vector<glm::mat4> uniqueBoneMatrices;
+			// The memory every buffer of this instance is bound into (one device-local and
+			// one host-visible allocation; see createRiggedInstanceBuffers()). The buffers'
+			// own Buffer::memory is then VK_NULL_HANDLE. Both stay VK_NULL_HANDLE if the
+			// fallback of one allocation per buffer was needed.
+			VkDeviceMemory deviceMemory = VK_NULL_HANDLE;
+			VkDeviceMemory hostMemory = VK_NULL_HANDLE;
+			detail::Buffer boneBuffers[MAX_FRAMES_IN_FLIGHT]{};
+			void* boneMapped[MAX_FRAMES_IN_FLIGHT]{};
+			VkDescriptorPool skinDescriptorPool = VK_NULL_HANDLE;
 		};
 		std::vector<RiggedInstanceRenderData> riggedInstances_;
+		// Skinning correction mode chosen for each RiggedModel at its first registration
+		// (see addRiggedObject()); entries whose model has gone are dropped on the next add.
+		struct ModelSkinningMode
+		{
+			std::weak_ptr<RiggedModel> model;
+			detail::RiggedSkinningBindCorrectionMode mode{};
+		};
+		std::unordered_map<const RiggedModel*, ModelSkinningMode> skinningModeByModel_;
 		std::vector<detail::HandleSlot> riggedObjectSlots_;
 		std::vector<std::uint32_t> freeRiggedObjectSlots_;
 		std::vector<std::uint32_t> riggedObjectSlotForIndex_;
@@ -1234,6 +1316,16 @@ namespace lightGraphics
 		void updateInstanceDataOptimized();
 		void ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize);
 		detail::Instance makeInstanceForObject(size_t index) const;
+		// The same, with the object's render flags already looked up (the lookup takes a
+		// global mutex, so loops over many objects fetch AppExtras once instead).
+		detail::Instance makeInstanceForObject(size_t index, const detail::ObjectRenderFlags& flags) const;
+		// instanceDataCache_[index] -- current for every object once
+		// updateInstanceDataOptimized() has run this frame -- or, if the cache has not
+		// caught up (it always has during recordCommandBuffer()), a fresh build.
+		detail::Instance cachedInstanceForObject(size_t index) const;
+		// Writes the cached instances of objectIndices, in order, to instances
+		// [firstInstance, firstInstance + size) of currentFrame_'s instance buffer.
+		void writeCachedInstances(uint32_t firstInstance, const std::vector<size_t>& objectIndices);
 		void clearObjectModelMatrixOverrideInternal(size_t index);
 
 		// Shared bookkeeping for the generation-checked handle indirection tables
@@ -1256,6 +1348,15 @@ namespace lightGraphics
 		                                     std::uint32_t generation,
 		                                     const char* what);
 		void updateRiggedInstances();
+		// Records this frame's rigged uploads/skinning dispatches into cmd (outside
+		// any render pass, before the shadow pass); see vertexBufferNeedsSync.
+		void recordRiggedUploads(VkCommandBuffer cmd);
+		void markRiggedFrameSubmitted(uint32_t frameIndex);
+		// Creates the skinning compute pipeline on first use; false (CPU skinning)
+		// when the graphics queue has no compute, the shader is missing, or
+		// LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu.
+		bool ensureSkinningPipeline();
+		void destroySkinningPipeline();
 		void destroyRiggedInstance(RiggedInstanceRenderData& instance);
 		void destroyRiggedInstances();
 		detail::MeshPtr make_cylinder(float radius, float height, int slices);
@@ -1308,6 +1409,9 @@ namespace lightGraphics
 		void createDescriptorSets();
 		void createCommandBuffers();
 		void createSyncObjects();
+		// renderFinishedSemaphores_, one per swapchain image (see the definition).
+		void createRenderFinishedSemaphores();
+		void destroyRenderFinishedSemaphores();
 
 		// Scene creation hooks
 		void createSceneResources();
@@ -1322,9 +1426,12 @@ namespace lightGraphics
 		void updateCameraFromKeyboard(float dtSeconds);
 		// Places camera_ on the orbit (position and yaw/pitch); see the orbit API comment.
 		void syncCameraToOrbit();
-		// Frame capture (VkAppCapture.cpp): after the frame's submit, copies the swapchain
-		// image to host memory and serves pending requestFrameCapture() callbacks.
-		void serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished);
+		// Frame capture (VkAppCapture.cpp), serving requestFrameCapture(): prepare before
+		// recording the frame, record into its command buffer after the main render pass,
+		// finish (wait for the frame's fence, deliver) after it is submitted.
+		void prepareFrameCapture(uint32_t imageIndex);
+		void recordFrameCapture(VkCommandBuffer cmd, uint32_t imageIndex);
+		void finishFrameCapture(VkFence frameFence);
 		void handleRiggedAnimationInput();
 		void updateUniformBuffer(uint32_t imageIndex);
 		void updateLightingBuffer(uint32_t imageIndex);
@@ -1352,9 +1459,74 @@ namespace lightGraphics
 			std::uint32_t height,
 			std::uint32_t depth);
 
-		// One‑shot command helpers
+		// One-shot command helpers. These record into the open upload batch rather than
+		// submitting and waiting per call: endSingleTimeCommands() returns at once, and
+		// the batch is submitted by flushUploads() -- from drawFrame() just before the
+		// frame (same queue, so the frame sees the uploads), or earlier once it is large.
+		// Never wait on the GPU here; nothing recorded this way may be read back on the
+		// host without flushUploads(true) first.
 		VkCommandBuffer beginSingleTimeCommands();
 		void endSingleTimeCommands(VkCommandBuffer cmd);
+
+		// One buffer to create inside createBuffersInOneAllocation(). `mapped`, if given,
+		// receives the buffer's persistent host pointer (host-visible memory only).
+		struct BufferRequest
+		{
+			detail::Buffer* buffer = nullptr;
+			VkDeviceSize size = 0;
+			VkBufferUsageFlags usage = 0;
+			void** mapped = nullptr;
+		};
+		// Creates every requested buffer and binds them all into one allocation of
+		// `properties` memory, which it returns (and, for host-visible memory, maps once,
+		// filling each request's `mapped`). The buffers' own Buffer::memory stays
+		// VK_NULL_HANDLE: free the returned allocation after destroying them. If no single
+		// memory type suits every buffer, falls back to one allocation per buffer (each
+		// Buffer then owns its memory, as from createBuffer()) and returns VK_NULL_HANDLE.
+		// Allocations are slow and their number is limited (often to 4096), so objects
+		// made of many buffers should use this rather than createBuffer() per buffer.
+		VkDeviceMemory createBuffersInOneAllocation(const std::vector<BufferRequest>& requests,
+		                                            VkMemoryPropertyFlags properties);
+		// All of a rigged instance's GPU buffers, in two allocations, with the initial
+		// index and skin-source data uploaded through one staging buffer.
+		void createRiggedInstanceBuffers(RiggedInstanceRenderData& instance);
+
+		// ---- Upload batching and deferred destruction (VkAppBuffer.cpp) ----
+		// Submits the open upload batch (with its own fence); waitForCompletion also waits
+		// for it and destroys whatever that makes safe.
+		void flushUploads(bool waitForCompletion);
+		// Runs `destroy` once every submission made so far has completed, so the GPU can
+		// no longer be using what it destroys. Replaces vkDeviceWaitIdle() before
+		// destroying a resource that frames in flight or pending uploads may reference.
+		void retire(std::function<void()> destroy);
+		// True while recorded or submitted uploads may still reference a resource being
+		// destroyed: destroyBuffer()/destroyTexture() then defer through retire().
+		bool uploadsMayReferenceResources() const;
+		// Destroys every retired resource that is now safe (polls the upload fences).
+		void collectRetired();
+		// The device is idle: destroys everything retired and frees finished uploads.
+		void drainRetired();
+		struct RetiredResource
+		{
+			std::uint64_t safeAfterSerial = 0;
+			std::function<void()> destroy;
+		};
+		struct InFlightUpload
+		{
+			VkCommandBuffer cmd = VK_NULL_HANDLE;
+			VkFence fence = VK_NULL_HANDLE;
+			std::uint64_t serial = 0;
+		};
+		VkCommandBuffer uploadCmd_ = VK_NULL_HANDLE;
+		std::size_t uploadCommandCount_ = 0;
+		std::vector<InFlightUpload> uploadsInFlight_;
+		std::deque<RetiredResource> retired_;
+		// Every tracked queue submission (upload batches and frames) gets the next serial.
+		// A fence signal guarantees all earlier submissions on the queue have completed,
+		// so once a submission with serial S is known complete, so is everything <= S.
+		std::uint64_t submitSerial_ = 0;
+		std::uint64_t completedSerial_ = 0;
+		std::uint64_t frameSubmitSerial_[MAX_FRAMES_IN_FLIGHT]{};
 
 		// Layout transition
 		void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
@@ -1413,9 +1585,6 @@ namespace lightGraphics
 		void updateScreenTextMesh(ScreenTextResource& resource);
 		void rebuildScreenTextMeshes();
 		void destroyCustomResources();
-		// Waits for in-flight frames before a destroy*() call frees GPU resources
-		// they may still reference. No-op before finalizeScene().
-		void waitIdleBeforeResourceDestroy();
 		void rebuildCustomPipelines();
 		VkPipeline createMaterialPipeline(
 			const MaterialDescription& description,

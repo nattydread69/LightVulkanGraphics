@@ -6,6 +6,120 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Loose ends: parallel animation, per-model skinning mode, capture synchronisation
+- **`lightGraphics::updateAnimations(objects, dt)`** (`RiggedAnimation.h`): advances a set of
+  rigged objects on a small worker pool. The result is bit-identical to calling
+  `updateAnimation()` on each in turn (the new `rigged_animation_parallel` test checks
+  this). With 128 Workers, frames go from 3.50 to 2.81 ms. The library now links
+  `Threads::Threads`, and the installed package config finds it.
+- **Behaviour change:** the skinning correction mode is chosen once per `RiggedModel`, at
+  its first `addRiggedObject()`, and reused by every later instance of that model. Before,
+  each instance was judged on its own pose, which cost three full skins of the model per
+  instance and could in principle skin instances of one model differently.
+  `LIGHT_VULKAN_GRAPHICS_RIGGED_SKINNING_MODE` still overrides every instance. Loading 128
+  Workers: 1.38 to 1.16 s.
+- `requestFrameCapture()`: the read-back is recorded into the frame's own command buffer
+  after the main render pass, which gained an explicit end dependency to the transfer
+  stage. The last validation message, `SYNC-HAZARD-WRITE-AFTER-PRESENT` on captured frames,
+  is gone.
+- `perf_overlay_demo --serial-animation`.
+
+### No GPU stalls for uploads or destroys (performance roadmap, Stage 4)
+- Uploads (`copyBuffer()`, textures, volumes, rigged objects) are recorded into one batch
+  that `drawFrame()` submits just before the frame. They no longer submit and
+  `vkQueueWaitIdle()` one by one.
+- Removing a rigged object and `destroyMesh/Material/Texture3D/TransferFunction/Volume()`
+  no longer call `vkDeviceWaitIdle()`. The GPU resources are destroyed once the frames and
+  uploads that may use them have completed (`retire()`). Staging buffers are deferred the
+  same way automatically.
+- A rigged object's buffers share one device-local and one host-visible allocation, with
+  initial data uploaded through one staging buffer: about 3 allocations instead of about 78
+  for Worker.fbx. That is faster, and well inside drivers' 4096-allocation limits for
+  crowds. New internal helper: `createBuffersInOneAllocation()`.
+- Fixed: adding a rigged object to a running scene freed every frame's command buffer while
+  frames could still be executing them (`createCommandBuffers()`). It was masked by the
+  upload stalls above.
+- Loading 128 Workers: 3.18 to 1.45 s. Adding and removing characters while running:
+  p99 frame 23.7 to 5.7 ms. Numbers: `docs/performance_roadmap.md`.
+- `perf_overlay_demo`: `--churn FRAMES`, a `SETUP` timing line, and `max_ms` in `BENCH`.
+
+### Synchronisation and teardown fixes (validation clean)
+- The main render pass has a `VK_SUBPASS_EXTERNAL` dependency. Its swapchain-image layout
+  transition is now ordered after the image-acquired semaphore, and the clear of the shared
+  depth image after the previous frame's depth tests.
+- Render-finished semaphores are one per swapchain image, not per frame in flight, and are
+  rebuilt with the swapchain. Before, a semaphore could be signalled while its previous
+  presentation still waited on it.
+- `flexibleShapeTransparentPipeline_` is destroyed at shutdown and on swapchain cleanup
+  (it leaked).
+- Frame capture: the wait on the render-finished semaphore starts at the readback barrier's
+  source stage.
+- With the Khronos validation layer and synchronisation validation, normal runs now report
+  no messages (there were 15 per run). The one exception: a frame read back with
+  `requestFrameCapture()` still reports `SYNC-HAZARD-WRITE-AFTER-PRESENT` once, as it did
+  before.
+
+### Rigged models: cheaper per character (performance roadmap, Stage 3)
+- Each distinct final bone matrix is built once per pose change, however many meshes use
+  it. Worker.fbx's 744 mesh bones reduce to 62 distinct matrices. On the GPU skinning path
+  the vertices' bone indices are remapped at upload, so only those 62 matrices are uploaded
+  per frame. Entries are shared only when all their inputs are bit-identical, so every result
+  is unchanged.
+- Animation evaluation: a per-bone channel table (`Animation::channelIndexByBone`) replaces
+  a string-keyed map lookup per bone per frame. Keyframes are binary-searched when sorted
+  (`Animation::keysSortedByTime`, checked at load). Bone matrices are composed directly.
+- 128 animated characters: 9.1 to 3.5 ms per frame. Numbers: `docs/performance_roadmap.md`.
+
+### Flexible shapes: instances built once per frame (performance roadmap, Stage 2)
+- Each object's instance (model matrix, colour, shape) is built once, and only when the
+  object changes, in `updateInstanceDataOptimized()`. The shadow, main, overlay and
+  transparent passes copy it from that cache. Before this, they rebuilt every visible object
+  from scratch every frame, once per pass and once per shadow-casting light, and each rebuild
+  took a global mutex (`detail::appExtras()`). Per-frame name and texture-path string copies,
+  per-pass temporary vectors and a whole-cache copy that was always overwritten are gone too.
+  Numbers: `docs/performance_roadmap.md`.
+- **Fixed: wrong shadows whenever frustum culling removed an object.** The shadow pass and
+  the main pass wrote their instances to the same range of the frame's instance buffer, both
+  while recording, so shadow draws used the main pass's culled, reordered list. Off-screen
+  objects cast no shadow, and transparent and debug-overlay objects cast shadows they never
+  should. Culling is on by default. The shadow casters now have their own range
+  (`[N, 2N)`; the per-frame instance buffers are sized for 2N).
+- Fixed: the instance cache could go stale for an object changed before `finalizeScene()`,
+  because the setters do not mark objects dirty before then. The cache is now fully rebuilt
+  until the first update after `finalizeScene()`.
+- `pObject::getNameRef()` / `getTexturePathRef()`: copy-free accessors.
+- `perf_overlay_demo`: `--static`, `--no-cull` and `--capture OUT.png`.
+
+### Image loading
+- **`loadImageRgba()` / `decodeImageRgba()`** (`ImageLoad.h`): decode PNG, JPEG, BMP, TGA,
+  GIF, PSD, HDR, PIC or PNM, from a file or from memory, into 8-bit RGBA (`ImageRgba`). It is
+  the decoder LVG uses for its own textures and splash screens, so applications no longer need
+  their own image library. SoundRigs dropped its vendored `stb_image.h` for it.
+- The libraries no longer export any `stb*` symbols. stb_image is compiled once,
+  privately, in `src/ImageLoad.cpp`, and stb_truetype in `src/ui/Font.cpp` (`STBTT_STATIC`;
+  `src/ui/FontImpl.cpp` removed). Before this, the static libraries exported 43 `stbi_*` and 59
+  `stbtt_*` functions, so an application with its own copy had to compile it `static`. That
+  produced a page of `-Wunused-function` warnings from stb in every application build.
+
+### Rigged models: GPU skinning
+- Rigged meshes are skinned on the GPU by a compute shader (`shaders/rigged_skin.comp`). Only
+  the bone matrices are uploaded each frame, not every skinned vertex. All draw paths
+  (opaque, translucent, shadow, shadow cutout) are unchanged. CPU skinning remains as the
+  fallback (graphics queue without compute, shader missing) and can be forced with
+  `LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu`. See `docs/rigged_skinning.md`.
+- Fixed: every frame with a rigged object submitted a separate upload and waited for it with
+  `vkQueueWaitIdle`, serialising the CPU and GPU. Uploads and skinning dispatches are now
+  recorded into the frame's own command buffer, on both the GPU and the CPU path.
+- `LVG_PRESENT_MODE=uncapped` (benchmarking): IMMEDIATE where available, else MAILBOX, with
+  no frame pacing.
+- `perf_overlay_demo`: animated characters (`Characters` slider, `--characters N`), plus
+  `--instances N` and a scripted `--bench SECONDS` mode. `demoVulkanGraphics`:
+  `--workers N`, `--bench`, `--freeze POSE_SECONDS` and `--capture OUT.png`. Numbers are in
+  `docs/performance_roadmap.md`.
+- ABI: `VkApp` gained private members and its rigged render-data structs grew. This falls
+  under the same ABI break already noted under Fonts below. Install the new
+  `rigged_skin.comp.spv` with the library.
+
 ### Splash screen
 - `SplashScreen`: a borderless image window with its own minimal Vulkan instance/device, so it can
   be shown before `VkApp::init()` and kept alive (`pump()`) through a slow start-up, then

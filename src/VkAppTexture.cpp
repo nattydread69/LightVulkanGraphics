@@ -18,16 +18,7 @@
 
 #include "VkApp.h"
 #include "FBXLoader.h"
-
-#if defined(_MSC_VER)
-#pragma warning(push)
-#pragma warning(disable: 4244)
-#endif
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb/stb_image.h"
-#if defined(_MSC_VER)
-#pragma warning(pop)
-#endif
+#include "ImageLoad.h"
 
 #include <algorithm>
 #include <cstring>
@@ -61,40 +52,31 @@ namespace lightGraphics
 		// main-thread-only path behaves exactly as before this was split out.
 		std::optional<DecodedTexturePixels> decodeTextureFromFile(const std::string& path)
 		{
-			int texWidth = 0;
-			int texHeight = 0;
-			int texChannels = 0;
-			stbi_uc* pixels = stbi_load(path.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-			if (!pixels)
+			ImageRgba image;
+			if (!loadImageRgba(path, image))
 			{
 				return std::nullopt;
 			}
 
 			DecodedTexturePixels decoded;
-			decoded.width = static_cast<uint32_t>(texWidth);
-			decoded.height = static_cast<uint32_t>(texHeight);
-			decoded.rgba.assign(pixels, pixels + (static_cast<size_t>(texWidth) * texHeight * 4));
-			stbi_image_free(pixels);
+			decoded.width = static_cast<uint32_t>(image.width);
+			decoded.height = static_cast<uint32_t>(image.height);
+			decoded.rgba = std::move(image.rgba);
 			return decoded;
 		}
 
 		std::optional<DecodedTexturePixels> decodeTextureFromMemory(const uint8_t* data, size_t size)
 		{
-			int texWidth = 0;
-			int texHeight = 0;
-			int texChannels = 0;
-			stbi_uc* pixels = stbi_load_from_memory(
-				data, static_cast<int>(size), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-			if (!pixels)
+			ImageRgba image;
+			if (!decodeImageRgba(data, size, image))
 			{
 				return std::nullopt;
 			}
 
 			DecodedTexturePixels decoded;
-			decoded.width = static_cast<uint32_t>(texWidth);
-			decoded.height = static_cast<uint32_t>(texHeight);
-			decoded.rgba.assign(pixels, pixels + (static_cast<size_t>(texWidth) * texHeight * 4));
-			stbi_image_free(pixels);
+			decoded.width = static_cast<uint32_t>(image.width);
+			decoded.height = static_cast<uint32_t>(image.height);
+			decoded.rgba = std::move(image.rgba);
 			return decoded;
 		}
 	}
@@ -693,6 +675,28 @@ namespace lightGraphics
 
 	void VkApp::destroyTexture(Texture& texture)
 	{
+		// As destroyBuffer(): while uploads are pending they may still use the image
+		// (e.g. its own upload), so destroy it once they have completed.
+		if (uploadsMayReferenceResources() &&
+		    (texture.image != VK_NULL_HANDLE || texture.memory != VK_NULL_HANDLE ||
+		     texture.view != VK_NULL_HANDLE || texture.sampler != VK_NULL_HANDLE ||
+		     texture.descriptor != VK_NULL_HANDLE))
+		{
+			auto handles = std::make_shared<Texture>();
+			handles->descriptor = texture.descriptor;
+			handles->sampler = texture.sampler;
+			handles->view = texture.view;
+			handles->image = texture.image;
+			handles->memory = texture.memory;
+			texture.descriptor = VK_NULL_HANDLE;
+			texture.sampler = VK_NULL_HANDLE;
+			texture.view = VK_NULL_HANDLE;
+			texture.image = VK_NULL_HANDLE;
+			texture.memory = VK_NULL_HANDLE;
+			texture.width = texture.height = 0;
+			retire([this, handles]() { destroyTexture(*handles); });
+			return;
+		}
 		if (texture.descriptor != VK_NULL_HANDLE && textureDescriptorPool_ != VK_NULL_HANDLE)
 		{
 			vkFreeDescriptorSets(device_, textureDescriptorPool_, 1, &texture.descriptor);

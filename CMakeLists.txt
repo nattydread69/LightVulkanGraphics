@@ -362,9 +362,8 @@ endif()
 
 # ---------------- Sources ----------------
 # src/ui/ is excluded: it belongs exclusively to the LightVulkanGraphicsUI target below.
-# Globbing it in here too would compile FontImpl.cpp's STB_TRUETYPE_IMPLEMENTATION (and
-# every other src/ui/*.cpp symbol) into both libraries -- exactly the duplicate-symbol
-# hazard docs/gui/03-text-and-fonts.md calls out.
+# Globbing it in here too would compile every src/ui/*.cpp symbol into both libraries --
+# exactly the duplicate-symbol hazard docs/gui/03-text-and-fonts.md calls out.
 #
 # Excluded by exact-path removal (list(REMOVE_ITEM ...)) rather than a path-string
 # regex: both globs below come from the same file(GLOB_RECURSE) call, so they use
@@ -451,6 +450,7 @@ lvg_compile_shader(vert flexible_shape)
 lvg_compile_shader(frag flexible_shape)
 lvg_compile_shader(vert rigged_mesh)
 lvg_compile_shader(frag rigged_mesh)
+lvg_compile_shader(comp rigged_skin)
 lvg_compile_shader(vert wireframe)
 lvg_compile_shader(frag wireframe)
 lvg_compile_shader(vert unlit)
@@ -507,6 +507,9 @@ target_link_libraries(${PROJECT_NAME}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE assimp::assimp)
+# std::thread: updateAnimations()'s worker pool (src/RiggedAnimation.cpp).
+find_package(Threads REQUIRED)
+target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
 target_compile_definitions(${PROJECT_NAME} PRIVATE
 	LVG_BUILD_SHADER_DIR="${SPV_DIR}"
 	LVG_DEFAULT_SHADER_INSTALL_DIR="${LVG_SHADER_INSTALL_FULL_DIR}"
@@ -869,12 +872,25 @@ if (BUILD_TESTING)
 		LVG_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
 	)
 
+	add_executable(rigged_animation_parallel
+		tests/rigged_animation_parallel.cpp
+	)
+	lvg_configure_build_tree_example(rigged_animation_parallel)
+	target_compile_definitions(rigged_animation_parallel PRIVATE
+		LVG_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+	)
+
 	if (TARGET LightVulkanGraphicsExamples)
 		add_dependencies(LightVulkanGraphicsExamples
 			light_vulkan_graphics_unit_tests
 			worker_skinning_sanity
+			rigged_animation_parallel
 		)
 	endif()
+	add_test(
+		NAME rigged_animation_parallel
+		COMMAND rigged_animation_parallel
+	)
 	add_test(
 		NAME light_vulkan_graphics_unit_tests
 		COMMAND light_vulkan_graphics_unit_tests

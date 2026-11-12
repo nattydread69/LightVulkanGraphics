@@ -67,9 +67,11 @@
 
 /// FBX file loader
 #include "FBXLoader.h"
+#include "ImageLoad.h"
 
 /// Rigged model support
 #include "RiggedObject.h"
+#include "RiggedAnimation.h"
 
 // ============================================================================
 // ============================================================================

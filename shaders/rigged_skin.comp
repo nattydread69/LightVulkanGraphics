@@ -1,0 +1,104 @@
+#version 450
+
+// GPU linear-blend skinning for rigged meshes (VkAppRigged.cpp, "GPU skinning").
+// One invocation per vertex: blends up to four bone matrices and writes the
+// result into the frame's vertex buffer in detail::Vertex's layout, so every
+// draw path (main, translucent, shadow, shadow cutout) reads it unchanged.
+// Matches the CPU path in updateRiggedInstances() exactly, including its
+// fallbacks: no usable weight -> source vertex; non-finite result -> source
+// vertex; normal renormalised when non-zero.
+
+layout(local_size_x = 64) in;
+
+// lightGraphics::RiggedVertex, 16 words per vertex, tightly packed:
+// position xyz, normal xyz, texCoords uv, boneWeights xyzw, boneIndices xyzw (int).
+layout(std430, set = 0, binding = 0) readonly buffer SourceVertices
+{
+	uint src[];
+};
+
+// This instance's final bone matrices for all of its meshes; this mesh's
+// start at boneBase.
+layout(std430, set = 0, binding = 1) readonly buffer BoneMatrices
+{
+	mat4 bones[];
+};
+
+// detail::Vertex, 8 floats per vertex: pos xyz, nrm xyz, uv.
+layout(std430, set = 0, binding = 2) writeonly buffer SkinnedVertices
+{
+	float dst[];
+};
+
+layout(push_constant) uniform Push
+{
+	uint vertexCount;
+	uint boneBase;
+	uint boneCount;
+} pc;
+
+bool isFinite3(vec3 v)
+{
+	return !any(isnan(v)) && !any(isinf(v));
+}
+
+void main()
+{
+	uint v = gl_GlobalInvocationID.x;
+	if (v >= pc.vertexCount)
+	{
+		return;
+	}
+
+	uint s = v * 16u;
+	vec3 position = uintBitsToFloat(uvec3(src[s + 0u], src[s + 1u], src[s + 2u]));
+	vec3 normal = uintBitsToFloat(uvec3(src[s + 3u], src[s + 4u], src[s + 5u]));
+	vec2 uv = uintBitsToFloat(uvec2(src[s + 6u], src[s + 7u]));
+	vec4 weights = uintBitsToFloat(uvec4(src[s + 8u], src[s + 9u], src[s + 10u], src[s + 11u]));
+	// int(uint) keeps the bit pattern, so -1 ("no bone") stays -1.
+	ivec4 indices = ivec4(int(src[s + 12u]), int(src[s + 13u]), int(src[s + 14u]), int(src[s + 15u]));
+
+	vec4 blendedPos = vec4(0.0);
+	vec4 blendedNrm = vec4(0.0);
+	bool usedWeights = false;
+	for (int k = 0; k < 4; ++k)
+	{
+		int boneIndex = indices[k];
+		float weight = weights[k];
+		if (boneIndex >= 0 && uint(boneIndex) < pc.boneCount && weight > 0.0)
+		{
+			mat4 m = bones[pc.boneBase + uint(boneIndex)];
+			blendedPos += (m * vec4(position, 1.0)) * weight;
+			blendedNrm += (m * vec4(normal, 0.0)) * weight;
+			usedWeights = true;
+		}
+	}
+
+	vec3 finalPos = position;
+	vec3 finalNrm = normal;
+	if (usedWeights)
+	{
+		finalPos = blendedPos.xyz;
+		finalNrm = blendedNrm.xyz;
+	}
+	if (!isFinite3(finalPos) || !isFinite3(finalNrm))
+	{
+		finalPos = position;
+		finalNrm = normal;
+	}
+	float normalLength = length(finalNrm);
+	if (normalLength > 0.0)
+	{
+		finalNrm /= normalLength;
+	}
+
+	uint d = v * 8u;
+	dst[d + 0u] = finalPos.x;
+	dst[d + 1u] = finalPos.y;
+	dst[d + 2u] = finalPos.z;
+	dst[d + 3u] = finalNrm.x;
+	dst[d + 4u] = finalNrm.y;
+	dst[d + 5u] = finalNrm.z;
+	dst[d + 6u] = uv.x;
+	dst[d + 7u] = uv.y;
+}

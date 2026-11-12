@@ -97,6 +97,13 @@ namespace lightGraphics
         // evaluation (RiggedObject::calculateBoneTransforms) do a single map
         // lookup per bone instead of a linear scan over every channel.
         std::map<std::string, int> channelIndexByBoneName;
+        // The same, by model bone index (-1: the bone has no channel), and whether every
+        // channel's keys are in ascending time order (so they can be binary-searched).
+        // Built at the end of FBXLoader::loadModel(), once bones and animations both
+        // exist. Empty for a model assembled some other way; RiggedObject then falls back
+        // to channelIndexByBoneName and a linear key search.
+        std::vector<int> channelIndexByBone;
+        bool keysSortedByTime = false;
     };
 
     // Structure to hold vertex data with bone weights

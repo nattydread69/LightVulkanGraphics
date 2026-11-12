@@ -6,6 +6,39 @@ This note records what the bind pose is, how LVG picks a skinning mode, how to d
 distorted model, and a known pitfall with FBX files written by assimp (for example by
 SoundRigs' "Fix and export").
 
+## Where the skinning runs: GPU (default) or CPU
+
+Each frame the CPU builds every mesh's final bone matrices (`buildRiggedFinalBoneMatrix`,
+below). The per-vertex blend of up to four of them then runs on one of two paths:
+
+- **GPU (default).** `shaders/rigged_skin.comp` runs one invocation per vertex, reading the
+  mesh's `RiggedVertex` data (uploaded once, at `addRiggedObject()`) and the bone matrices
+  (a persistently mapped buffer per frame in flight). It writes the frame's vertex buffer in
+  the ordinary `detail::Vertex` layout, so the main, translucent, shadow and shadow-cutout
+  passes draw it unchanged. Only `64 bytes x bones` crosses the bus per mesh per frame,
+  instead of `32 bytes x vertices`.
+- **CPU.** The blend runs in `updateRiggedInstances()` and the result is copied through a
+  staging buffer. Used when the graphics queue has no compute support, when
+  `rigged_skin.comp.spv` cannot be found, or when forced with
+  `LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu` (useful to compare the two). The startup log
+  says which path is in use: `[RiggedMesh] Skinning vertices on the GPU|CPU (...)`.
+
+Both paths have the same fallbacks (a vertex with no usable weight, or a non-finite result,
+keeps its source position and normal; normals are renormalised), and both skip the work when
+a character's pose has not changed. The GPU path renders the same picture to within rounding:
+in the demo's 6-Worker frozen frame, 5 of 2.08 M pixels differ, all on triangle edges. It does
+not log the CPU path's "produced non-finite skinned vertices" warning or the debug UV-range
+line.
+
+On either path, the copies or dispatches are recorded at the start of the frame's own command
+buffer (`recordRiggedUploads()`), behind one barrier before the shadow pass. Up to 3.3, a
+separate upload was submitted and waited for with `vkQueueWaitIdle` every frame, which
+serialised the CPU and GPU whenever a rigged object was in the scene.
+
+To measure the two paths, see `performance_roadmap.md`: `perf_overlay_demo --characters N
+--bench 6`, with `LIGHT_VULKAN_GRAPHICS_SKINNING_DEVICE=cpu` for the CPU path. For a pixel
+comparison, use `demoVulkanGraphics --workers 6 --freeze 1.0 --capture out.png`.
+
 ## Two bind poses
 
 A skinned vertex is moved by `boneGlobal * inverseBind`, so every bone needs two things:

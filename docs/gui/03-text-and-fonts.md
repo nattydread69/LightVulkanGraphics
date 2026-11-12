@@ -9,8 +9,11 @@ Add `stb_truetype.h` to the existing `external/stb/` directory. It is a single h
 public domain / MIT dual-licensed, ~5000 lines, no build system changes required beyond
 one translation unit defining `STB_TRUETYPE_IMPLEMENTATION`.
 
-Put that definition in exactly one place: `src/ui/FontImpl.cpp`. Defining it in a header
-that gets included twice produces duplicate-symbol link errors that are tedious to trace.
+Put that definition in exactly one place: `src/ui/Font.cpp`, the only file that calls
+stb_truetype, together with `STBTT_STATIC`. That keeps every `stbtt_*` symbol private to
+`Font.cpp`, so `LightVulkanGraphicsUI` exports none and an application can link its own copy
+of stb_truetype without clashes. Defining it in a header that gets included twice produces
+duplicate-symbol link errors that are tedious to trace.
 
 ## What gets baked
 

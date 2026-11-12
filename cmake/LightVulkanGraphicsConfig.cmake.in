@@ -9,6 +9,7 @@ include(CMakeFindDependencyMacro)
 # Find required dependencies
 find_dependency(Vulkan REQUIRED)
 find_dependency(glm REQUIRED CONFIG)
+find_dependency(Threads)
 # Static archives retain unresolved references to their private link dependencies.
 # These targets therefore have to exist before the exported target file is loaded.
 if(NOT @LVG_BUILD_SHARED@)

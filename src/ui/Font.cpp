@@ -19,7 +19,27 @@
 #include <lightVulkanGraphics/ui/Font.h>
 #include "Utf8.h"
 
+// The UI library's only copy of stb_truetype, compiled STATIC: every stbtt_* function is
+// private to this file (the only one that uses it), so LightVulkanGraphicsUI exports none
+// of them and an application can use or vendor its own stb_truetype without symbol
+// clashes. STATIC leaves the parts this file does not call unused, which the compilers
+// would warn about once each.
+#if defined(__GNUC__)
+#	pragma GCC diagnostic push
+#	pragma GCC diagnostic ignored "-Wunused-function"
+#elif defined(_MSC_VER)
+#	pragma warning(push)
+#	pragma warning(disable : 4505) // unreferenced function with internal linkage removed
+#	pragma warning(disable : 4244) // stb_truetype's own narrowing conversions
+#endif
+#define STBTT_STATIC
+#define STB_TRUETYPE_IMPLEMENTATION
 #include "stb/stb_truetype.h"
+#if defined(__GNUC__)
+#	pragma GCC diagnostic pop
+#elif defined(_MSC_VER)
+#	pragma warning(pop)
+#endif
 
 #include <algorithm>
 #include <cassert>

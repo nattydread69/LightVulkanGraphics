@@ -98,6 +98,9 @@ namespace lightGraphics
 		pReal getMass() const { return _mass; }
 		std::string getName() const { return _name; }
 		std::string getTexturePath() const { return _texturePath; }
+		// Copy-free variants for per-frame loops over many objects; valid while the object is.
+		const std::string& getNameRef() const noexcept { return _name; }
+		const std::string& getTexturePathRef() const noexcept { return _texturePath; }
 		glm::vec2 getTextureTiling() const { return _textureTiling; }
 		glm::quat getRotation() const { return _rotation; }
 		glm::mat4 getRotationMatrix() const;

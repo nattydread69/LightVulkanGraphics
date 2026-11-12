@@ -675,6 +675,35 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         }
     }
 
+    // Per-bone channel tables for RiggedObject::calculateBoneTransforms(): an index per
+    // bone instead of a string-keyed map lookup per bone, per character, per frame.
+    for (Animation& animation : model->animations)
+    {
+        animation.channelIndexByBone.assign(model->bones.size(), -1);
+        for (size_t boneIndex = 0; boneIndex < model->bones.size(); ++boneIndex)
+        {
+            const auto it = animation.channelIndexByBoneName.find(model->bones[boneIndex].name);
+            if (it != animation.channelIndexByBoneName.end() &&
+                it->second >= 0 &&
+                it->second < static_cast<int>(animation.channels.size()))
+            {
+                animation.channelIndexByBone[boneIndex] = it->second;
+            }
+        }
+
+        const auto ascending = [](const std::vector<AnimationKeyframe>& keys)
+        {
+            return std::is_sorted(keys.begin(), keys.end(),
+                [](const AnimationKeyframe& a, const AnimationKeyframe& b) { return a.time < b.time; });
+        };
+        animation.keysSortedByTime = std::all_of(animation.channels.begin(), animation.channels.end(),
+            [&](const AnimationChannel& channel)
+            {
+                return ascending(channel.positionKeys) && ascending(channel.rotationKeys) &&
+                       ascending(channel.scaleKeys);
+            });
+    }
+
     return model;
     }
     catch (const std::exception& e)

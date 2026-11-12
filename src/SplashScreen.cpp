@@ -18,7 +18,7 @@
 
 #include "SplashScreen.h"
 
-#include "stb/stb_image.h" // implementation lives in VkAppTexture.cpp
+#include "ImageLoad.h"
 
 #include <vulkan/vulkan.h>
 #define GLFW_INCLUDE_VULKAN
@@ -572,15 +572,12 @@ namespace lightGraphics
 
 	std::unique_ptr<SplashScreen> SplashScreen::showFromFile(const std::string& path, const Options& options)
 	{
-		int w = 0, h = 0, channels = 0;
-		stbi_uc* data = stbi_load(path.c_str(), &w, &h, &channels, 4);
-		if (!data)
+		ImageRgba image;
+		if (!loadImageRgba(path, image))
 		{
 			return nullptr;
 		}
-		auto splash = create(data, w, h, options);
-		stbi_image_free(data);
-		return splash;
+		return create(image.rgba.data(), image.width, image.height, options);
 	}
 
 	std::unique_ptr<SplashScreen> SplashScreen::showFromFile(const std::string& path)

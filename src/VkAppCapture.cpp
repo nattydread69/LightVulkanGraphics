@@ -69,7 +69,13 @@ void VkApp::requestFrameCapture(std::function<void(const CapturedFrame&)> onCapt
 	}
 }
 
-void VkApp::serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished)
+// The read-back is recorded into the frame's own command buffer, after the main render pass
+// (whose 0 -> EXTERNAL dependency hands the image to the transfer stage, see
+// createRenderPass()), and is covered by the frame's ordinary render-finished semaphore and
+// fence. It used to be a separate submission chained on that semaphore and re-signalling
+// it, which synchronisation validation reported as an unsynchronised present
+// (SYNC-HAZARD-WRITE-AFTER-PRESENT).
+void VkApp::prepareFrameCapture(uint32_t imageIndex)
 {
 	detail::CaptureState& state = detail::captureState(this);
 	if (state.pending.empty())
@@ -79,9 +85,10 @@ void VkApp::serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished
 	std::vector<std::function<void(const CapturedFrame&)>> callbacks;
 	callbacks.swap(state.pending);
 
-	CapturedFrame frame;
-	auto deliver = [&]()
+	auto fail = [&](const std::string& error)
 	{
+		CapturedFrame frame;
+		frame.error = error;
 		for (auto& cb : callbacks)
 		{
 			cb(frame);
@@ -99,128 +106,129 @@ void VkApp::serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished
 	case VK_FORMAT_R8G8B8A8_SRGB:
 		break;
 	default:
-		frame.error = "frame capture: unsupported swapchain format " + std::to_string(swapChainImageFormat_);
-		deliver();
+		fail("frame capture: unsupported swapchain format " + std::to_string(swapChainImageFormat_));
 		return;
 	}
 	if (!state.swapchainReadable)
 	{
-		frame.error = "frame capture: this surface does not allow reading the swapchain (no TRANSFER_SRC usage)";
-		deliver();
+		fail("frame capture: this surface does not allow reading the swapchain (no TRANSFER_SRC usage)");
 		return;
 	}
 	if (imageIndex >= swapChainImages_.size())
 	{
-		frame.error = "frame capture: swapchain image index out of range";
-		deliver();
+		fail("frame capture: swapchain image index out of range");
 		return;
 	}
 
-	const uint32_t width = swapChainExtent_.width;
-	const uint32_t height = swapChainExtent_.height;
-	const VkDeviceSize bytes = static_cast<VkDeviceSize>(width) * height * 4;
-	const VkImage image = swapChainImages_[imageIndex];
-
-	detail::Buffer readback;
-	VkCommandBuffer cmd = VK_NULL_HANDLE;
-	VkFence fence = VK_NULL_HANDLE;
+	const VkDeviceSize bytes = static_cast<VkDeviceSize>(swapChainExtent_.width) * swapChainExtent_.height * 4;
 	try
 	{
 		createBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, readback);
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, state.readback);
+	}
+	catch (const std::exception& e)
+	{
+		fail(std::string("frame capture: ") + e.what());
+		return;
+	}
+	state.active = std::move(callbacks);
+	state.imageIndex = imageIndex;
+	state.width = swapChainExtent_.width;
+	state.height = swapChainExtent_.height;
+	state.swapRedBlue = swapRedBlue;
+	state.recorded = false;
+}
 
-		VkCommandBufferAllocateInfo alloc{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO };
-		alloc.commandPool = commandPool_;
-		alloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		alloc.commandBufferCount = 1;
-		if (vkAllocateCommandBuffers(device_, &alloc, &cmd) != VK_SUCCESS)
+void VkApp::recordFrameCapture(VkCommandBuffer cmd, uint32_t imageIndex)
+{
+	detail::CaptureState& state = detail::captureState(this);
+	if (state.active.empty() || state.recorded || imageIndex != state.imageIndex ||
+		state.readback.buffer == VK_NULL_HANDLE || imageIndex >= swapChainImages_.size())
+	{
+		return;
+	}
+	const VkImage image = swapChainImages_[imageIndex];
+
+	// After the render pass the image is in PRESENT_SRC, its colour writes made available to
+	// the transfer stage by the pass's 0 -> EXTERNAL dependency, which this chains on.
+	VkImageMemoryBarrier toSrc{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+	toSrc.srcAccessMask = 0;
+	toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	toSrc.image = image;
+	toSrc.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+		0, nullptr, 0, nullptr, 1, &toSrc);
+
+	VkBufferImageCopy region{};
+	region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	region.imageExtent = { state.width, state.height, 1 };
+	vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, state.readback.buffer, 1, &region);
+
+	// Back to PRESENT_SRC for presentation, which waits on the frame's render-finished
+	// semaphore (its signal covers every command in this command buffer).
+	VkImageMemoryBarrier toPresent = toSrc;
+	toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	toPresent.dstAccessMask = 0;
+	toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+		0, nullptr, 0, nullptr, 1, &toPresent);
+
+	VkBufferMemoryBarrier toHost{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+	toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+	toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+	toHost.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	toHost.buffer = state.readback.buffer;
+	toHost.size = VK_WHOLE_SIZE;
+	vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
+		0, nullptr, 1, &toHost, 0, nullptr);
+	state.recorded = true;
+}
+
+void VkApp::finishFrameCapture(VkFence frameFence)
+{
+	detail::CaptureState& state = detail::captureState(this);
+	if (state.active.empty())
+	{
+		return;
+	}
+	std::vector<std::function<void(const CapturedFrame&)>> callbacks;
+	callbacks.swap(state.active);
+
+	CapturedFrame frame;
+	try
+	{
+		if (!state.recorded)
 		{
-			throw std::runtime_error("vkAllocateCommandBuffers failed");
+			throw std::runtime_error("the frame was not recorded with the read-back");
 		}
-		VkCommandBufferBeginInfo begin{ VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
-		begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-		vkBeginCommandBuffer(cmd, &begin);
-
-		VkImageMemoryBarrier toSrc{ VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
-		toSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-		toSrc.oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		toSrc.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		toSrc.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		toSrc.image = image;
-		toSrc.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-			0, nullptr, 0, nullptr, 1, &toSrc);
-
-		VkBufferImageCopy region{};
-		region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		region.imageExtent = { width, height, 1 };
-		vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.buffer, 1, &region);
-
-		VkImageMemoryBarrier toPresent = toSrc;
-		toPresent.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-		toPresent.dstAccessMask = 0;
-		toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
-			0, nullptr, 0, nullptr, 1, &toPresent);
-
-		VkBufferMemoryBarrier toHost{ VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
-		toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-		toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-		toHost.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		toHost.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		toHost.buffer = readback.buffer;
-		toHost.size = VK_WHOLE_SIZE;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0,
-			0, nullptr, 1, &toHost, 0, nullptr);
-		vkEndCommandBuffer(cmd);
-
-		VkFenceCreateInfo fenceInfo{ VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
-		if (vkCreateFence(device_, &fenceInfo, nullptr, &fence) != VK_SUCCESS)
-		{
-			throw std::runtime_error("vkCreateFence failed");
-		}
-
-		// Chained on the frame's render-finished semaphore: this waits for the frame,
-		// then signals the semaphore again, so presentation (which waits on it) cannot
-		// read the image while it is in TRANSFER_SRC layout.
-		VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
-		VkSubmitInfo submit{ VK_STRUCTURE_TYPE_SUBMIT_INFO };
-		submit.waitSemaphoreCount = 1;
-		submit.pWaitSemaphores = &renderFinished;
-		submit.pWaitDstStageMask = &waitStage;
-		submit.commandBufferCount = 1;
-		submit.pCommandBuffers = &cmd;
-		submit.signalSemaphoreCount = 1;
-		submit.pSignalSemaphores = &renderFinished;
-		if (vkQueueSubmit(graphicsQueue_, 1, &submit, fence) != VK_SUCCESS)
-		{
-			throw std::runtime_error("vkQueueSubmit failed");
-		}
-		if (vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+		if (vkWaitForFences(device_, 1, &frameFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
 		{
 			throw std::runtime_error("vkWaitForFences failed");
 		}
-
+		const VkDeviceSize bytes = static_cast<VkDeviceSize>(state.width) * state.height * 4;
 		void* mapped = nullptr;
-		if (vkMapMemory(device_, readback.memory, 0, bytes, 0, &mapped) != VK_SUCCESS)
+		if (vkMapMemory(device_, state.readback.memory, 0, bytes, 0, &mapped) != VK_SUCCESS)
 		{
 			throw std::runtime_error("vkMapMemory failed");
 		}
-		frame.width = width;
-		frame.height = height;
+		frame.width = state.width;
+		frame.height = state.height;
 		frame.rgba.resize(static_cast<std::size_t>(bytes));
 		const auto* src = static_cast<const std::uint8_t*>(mapped);
 		for (std::size_t i = 0; i < frame.rgba.size(); i += 4)
 		{
-			frame.rgba[i + 0] = src[i + (swapRedBlue ? 2 : 0)];
+			frame.rgba[i + 0] = src[i + (state.swapRedBlue ? 2 : 0)];
 			frame.rgba[i + 1] = src[i + 1];
-			frame.rgba[i + 2] = src[i + (swapRedBlue ? 0 : 2)];
+			frame.rgba[i + 2] = src[i + (state.swapRedBlue ? 0 : 2)];
 			frame.rgba[i + 3] = 255;
 		}
-		vkUnmapMemory(device_, readback.memory);
+		vkUnmapMemory(device_, state.readback.memory);
 		frame.ok = true;
 	}
 	catch (const std::exception& e)
@@ -228,19 +236,12 @@ void VkApp::serviceFrameCaptures(uint32_t imageIndex, VkSemaphore renderFinished
 		frame = CapturedFrame{};
 		frame.error = std::string("frame capture: ") + e.what();
 	}
-	if (fence != VK_NULL_HANDLE)
+	destroyBuffer(device_, state.readback);
+	state.recorded = false;
+	for (auto& cb : callbacks)
 	{
-		vkDestroyFence(device_, fence, nullptr);
+		cb(frame);
 	}
-	if (cmd != VK_NULL_HANDLE)
-	{
-		vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
-	}
-	if (readback.buffer != VK_NULL_HANDLE)
-	{
-		destroyBuffer(device_, readback);
-	}
-	deliver();
 }
 
 // ---------------------------------------------------------------------------------

@@ -96,11 +96,20 @@ namespace lightGraphics
 			glfwWaitEvents();
 		}
 
+		// Pending uploads may reference swapchain-sized resources about to be destroyed
+		// (e.g. the depth image's layout transition, if the window was resized again before
+		// a frame was drawn): submit them before the device goes idle.
+		flushUploads(false);
 		vkDeviceWaitIdle(device_);
+		completedSerial_ = submitSerial_;
+		collectRetired();
 
 		cleanupSwapChain();
 
 		createSwapChain();
+		// One per swapchain image, and the new swapchain may have a different number of
+		// them. The device is idle (above), so none is still pending.
+		createRenderFinishedSemaphores();
 		createImageViews();
 		createRenderPass();
 		createGraphicsPipeline();
@@ -175,6 +184,11 @@ namespace lightGraphics
 		{
 			vkDestroyPipeline(device_, flexibleShapeOverlayPipeline_, nullptr);
 			flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
+		}
+		if (flexibleShapeTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, flexibleShapeTransparentPipeline_, nullptr);
+			flexibleShapeTransparentPipeline_ = VK_NULL_HANDLE;
 		}
 		if (wireframePipeline_ != VK_NULL_HANDLE)
 		{
@@ -328,21 +342,34 @@ namespace lightGraphics
 		}
 		// MAILBOX where the surface has it: unlike FIFO (vsync) it does not
 		// block while the window is hidden (VkAppFramePacing.h), and
-		// mainLoop() paces the frames. LVG_PRESENT_MODE=fifo keeps FIFO.
+		// mainLoop() paces the frames. LVG_PRESENT_MODE=fifo keeps FIFO;
+		// LVG_PRESENT_MODE=uncapped (for benchmarking) takes IMMEDIATE, else
+		// MAILBOX, and does not pace at all.
 		VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+		bool uncappedAsked = false;
 		{
-			bool const fifoAsked = getEnvironmentVariable("LVG_PRESENT_MODE") == std::string("fifo");
+			auto const modeAsked = getEnvironmentVariable("LVG_PRESENT_MODE");
+			bool const fifoAsked = modeAsked == std::string("fifo");
+			uncappedAsked = modeAsked == std::string("uncapped");
 			uint32_t modeCount = 0;
 			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &modeCount, nullptr);
 			std::vector<VkPresentModeKHR> modes(modeCount);
 			vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice_, surface_, &modeCount, modes.data());
-			if (!fifoAsked && std::find(modes.begin(), modes.end(), VK_PRESENT_MODE_MAILBOX_KHR) != modes.end())
+			auto const hasMode = [&modes](VkPresentModeKHR mode)
+			{
+				return std::find(modes.begin(), modes.end(), mode) != modes.end();
+			};
+			if (uncappedAsked && hasMode(VK_PRESENT_MODE_IMMEDIATE_KHR))
+			{
+				presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+			}
+			else if (!fifoAsked && hasMode(VK_PRESENT_MODE_MAILBOX_KHR))
 			{
 				presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
 			}
 		}
 		detail::frameIntervalSeconds = 0.0;
-		if (presentMode != VK_PRESENT_MODE_FIFO_KHR)
+		if (presentMode != VK_PRESENT_MODE_FIFO_KHR && !uncappedAsked)
 		{
 			int refresh = 60;
 			if (GLFWmonitor* monitor = glfwGetPrimaryMonitor())
@@ -454,10 +481,45 @@ namespace lightGraphics
 		sub.pColorAttachments = &colorRef;
 		sub.pDepthStencilAttachment = &depthRef;
 
+		// Order the attachments' load-op clears and layout transitions after what came
+		// before them. Without this the implicit external dependency starts at
+		// TOP_OF_PIPE, so:
+		//  - the swapchain image's transition did not wait for the image-acquired
+		//    semaphore, which drawFrame() waits on at COLOR_ATTACHMENT_OUTPUT (validation:
+		//    SYNC-HAZARD-WRITE-AFTER-READ against vkAcquireNextImageKHR);
+		//  - the depth image, shared by every frame in flight, could be cleared while the
+		//    previous frame's depth tests still ran.
+		VkSubpassDependency dependency{};
+		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+		dependency.dstSubpass = 0;
+		dependency.srcStageMask =
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		dependency.dstStageMask =
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+		dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		dependency.dstAccessMask =
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+		// And at the end: the colour writes and the final transition to PRESENT_SRC are made
+		// available to the transfer stage, so a frame capture recorded after the pass
+		// (recordFrameCapture()) can chain on them. (The implicit end dependency stops at
+		// BOTTOM_OF_PIPE, which nothing later can chain on.) Presentation itself is ordered
+		// by the render-finished semaphore, whose signal covers the whole command buffer.
+		VkSubpassDependency endDependency{};
+		endDependency.srcSubpass = 0;
+		endDependency.dstSubpass = VK_SUBPASS_EXTERNAL;
+		endDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		endDependency.dstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		endDependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		endDependency.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		const std::array<VkSubpassDependency, 2> dependencies{dependency, endDependency};
+
 		VkAttachmentDescription attachments[] = {color, depth};
 		VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
 		rpci.attachmentCount = 2; rpci.pAttachments = attachments;
 		rpci.subpassCount = 1; rpci.pSubpasses = &sub;
+		rpci.dependencyCount = static_cast<uint32_t>(dependencies.size());
+		rpci.pDependencies = dependencies.data();
 		VK_CHECK(vkCreateRenderPass(device_, &rpci, nullptr, &renderPass_));
 	}
 

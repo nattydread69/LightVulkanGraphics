@@ -631,6 +631,9 @@ namespace lightGraphics
 		if (device_ != VK_NULL_HANDLE)
 		{
 			vkDeviceWaitIdle(device_);
+			// Everything retired (see retire()) is safe now; destroy it while the pools and
+			// the command pool it may use still exist.
+			drainRetired();
 		}
 
 #ifdef LVG_WITH_UI
@@ -645,6 +648,7 @@ namespace lightGraphics
 			// Scene resources teardown here
 			destroyCustomResources();
 			destroyRiggedInstances();
+			destroySkinningPipeline();
 			destroyTextureResources();
 			for (uint32_t frameIndex = 0; frameIndex < MAX_FRAMES_IN_FLIGHT; ++frameIndex)
 			{
@@ -671,12 +675,9 @@ namespace lightGraphics
 			sceneFinalized_ = false;
 
 			// Sync objects
+		destroyRenderFinishedSemaphores();
 		for (size_t i = 0; i < imageAvailableSemaphores_.size(); i++)
 		{
-			if (renderFinishedSemaphores_[i] != VK_NULL_HANDLE)
-			{
-				vkDestroySemaphore(device_, renderFinishedSemaphores_[i], nullptr);
-			}
 			if (imageAvailableSemaphores_[i] != VK_NULL_HANDLE)
 			{
 				vkDestroySemaphore(device_, imageAvailableSemaphores_[i], nullptr);
@@ -712,6 +713,11 @@ namespace lightGraphics
 		{
 			vkDestroyPipeline(device_, flexibleShapeOverlayPipeline_, nullptr);
 			flexibleShapeOverlayPipeline_ = VK_NULL_HANDLE;
+		}
+		if (flexibleShapeTransparentPipeline_ != VK_NULL_HANDLE)
+		{
+			vkDestroyPipeline(device_, flexibleShapeTransparentPipeline_, nullptr);
+			flexibleShapeTransparentPipeline_ = VK_NULL_HANDLE;
 		}
 		if (wireframePipeline_ != VK_NULL_HANDLE)
 		{
@@ -1155,7 +1161,6 @@ namespace lightGraphics
 		}
 
 		if (currentFrame_ >= imageAvailableSemaphores_.size() ||
-			currentFrame_ >= renderFinishedSemaphores_.size() ||
 			currentFrame_ >= inFlight_.size())
 		{
 			throw std::runtime_error("drawFrame: currentFrame_ out of sync object bounds");
@@ -1167,6 +1172,10 @@ namespace lightGraphics
 		{
 			throw std::runtime_error("drawFrame: vkWaitForFences failed");
 		}
+		// That frame -- and so everything submitted before it -- has completed: free what
+		// was waiting on it (see retire()).
+		completedSerial_ = std::max(completedSerial_, frameSubmitSerial_[currentFrame_]);
+		collectRetired();
 
 		uint32_t imageIndex = 0;
 		VkResult result = vkAcquireNextImageKHR(
@@ -1187,6 +1196,11 @@ namespace lightGraphics
 		else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
 		{
 			throw std::runtime_error("drawFrame: failed to acquire swap chain image");
+		}
+
+		if (imageIndex >= renderFinishedSemaphores_.size())
+		{
+			throw std::runtime_error("drawFrame: no render-finished semaphore for this swapchain image");
 		}
 
 		// If this image is already being used by a previous frame, wait for it
@@ -1220,12 +1234,13 @@ namespace lightGraphics
 		updateUniformBuffer(imageIndex);
 
 		// If you record per-frame, (re)record here
+		prepareFrameCapture(imageIndex);
 		recordCommandBuffer(commandBuffers_[imageIndex], imageIndex);
 
 		// Submit
 		VkSemaphore waitSemaphores[] = { imageAvailableSemaphores_[currentFrame_] };
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores_[currentFrame_] };
+		VkSemaphore signalSemaphores[] = { renderFinishedSemaphores_[imageIndex] };
 
 		VkSubmitInfo submitInfo{};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -1237,6 +1252,11 @@ namespace lightGraphics
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = signalSemaphores;
 
+		// Uploads recorded since the last frame (textures, meshes, rigged objects added
+		// this frame...) go first on the same queue; their barriers order them before
+		// this frame's reads.
+		flushUploads(false);
+
 		VkResult resSubmit = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, inFlight_[currentFrame_]);
 		if (resSubmit == VK_ERROR_DEVICE_LOST)
 		{
@@ -1246,9 +1266,12 @@ namespace lightGraphics
 		{
 			throw std::runtime_error("drawFrame: vkQueueSubmit failed");
 		}
+		frameSubmitSerial_[currentFrame_] = ++submitSerial_;
+		// This frame's rigged vertex buffers are now being rebuilt on the GPU.
+		markRiggedFrameSubmitted(static_cast<uint32_t>(currentFrame_));
 
-		// Pending requestFrameCapture() calls read this frame back before it is presented.
-		serviceFrameCaptures(imageIndex, renderFinishedSemaphores_[currentFrame_]);
+		// A capture prepared for this frame was recorded into it; delivered after presenting.
+		const VkFence frameFence = inFlight_[currentFrame_];
 
 		// Present
 		VkSwapchainKHR swapChains[] = { swapChain_ };
@@ -1262,6 +1285,7 @@ namespace lightGraphics
 		presentInfo.pImageIndices = &imageIndex;
 
 		result = vkQueuePresentKHR(presentQueue_, &presentInfo);
+		finishFrameCapture(frameFence);
 
 		// Handle window changes
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized_.load())
@@ -1569,8 +1593,8 @@ namespace lightGraphics
 	void VkApp::createSyncObjects()
 	{
 		imageAvailableSemaphores_.resize(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
-		renderFinishedSemaphores_.resize(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
 		inFlight_.resize(MAX_FRAMES_IN_FLIGHT, VK_NULL_HANDLE);
+		createRenderFinishedSemaphores();
 
 		imagesInFlight_.clear();
 		imagesInFlight_.resize(swapChainImages_.size(), VK_NULL_HANDLE);
@@ -1585,12 +1609,43 @@ namespace lightGraphics
 		for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
 			if (vkCreateSemaphore(device_, &semInfo, nullptr, &imageAvailableSemaphores_[i]) != VK_SUCCESS ||
-				vkCreateSemaphore(device_, &semInfo, nullptr, &renderFinishedSemaphores_[i]) != VK_SUCCESS ||
 				vkCreateFence(device_, &fenceInfo, nullptr, &inFlight_[i]) != VK_SUCCESS)
 			{
 				throw std::runtime_error("failed to create sync objects");
 			}
 		}
+	}
+
+	void VkApp::createRenderFinishedSemaphores()
+	{
+		// One per swapchain image, not per frame in flight: presentation of an image
+		// waits on its semaphore and holds it until that image is presented, which can be
+		// after the frame-in-flight slot has come round again. A per-frame semaphore could
+		// then be signalled again while still pending (validation:
+		// VUID-vkQueueSubmit-pSignalSemaphores-00067). Callers ensure the device is idle
+		// when an existing set is replaced (recreateSwapChain()).
+		destroyRenderFinishedSemaphores();
+		renderFinishedSemaphores_.assign(swapChainImages_.size(), VK_NULL_HANDLE);
+		VkSemaphoreCreateInfo semInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+		for (VkSemaphore& semaphore : renderFinishedSemaphores_)
+		{
+			if (vkCreateSemaphore(device_, &semInfo, nullptr, &semaphore) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to create render-finished semaphores");
+			}
+		}
+	}
+
+	void VkApp::destroyRenderFinishedSemaphores()
+	{
+		for (VkSemaphore semaphore : renderFinishedSemaphores_)
+		{
+			if (semaphore != VK_NULL_HANDLE)
+			{
+				vkDestroySemaphore(device_, semaphore, nullptr);
+			}
+		}
+		renderFinishedSemaphores_.clear();
 	}
 
 	// -----------------------------
@@ -2619,6 +2674,67 @@ namespace lightGraphics
 
 	Instance VkApp::makeInstanceForObject(size_t index) const
 	{
+		return makeInstanceForObject(index, detail::appExtras(this).flagsFor(index));
+	}
+
+	Instance VkApp::cachedInstanceForObject(size_t index) const
+	{
+		return index < instanceDataCache_.size() ? instanceDataCache_[index] : makeInstanceForObject(index);
+	}
+
+	void VkApp::writeCachedInstances(uint32_t firstInstance, const std::vector<size_t>& objectIndices)
+	{
+		if (objectIndices.empty())
+		{
+			return;
+		}
+
+		const VkDeviceSize offsetBytes = sizeof(Instance) * static_cast<VkDeviceSize>(firstInstance);
+		const VkDeviceSize bytes = sizeof(Instance) * static_cast<VkDeviceSize>(objectIndices.size());
+		const bool perFrame = instanceBufs_[currentFrame_].buffer != VK_NULL_HANDLE;
+		const VkDeviceSize capacity = perFrame ? instanceBufferSizes_[currentFrame_] : instanceBuf.size;
+		if (offsetBytes + bytes > capacity)
+		{
+			// updateInstanceDataOptimized() sizes the buffers for every range
+			// recordCommandBuffer() writes, so this would be a bookkeeping bug.
+			// Refuse rather than write past the end of the buffer.
+			logMessage(LogLevel::Error,
+			           "recordCommandBuffer: instance range exceeds the instance buffer; skipping it");
+			return;
+		}
+
+		// The usual case: the persistently mapped per-frame buffer, written in place.
+		void* const mapped = perFrame ? instanceBufferMappedPerFrame_[currentFrame_] : nullptr;
+		if (mapped != nullptr)
+		{
+			Instance* const destination =
+			    reinterpret_cast<Instance*>(static_cast<char*>(mapped) + offsetBytes);
+			for (size_t k = 0; k < objectIndices.size(); ++k)
+			{
+				destination[k] = cachedInstanceForObject(objectIndices[k]);
+			}
+			return;
+		}
+
+		// Unmapped buffer (the legacy single instanceBuf): gather, then map the range.
+		VkDeviceMemory const memory = perFrame ? instanceBufs_[currentFrame_].memory : instanceBuf.memory;
+		if (memory == VK_NULL_HANDLE)
+		{
+			return;
+		}
+		instanceWriteScratch_.resize(objectIndices.size());
+		for (size_t k = 0; k < objectIndices.size(); ++k)
+		{
+			instanceWriteScratch_[k] = cachedInstanceForObject(objectIndices[k]);
+		}
+		void* ptrWrite = nullptr;
+		VK_CHECK(vkMapMemory(device_, memory, offsetBytes, bytes, 0, &ptrWrite));
+		std::memcpy(ptrWrite, instanceWriteScratch_.data(), static_cast<size_t>(bytes));
+		vkUnmapMemory(device_, memory);
+	}
+
+	Instance VkApp::makeInstanceForObject(size_t index, const detail::ObjectRenderFlags& flags) const
+	{
 		if (index >= _objects_.size())
 		{
 			throw std::out_of_range(makeObjectIndexMessage("makeInstanceForObject", index, _objects_.size()));
@@ -2627,7 +2743,6 @@ namespace lightGraphics
 		const auto& obj = _objects_[index];
 		Instance instance{};
 		instance.model = getObjectModelMatrix(index);
-		const detail::ObjectRenderFlags flags = detail::appExtras(this).flagsFor(index);
 		if (!flags.visible)
 		{
 			// The flexible-shape and shadow passes skip hidden objects outright; this
@@ -3036,36 +3151,18 @@ namespace lightGraphics
 		VkBuffer regularInstanceBuffer = perFrameInstBuf != VK_NULL_HANDLE ? perFrameInstBuf : instanceBuf.buffer;
 		const bool useRegularInstancing = hasRegularObjects && regularInstanceBuffer != VK_NULL_HANDLE;
 
-		auto writeInstancesToBuffer = [&](VkDeviceSize offsetBytes, const Instance* instances, VkDeviceSize bytes)
-		{
-			if (bytes == 0 || instances == nullptr)
-			{
-				return;
-			}
-			if (perFrameInstBuf != VK_NULL_HANDLE)
-			{
-				void* mapped = instanceBufferMappedPerFrame_[currentFrame_];
-				if (mapped)
-				{
-					std::memcpy(static_cast<char*>(mapped) + offsetBytes, instances, static_cast<size_t>(bytes));
-					return;
-				}
-
-				void* ptrWrite = nullptr;
-				VK_CHECK(vkMapMemory(device_, instanceBufs_[currentFrame_].memory, offsetBytes, bytes, 0, &ptrWrite));
-				std::memcpy(ptrWrite, instances, static_cast<size_t>(bytes));
-				vkUnmapMemory(device_, instanceBufs_[currentFrame_].memory);
-				return;
-			}
-
-			void* ptrWrite = nullptr;
-			VK_CHECK(vkMapMemory(device_, instanceBuf.memory, offsetBytes, bytes, 0, &ptrWrite));
-			std::memcpy(ptrWrite, instances, static_cast<size_t>(bytes));
-			vkUnmapMemory(device_, instanceBuf.memory);
-		};
-
 		const detail::AppExtras& shadowExtras = detail::appExtras(this);
-		std::vector<std::vector<size_t>> shapeGroups(8);
+		std::vector<std::vector<size_t>>& shapeGroups = shadowShapeGroupsScratch_;
+		shapeGroups.resize(8);
+		for (auto& group : shapeGroups)
+		{
+			group.clear();
+		}
+		// Shadow casters get their own range after the main pass's (see
+		// instanceBufferSizes_'s comment): both are written while recording, so sharing
+		// [0, ...) let the main pass overwrite this pass's instances before the GPU read them.
+		const uint32_t shadowInstanceBase =
+			perFrameInstBuf != VK_NULL_HANDLE ? static_cast<uint32_t>(_objects_.size()) : 0u;
 		if (useRegularInstancing)
 		{
 			for (size_t i = 0; i < _objects_.size(); ++i)
@@ -3079,13 +3176,13 @@ namespace lightGraphics
 				{
 					continue;
 				}
-				const std::string name = _objects_[i].getName();
 				// Overlay-registered objects were already excluded from shadow
 				// casting; semi-transparent objects (alpha < 1, e.g. debug
 				// reference planes) shouldn't cast a full solid shadow of
 				// themselves either -- checked directly on alpha rather than
 				// requiring every such object to also be overlay-registered.
-				if (isDebugOverlayObjectName(name) || _objects_[i].getColour().a < (1.0f - 1e-3f))
+				if (_objects_[i].getColour().a < (1.0f - 1e-3f) ||
+				    isDebugOverlayObjectName(_objects_[i].getNameRef()))
 				{
 					continue;
 				}
@@ -3093,6 +3190,7 @@ namespace lightGraphics
 			}
 		}
 
+		bool shadowInstancesWritten = false;
 		for (size_t lightIndex : shadowLightIndices)
 		{
 			VkClearValue clearValue{};
@@ -3131,7 +3229,7 @@ namespace lightGraphics
 				vkCmdBindVertexBuffers(cmd, 0, 2, buffers.data(), offsets.data());
 				vkCmdBindIndexBuffer(cmd, indexBuffer_, 0, VK_INDEX_TYPE_UINT32);
 
-				uint32_t runningFirst = 0;
+				uint32_t runningFirst = shadowInstanceBase;
 				for (int shapeType = 0; shapeType < 8; ++shapeType)
 				{
 					if (shapeGroups[shapeType].empty())
@@ -3141,14 +3239,11 @@ namespace lightGraphics
 
 					const auto& shapeGeo = shapeGeometries_[shapeType];
 					const uint32_t countForShape = static_cast<uint32_t>(shapeGroups[shapeType].size());
-					std::vector<Instance> tmp(countForShape);
-					for (uint32_t k = 0; k < countForShape; ++k)
+					// Same instances for every light: write them for the first one only.
+					if (!shadowInstancesWritten)
 					{
-						tmp[k] = makeInstanceForObject(shapeGroups[shapeType][k]);
+						writeCachedInstances(runningFirst, shapeGroups[shapeType]);
 					}
-					const VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
-					const VkDeviceSize bytes = sizeof(Instance) * countForShape;
-					writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
 
 					vkCmdDrawIndexed(cmd,
 					                 shapeGeo.indexCount,
@@ -3158,6 +3253,7 @@ namespace lightGraphics
 					                 runningFirst);
 					runningFirst += countForShape;
 				}
+				shadowInstancesWritten = true;
 			}
 
 			VkPipeline boundShadowPipeline = shadowPipeline_;
@@ -3234,6 +3330,8 @@ namespace lightGraphics
 			throw std::runtime_error("recordCommandBuffer: vkBeginCommandBuffer failed");
 		}
 
+		// Rigged vertex/instance uploads and GPU skinning, before anything reads them.
+		recordRiggedUploads(cmd);
 		recordShadowPass(cmd);
 
 		// Clear values: color + depth
@@ -3328,6 +3426,7 @@ namespace lightGraphics
 			recordUi(cmd);
 #endif
 			vkCmdEndRenderPass(cmd);
+			recordFrameCapture(cmd, imageIndex);
 			if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
 			{
 				throw std::runtime_error("recordCommandBuffer: vkEndCommandBuffer failed");
@@ -3348,7 +3447,14 @@ namespace lightGraphics
 		}
 
 		// Draw each object with its specific geometry
-		std::vector<std::vector<size_t>> overlayShapeGroups(8); // debug overlay shapes (drawn on top)
+		// Debug overlay shapes (drawn on top). Like the other group lists here, the
+		// vectors are kept between frames so their capacity is reused.
+		std::vector<std::vector<size_t>>& overlayShapeGroups = overlayShapeGroupsScratch_;
+		overlayShapeGroups.resize(8);
+		for (auto& group : overlayShapeGroups)
+		{
+			group.clear();
+		}
 		uint32_t overlayBaseFirstInstance = 0;
 		bool hasOverlayObjects = false;
 		// Any object whose own colour alpha is below 1.0 -- see
@@ -3356,7 +3462,12 @@ namespace lightGraphics
 		// isDebugOverlayObjectName below, so a transparent object always
 		// draws through the transparent pass even if its name would also
 		// match a registered overlay substring.
-		std::vector<std::vector<size_t>> transparentShapeGroups(8);
+		std::vector<std::vector<size_t>>& transparentShapeGroups = transparentShapeGroupsScratch_;
+		transparentShapeGroups.resize(8);
+		for (auto& group : transparentShapeGroups)
+		{
+			group.clear();
+		}
 		uint32_t transparentBaseFirstInstance = 0;
 		bool hasTransparentObjects = false;
 
@@ -3380,34 +3491,15 @@ namespace lightGraphics
 		};
 		std::vector<DeferredOverlayBatch> deferredOverlayBatches;
 
-		auto writeInstancesToBuffer = [&](VkDeviceSize offsetBytes, const Instance* instances, VkDeviceSize bytes)
-		{
-			if (perFrameInstBuf != VK_NULL_HANDLE)
-			{
-				void* mapped = instanceBufferMappedPerFrame_[currentFrame_];
-				if (mapped)
-				{
-					std::memcpy(static_cast<char*>(mapped) + offsetBytes, instances, static_cast<size_t>(bytes));
-					return;
-				}
-
-				void* ptrWrite = nullptr;
-				VK_CHECK(vkMapMemory(device_, instanceBufs_[currentFrame_].memory, offsetBytes, bytes, 0, &ptrWrite));
-				std::memcpy(ptrWrite, instances, static_cast<size_t>(bytes));
-				vkUnmapMemory(device_, instanceBufs_[currentFrame_].memory);
-				return;
-			}
-
-			void* ptrWrite = nullptr;
-			VK_CHECK(vkMapMemory(device_, instanceBuf.memory, offsetBytes, bytes, 0, &ptrWrite));
-			std::memcpy(ptrWrite, instances, static_cast<size_t>(bytes));
-			vkUnmapMemory(device_, instanceBuf.memory);
-		};
-
 		if (indexed && useInstancing && hasRegularObjects)
 		{
-			// Group objects by shape type for efficient rendering
-			std::vector<std::vector<size_t>> shapeGroups(8); // 8 shape types
+			// Group objects by shape type for efficient rendering (8 shape types)
+			std::vector<std::vector<size_t>>& shapeGroups = mainShapeGroupsScratch_;
+			shapeGroups.resize(8);
+			for (auto& group : shapeGroups)
+			{
+				group.clear();
+			}
 
 			// View-frustum culling (see setFrustumCullingEnabled()'s own comment for
 			// scope: this pass only -- not the shadow pass, not rigged/mesh objects).
@@ -3447,7 +3539,11 @@ namespace lightGraphics
 						// introduce -- see sphereIntersects()'s own comment on why an
 						// oversized bound is the safe direction to err in, never an
 						// undersized one.
-						const glm::mat4 model = getObjectModelMatrix(i);
+						// The cached instance holds this frame's model matrix (it is only
+						// zeroed for hidden objects, which were skipped just above).
+						const glm::mat4 model = i < instanceDataCache_.size()
+							? instanceDataCache_[i].model
+							: getObjectModelMatrix(i);
 						const glm::vec3 center(model[3]);
 						const float scale = std::max({ glm::length(glm::vec3(model[0])),
 							glm::length(glm::vec3(model[1])), glm::length(glm::vec3(model[2])) });
@@ -3471,8 +3567,7 @@ namespace lightGraphics
 					// transparent pipeline instead (different culling and depth-write
 					// behaviour), which is not what those pre-existing overlays want
 					// and is not visually equivalent on every driver.
-					std::string name = _objects_[i].getName();
-					bool isOverlay = isDebugOverlayObjectName(name);
+					bool isOverlay = isDebugOverlayObjectName(_objects_[i].getNameRef());
 					bool isTransparent = _objects_[i].getColour().a < (1.0f - 1e-3f);
 					if (isOverlay)
 					{
@@ -3522,17 +3617,9 @@ namespace lightGraphics
 				const auto& shapeGeo = shapeGeometries_[shapeType];
 				uint32_t countForShape = static_cast<uint32_t>(shapeGroups[shapeType].size());
 
-				// Build a small contiguous staging of per-shape instances into a temp vector
-				// then upload into instance buffer at [runningFirst, runningFirst + countForShape)
-				std::vector<Instance> tmp(countForShape);
-				for (uint32_t k = 0; k < countForShape; ++k)
-				{
-					size_t objIndex = shapeGroups[shapeType][k];
-					tmp[k] = makeInstanceForObject(objIndex);
-				}
-				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
-				VkDeviceSize bytes = sizeof(Instance) * countForShape;
-				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
+				// This shape's cached instances, contiguous at
+				// [runningFirst, runningFirst + countForShape).
+				writeCachedInstances(runningFirst, shapeGroups[shapeType]);
 
 				// Sub-group this shape type's objects by (texture path, tiling)
 				// so each distinct texture gets its own draw call with the
@@ -3553,7 +3640,7 @@ namespace lightGraphics
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = shapeGroups[shapeType][k];
-					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					const std::string& texturePath = _objects_[objIndex].getTexturePathRef();
 					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
 					if (!batches.empty() &&
 						batches.back().texturePath == texturePath &&
@@ -3820,16 +3907,7 @@ namespace lightGraphics
 				const auto& shapeGeo = shapeGeometries_[shapeType];
 				uint32_t countForShape = static_cast<uint32_t>(overlayShapeGroups[shapeType].size());
 
-				std::vector<Instance> tmp(countForShape);
-				for (uint32_t k = 0; k < countForShape; ++k)
-				{
-					size_t objIndex = overlayShapeGroups[shapeType][k];
-					tmp[k] = makeInstanceForObject(objIndex);
-				}
-
-				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
-				VkDeviceSize bytes = sizeof(Instance) * countForShape;
-				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
+				writeCachedInstances(runningFirst, overlayShapeGroups[shapeType]);
 
 				// Overlay shapes essentially never carry a texture, but the
 				// pipeline layout still declares set 1 and the tiling push
@@ -3838,7 +3916,7 @@ namespace lightGraphics
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = overlayShapeGroups[shapeType][k];
-					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					const std::string& texturePath = _objects_[objIndex].getTexturePathRef();
 					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
 					if (!deferredOverlayBatches.empty() &&
 						deferredOverlayBatches.back().texturePath == texturePath &&
@@ -3902,17 +3980,7 @@ namespace lightGraphics
 				const auto& shapeGeo = shapeGeometries_[shapeType];
 				uint32_t countForShape = static_cast<uint32_t>(transparentShapeGroups[shapeType].size());
 
-				std::vector<Instance> tmp(countForShape);
-				for (uint32_t k = 0; k < countForShape; ++k)
-				{
-					size_t objIndex = transparentShapeGroups[shapeType][k];
-					tmp[k] = makeInstanceForObject(objIndex);
-				}
-
-				VkDeviceSize offsetBytes = sizeof(Instance) * runningFirst;
-				VkDeviceSize bytes = sizeof(Instance) * countForShape;
-
-				writeInstancesToBuffer(offsetBytes, tmp.data(), bytes);
+				writeCachedInstances(runningFirst, transparentShapeGroups[shapeType]);
 
 				// Batch by (texture, tiling, alpha) -- transparent objects can
 				// differ in opacity even when they share a shape type and
@@ -3931,7 +3999,7 @@ namespace lightGraphics
 				for (uint32_t k = 0; k < countForShape; ++k)
 				{
 					size_t objIndex = transparentShapeGroups[shapeType][k];
-					std::string const texturePath = _objects_[objIndex].getTexturePath();
+					const std::string& texturePath = _objects_[objIndex].getTexturePathRef();
 					glm::vec2 const tiling = _objects_[objIndex].getTextureTiling();
 					float const alpha = _objects_[objIndex].getColour().a;
 					if (!batches.empty() &&
@@ -4092,6 +4160,8 @@ namespace lightGraphics
 #endif
 
 		vkCmdEndRenderPass(cmd);
+		// A pending requestFrameCapture() reads this image back after the pass.
+		recordFrameCapture(cmd, imageIndex);
 
 		if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
 		{

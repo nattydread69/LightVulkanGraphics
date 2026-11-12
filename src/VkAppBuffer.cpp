@@ -18,7 +18,9 @@
 
 #include "VkApp.h"
 #include "SceneGraph.h"
+#include "VkAppExtras.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <sstream>
@@ -61,49 +63,173 @@ namespace lightGraphics
 
 	VkCommandBuffer VkApp::beginSingleTimeCommands()
 	{
-		VkCommandBufferAllocateInfo allocInfo{};
-		allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		allocInfo.commandPool = commandPool_;
-		allocInfo.commandBufferCount = 1;
-
-		VkCommandBuffer cmd{};
-		if (vkAllocateCommandBuffers(device_, &allocInfo, &cmd) != VK_SUCCESS)
+		if (uploadCmd_ == VK_NULL_HANDLE)
 		{
-			throw std::runtime_error("failed to allocate command buffer");
+			VkCommandBufferAllocateInfo allocInfo{};
+			allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+			allocInfo.commandPool = commandPool_;
+			allocInfo.commandBufferCount = 1;
+
+			VkCommandBuffer cmd{};
+			if (vkAllocateCommandBuffers(device_, &allocInfo, &cmd) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to allocate command buffer");
+			}
+
+			VkCommandBufferBeginInfo beginInfo{};
+			beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+			beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+			if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS)
+			{
+				vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+				throw std::runtime_error("failed to begin command buffer");
+			}
+			uploadCmd_ = cmd;
 		}
-
-		VkCommandBufferBeginInfo beginInfo{};
-		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-		beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-
-		if (vkBeginCommandBuffer(cmd, &beginInfo) != VK_SUCCESS)
-		{
-			throw std::runtime_error("failed to begin command buffer");
-		}
-
-		return cmd;
+		return uploadCmd_;
 	}
 
 	void VkApp::endSingleTimeCommands(VkCommandBuffer cmd)
 	{
-		if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
+		if (cmd != uploadCmd_)
 		{
-			throw std::runtime_error("failed to record command buffer");
+			throw std::logic_error("endSingleTimeCommands: not the open upload batch");
+		}
+		// Recording stays open: drawFrame() submits the batch ahead of the next frame.
+		// A large batch (e.g. a crowd being loaded with no frames drawn yet) is submitted
+		// early so its staging memory can be freed as it completes.
+		constexpr std::size_t kMaxCommandsPerUploadBatch = 256;
+		if (++uploadCommandCount_ >= kMaxCommandsPerUploadBatch)
+		{
+			flushUploads(false);
+		}
+	}
+
+	void VkApp::flushUploads(bool waitForCompletion)
+	{
+		if (uploadCmd_ != VK_NULL_HANDLE)
+		{
+			VkCommandBuffer cmd = uploadCmd_;
+			uploadCmd_ = VK_NULL_HANDLE;
+			uploadCommandCount_ = 0;
+			if (vkEndCommandBuffer(cmd) != VK_SUCCESS)
+			{
+				vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+				throw std::runtime_error("failed to record the upload batch");
+			}
+
+			VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+			VkFence fence = VK_NULL_HANDLE;
+			if (vkCreateFence(device_, &fenceInfo, nullptr, &fence) != VK_SUCCESS)
+			{
+				vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+				throw std::runtime_error("failed to create the upload batch fence");
+			}
+
+			VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+			submitInfo.commandBufferCount = 1;
+			submitInfo.pCommandBuffers = &cmd;
+			if (vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence) != VK_SUCCESS)
+			{
+				vkDestroyFence(device_, fence, nullptr);
+				vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+				throw std::runtime_error("failed to submit the upload batch");
+			}
+			uploadsInFlight_.push_back({cmd, fence, ++submitSerial_});
 		}
 
-		VkSubmitInfo submitInfo{};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &cmd;
-
-		if (vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE) != VK_SUCCESS)
+		if (waitForCompletion && !uploadsInFlight_.empty())
 		{
-			throw std::runtime_error("failed to submit single-time command buffer");
+			const VkFence last = uploadsInFlight_.back().fence;
+			if (vkWaitForFences(device_, 1, &last, VK_TRUE, UINT64_MAX) != VK_SUCCESS)
+			{
+				throw std::runtime_error("failed to wait for the upload batch");
+			}
 		}
-		vkQueueWaitIdle(graphicsQueue_);
+		collectRetired();
+	}
 
-		vkFreeCommandBuffers(device_, commandPool_, 1, &cmd);
+	bool VkApp::uploadsMayReferenceResources() const
+	{
+		return uploadCmd_ != VK_NULL_HANDLE || !uploadsInFlight_.empty();
+	}
+
+	void VkApp::retire(std::function<void()> destroy)
+	{
+		if (!destroy)
+		{
+			return;
+		}
+		if (device_ == VK_NULL_HANDLE)
+		{
+			destroy();
+			return;
+		}
+		// Anything recorded or submitted so far may use the resource; the next
+		// submission's completion (its fence covers all earlier ones) proves it is not.
+		retired_.push_back({submitSerial_ + 1, std::move(destroy)});
+	}
+
+	void VkApp::collectRetired()
+	{
+		// Finished upload batches advance the completed serial and are freed.
+		for (auto it = uploadsInFlight_.begin(); it != uploadsInFlight_.end();)
+		{
+			if (vkGetFenceStatus(device_, it->fence) == VK_SUCCESS)
+			{
+				completedSerial_ = std::max(completedSerial_, it->serial);
+				vkDestroyFence(device_, it->fence, nullptr);
+				vkFreeCommandBuffers(device_, commandPool_, 1, &it->cmd);
+				it = uploadsInFlight_.erase(it);
+			}
+			else
+			{
+				++it;
+			}
+		}
+
+		// retired_ is in non-decreasing serial order. Take the safe entries out before
+		// running them: a destroy function may itself retire something.
+		std::vector<std::function<void()>> ready;
+		while (!retired_.empty() && retired_.front().safeAfterSerial <= completedSerial_)
+		{
+			ready.push_back(std::move(retired_.front().destroy));
+			retired_.pop_front();
+		}
+		for (auto& destroy : ready)
+		{
+			destroy();
+		}
+	}
+
+	void VkApp::drainRetired()
+	{
+		// Caller has made the device idle: every submission is complete.
+		if (uploadCmd_ != VK_NULL_HANDLE)
+		{
+			vkEndCommandBuffer(uploadCmd_);
+			vkFreeCommandBuffers(device_, commandPool_, 1, &uploadCmd_);
+			uploadCmd_ = VK_NULL_HANDLE;
+			uploadCommandCount_ = 0;
+		}
+		for (InFlightUpload& upload : uploadsInFlight_)
+		{
+			vkDestroyFence(device_, upload.fence, nullptr);
+			vkFreeCommandBuffers(device_, commandPool_, 1, &upload.cmd);
+		}
+		uploadsInFlight_.clear();
+		completedSerial_ = submitSerial_;
+		// Destroy functions run here may retire more (e.g. a retired instance's buffers,
+		// while uploads were still pending when it was retired); with nothing pending now,
+		// those run straight away, so this ends.
+		while (!retired_.empty())
+		{
+			std::function<void()> destroy = std::move(retired_.front().destroy);
+			retired_.pop_front();
+			destroy();
+		}
 	}
 
 	void VkApp::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties,
@@ -264,6 +390,28 @@ namespace lightGraphics
 
 	void VkApp::destroyBuffer(VkDevice device, Buffer& buf)
 	{
+		// While uploads are recorded or in flight, the buffer may be one of their sources
+		// (a staging buffer destroyed right after copyBuffer(), as every upload does) or
+		// destinations: destroy it once they have completed.
+		if ((buf.buffer != VK_NULL_HANDLE || buf.memory != VK_NULL_HANDLE) &&
+		    device == device_ && uploadsMayReferenceResources())
+		{
+			const VkBuffer buffer = buf.buffer;
+			const VkDeviceMemory memory = buf.memory;
+			retire([device, buffer, memory]()
+			{
+				if (buffer != VK_NULL_HANDLE)
+				{
+					vkDestroyBuffer(device, buffer, nullptr);
+				}
+				if (memory != VK_NULL_HANDLE)
+				{
+					vkFreeMemory(device, memory, nullptr);
+				}
+			});
+			buf = Buffer{};
+			return;
+		}
 		if (buf.buffer != VK_NULL_HANDLE)
 		{
 			vkDestroyBuffer(device, buf.buffer, nullptr);
@@ -345,9 +493,15 @@ namespace lightGraphics
 
 	void VkApp::createCommandBuffers()
 	{
-		// Free any old buffers first (safe if empty)
+		// Free any old buffers first (safe if empty). They may still be pending on the GPU
+		// if this is called in a running scene, so wait for every frame in flight first.
 		if (!commandBuffers_.empty())
 		{
+			if (device_ != VK_NULL_HANDLE && !inFlight_.empty())
+			{
+				VK_CHECK(vkWaitForFences(device_, static_cast<uint32_t>(inFlight_.size()), inFlight_.data(),
+					VK_TRUE, UINT64_MAX));
+			}
 			vkFreeCommandBuffers(
 				device_,
 				commandPool_,
@@ -431,6 +585,106 @@ namespace lightGraphics
 		throw std::runtime_error("No suitable memory type");
 	}
 
+	VkDeviceMemory VkApp::createBuffersInOneAllocation(const std::vector<BufferRequest>& requests,
+	                                                   VkMemoryPropertyFlags properties)
+	{
+		if (requests.empty())
+		{
+			return VK_NULL_HANDLE;
+		}
+
+		auto fallback = [&]()
+		{
+			for (const BufferRequest& request : requests)
+			{
+				createBuffer(request.size, request.usage, properties, *request.buffer);
+				if (request.mapped != nullptr)
+				{
+					VK_CHECK(vkMapMemory(device_, request.buffer->memory, 0, request.size, 0, request.mapped));
+				}
+			}
+			return static_cast<VkDeviceMemory>(VK_NULL_HANDLE);
+		};
+
+		std::vector<VkDeviceSize> offsets(requests.size(), 0);
+		VkDeviceSize total = 0;
+		uint32_t typeBits = ~0u;
+		for (size_t i = 0; i < requests.size(); ++i)
+		{
+			const BufferRequest& request = requests[i];
+			VkBufferCreateInfo info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+			info.size = request.size;
+			info.usage = request.usage;
+			info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			VK_CHECK(vkCreateBuffer(device_, &info, nullptr, &request.buffer->buffer));
+			request.buffer->memory = VK_NULL_HANDLE;
+			request.buffer->size = request.size;
+
+			VkMemoryRequirements requirements{};
+			vkGetBufferMemoryRequirements(device_, request.buffer->buffer, &requirements);
+			typeBits &= requirements.memoryTypeBits;
+			const VkDeviceSize alignment = std::max<VkDeviceSize>(requirements.alignment, 1);
+			offsets[i] = (total + alignment - 1) / alignment * alignment;
+			total = offsets[i] + requirements.size;
+		}
+
+		uint32_t memoryType = 0;
+		bool haveType = typeBits != 0;
+		if (haveType)
+		{
+			try
+			{
+				memoryType = findMemoryType(typeBits, properties);
+			}
+			catch (const std::runtime_error&)
+			{
+				haveType = false;
+			}
+		}
+		if (!haveType)
+		{
+			for (const BufferRequest& request : requests)
+			{
+				vkDestroyBuffer(device_, request.buffer->buffer, nullptr);
+				*request.buffer = detail::Buffer{};
+			}
+			return fallback();
+		}
+
+		VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+		allocInfo.allocationSize = total;
+		allocInfo.memoryTypeIndex = memoryType;
+		VkDeviceMemory memory = VK_NULL_HANDLE;
+		if (vkAllocateMemory(device_, &allocInfo, nullptr, &memory) != VK_SUCCESS)
+		{
+			for (const BufferRequest& request : requests)
+			{
+				vkDestroyBuffer(device_, request.buffer->buffer, nullptr);
+				*request.buffer = detail::Buffer{};
+			}
+			throw std::runtime_error("createBuffersInOneAllocation: vkAllocateMemory failed");
+		}
+
+		for (size_t i = 0; i < requests.size(); ++i)
+		{
+			VK_CHECK(vkBindBufferMemory(device_, requests[i].buffer->buffer, memory, offsets[i]));
+		}
+
+		if ((properties & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0)
+		{
+			void* base = nullptr;
+			VK_CHECK(vkMapMemory(device_, memory, 0, VK_WHOLE_SIZE, 0, &base));
+			for (size_t i = 0; i < requests.size(); ++i)
+			{
+				if (requests[i].mapped != nullptr)
+				{
+					*requests[i].mapped = static_cast<char*>(base) + offsets[i];
+				}
+			}
+		}
+		return memory;
+	}
+
 	void VkApp::ensureInstanceBufferSizeForFrame(uint32_t frameIndex, VkDeviceSize requiredSize)
 	{
 		if (instanceBufferSizes_[frameIndex] < requiredSize)
@@ -484,7 +738,11 @@ namespace lightGraphics
 		// individual frame-in-flight GPU buffer has actually received a copy of
 		// it yet -- see instanceBufferNeedsSync_'s own comment for why those are
 		// tracked separately.
-		if (!instanceDataDirty_ && !instanceBufferNeedsSync_[currentFrame_])
+		// Until the first update after finalizeScene() every entry is rebuilt: before it,
+		// the object setters do not mark objects dirty, so the dirty bits alone could
+		// leave a cache entry stale -- and recordCommandBuffer() now draws from the cache.
+		bool const fullRebuild = !sceneFinalized_ || !instanceCacheBuiltSinceFinalize_;
+		if (!fullRebuild && !instanceDataDirty_ && !instanceBufferNeedsSync_[currentFrame_])
 		{
 			return;
 		}
@@ -514,18 +772,21 @@ namespace lightGraphics
 			instanceDataCache_.resize(_objects_.size());
 		}
 
-		// Only update dirty objects
+		// Only update dirty objects (all of them on a full rebuild). AppExtras is looked up
+		// once here, not per object: each lookup takes a global mutex.
+		const detail::AppExtras& extras = detail::appExtras(this);
 		bool anyDirty = false;
 		for (size_t i = 0; i < _objects_.size(); ++i)
 		{
-			if (dirtyObjects_[i])
+			if (fullRebuild || dirtyObjects_[i])
 			{
-				instanceDataCache_[i] = makeInstanceForObject(i);
+				instanceDataCache_[i] = makeInstanceForObject(i, extras.flagsFor(i));
 
 				dirtyObjects_[i] = false;
 				anyDirty = true;
 			}
 		}
+		instanceCacheBuiltSinceFinalize_ = sceneFinalized_;
 
 		if (anyDirty || countChanged)
 		{
@@ -554,9 +815,10 @@ namespace lightGraphics
 		// swapchain's imageIndex/currentFrame_ on whichever frame comes next,
 		// which may not be this one, and an under-sized sibling buffer causes
 		// an out-of-bounds write (and a segfault) the next time that frame is
-		// drawn. Writing this call's actual *data* into it is a separate
-		// question, handled below.
-		VkDeviceSize instBytes = sizeof(Instance) * _objects_.size();
+		// drawn. Twice the object count: recordCommandBuffer() writes the main pass's
+		// instances to [0, N) and the shadow casters' to [N, 2N) (see
+		// instanceBufferSizes_'s comment).
+		VkDeviceSize instBytes = sizeof(Instance) * _objects_.size() * 2u;
 
 		// drawFrame() only waits on currentFrame_'s own fence before calling
 		// this function -- but when growth is needed below, resizing touches
@@ -594,23 +856,11 @@ namespace lightGraphics
 			ensureInstanceBufferSizeForFrame(frameIndex, instBytes);
 		}
 
-		// Only ever memcpy into currentFrame_'s own buffer: it's the only one
-		// this drawFrame() call's fence wait has actually verified is idle. A
-		// sibling frame's buffer might still be actively read by a
-		// still-in-flight command buffer from a previous drawFrame() call --
-		// host-coherent memory guarantees the write eventually becomes
-		// visible, but gives no ordering guarantee against a concurrent GPU
-		// read, so writing fresh data into it here would be a genuine,
-		// non-deterministic race (observed as random per-frame garbage --
-		// wrong texture/tiling on some instances, degenerate geometry on
-		// others -- appearing only once frames were being submitted back to
-		// back fast enough for a previous frame's command buffer to still be
-		// executing when this one raced ahead of it).
-		void* mapped = instanceBufferMappedPerFrame_[currentFrame_];
-		if (mapped)
-		{
-			std::memcpy(mapped, instanceDataCache_.data(), (size_t)instBytes);
-		}
+		// No data is copied here: every draw reads the per-pass ranges
+		// recordCommandBuffer() writes from instanceDataCache_ into currentFrame_'s
+		// buffer (the only one whose fence drawFrame() has waited on). Copying the whole
+		// cache here in object order too, as this used to, was overwritten before the
+		// GPU ever read it.
 		instanceBufferNeedsSync_[currentFrame_] = false;
 	}
 

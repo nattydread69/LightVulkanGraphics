@@ -4,9 +4,11 @@ LightVulkanGraphics incorporates the following third-party components.
 
 ## stb
 
-Files under `external/stb/`: `stb_image.h` v2.30 (texture loading; see
-`src/VkAppTexture.cpp`), `stb_easy_font.h` (screen text; see `src/ScreenText.cpp`) and
-`stb_truetype.h` (used by LVGUI to bake and measure text; see `src/ui/FontImpl.cpp`).
+Files under `external/stb/`: `stb_image.h` v2.30 (image decoding behind
+`loadImageRgba()`; see `src/ImageLoad.cpp`), `stb_easy_font.h` (screen text; see
+`src/ScreenText.cpp`) and `stb_truetype.h` (used by LVGUI to bake and measure text; see
+`src/ui/Font.cpp`). All are compiled with internal linkage, so the libraries export no
+`stb*` symbols.
 Public domain (Unlicense) or MIT, at the user's option.
 Upstream: https://github.com/nothings/stb
 

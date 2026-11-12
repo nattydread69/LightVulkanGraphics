@@ -34,6 +34,16 @@ namespace lightGraphics::detail
 		std::vector<std::function<void(const CapturedFrame&)>> pending;
 		// The current swapchain was created with VK_IMAGE_USAGE_TRANSFER_SRC_BIT.
 		bool swapchainReadable = false;
+		// The frame being drawn now: prepareFrameCapture() moves `pending` here and makes
+		// the readback buffer, recordFrameCapture() records the copy into the frame's own
+		// command buffer, finishFrameCapture() delivers it once that frame has completed.
+		std::vector<std::function<void(const CapturedFrame&)>> active;
+		detail::Buffer readback;
+		uint32_t imageIndex = 0;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		bool swapRedBlue = false;
+		bool recorded = false;
 	};
 
 	CaptureState& captureState(const VkApp* app);

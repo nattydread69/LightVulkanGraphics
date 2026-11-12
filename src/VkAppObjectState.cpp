@@ -237,11 +237,19 @@ namespace lightGraphics
 			return *objectModelMatrixOverrides_[index];
 		}
 
+		// translate(position) * mat4_cast(rotation) * scale(size), composed directly:
+		// the rotation's columns scaled by size, then the position. Same result as the
+		// two full 4x4 products (whose extra terms are all multiplications by 0 or 1),
+		// at a fraction of the cost -- this runs for every moved object every frame.
 		const auto& obj = _objects_[index];
-		const glm::mat4 translation = glm::translate(glm::mat4(1.0f), obj.getPosition());
-		const glm::mat4 rotation = glm::mat4_cast(obj.getRotation());
-		const glm::mat4 scale = glm::scale(glm::mat4(1.0f), obj.getSize());
-		return translation * rotation * scale;
+		const glm::mat3 rotation = glm::mat3_cast(obj.getRotation());
+		const glm::vec3 size = obj.getSize();
+		glm::mat4 model(1.0f);
+		model[0] = glm::vec4(rotation[0] * size.x, 0.0f);
+		model[1] = glm::vec4(rotation[1] * size.y, 0.0f);
+		model[2] = glm::vec4(rotation[2] * size.z, 0.0f);
+		model[3] = glm::vec4(obj.getPosition(), 1.0f);
+		return model;
 	}
 
 	void VkApp::setObjectModelMatrixOverride(size_t index, const glm::mat4& model)

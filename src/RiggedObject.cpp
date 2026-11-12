@@ -25,12 +25,22 @@
 
 namespace
 {
+// The first i with animationTime < keys[i + 1].time, or keys.size() - 1 if there is none.
+// With keys in ascending time order (Animation::keysSortedByTime) that is a binary search
+// giving exactly the linear scan's answer; otherwise the scan.
 template <typename Keyframe>
-int findInterpolationKeyIndex(float animationTime, const std::vector<Keyframe>& keys)
+int findInterpolationKeyIndex(float animationTime, const std::vector<Keyframe>& keys, bool sorted)
 {
     if (keys.size() < 2)
     {
         return 0;
+    }
+
+    if (sorted)
+    {
+        const auto next = std::upper_bound(keys.begin() + 1, keys.end(), animationTime,
+            [](float time, const Keyframe& key) { return time < key.time; });
+        return static_cast<int>(next - (keys.begin() + 1));
     }
 
     for (int i = 0; i < static_cast<int>(keys.size()) - 1; ++i)
@@ -419,6 +429,9 @@ void RiggedObject::calculateBoneTransforms()
                             ? (currentAnimationTime * animation.ticksPerSecond)
                             : currentAnimationTime;
 
+    const bool useChannelTable = animation.channelIndexByBone.size() == model->bones.size();
+    const bool keysSorted = useChannelTable && animation.keysSortedByTime;
+
     // Calculate transforms for each bone
     for (size_t i = 0; i < model->bones.size(); i++)
     {
@@ -427,12 +440,19 @@ void RiggedObject::calculateBoneTransforms()
         glm::quat rotation = bone.bindRotation;
         glm::vec3 scale = bone.bindScale;
 
-        // Find animation channel for this bone. channelIndexByBoneName is built
-        // once per animation at load time (see FBXLoader::processAnimations), so
-        // this is a single map lookup instead of a linear scan over every channel,
-        // every bone, every frame.
+        // Find the animation channel for this bone: channelIndexByBone (built once at
+        // load, see FBXLoader::loadModel) when it covers this model's bones, else the
+        // name map.
         const AnimationChannel* channel = nullptr;
-        if (auto channelIt = animation.channelIndexByBoneName.find(bone.name);
+        if (useChannelTable)
+        {
+            const int channelIndex = animation.channelIndexByBone[i];
+            if (channelIndex >= 0)
+            {
+                channel = &animation.channels[static_cast<size_t>(channelIndex)];
+            }
+        }
+        else if (auto channelIt = animation.channelIndexByBoneName.find(bone.name);
             channelIt != animation.channelIndexByBoneName.end() &&
             channelIt->second >= 0 &&
             channelIt->second < static_cast<int>(animation.channels.size()))
@@ -452,7 +472,7 @@ void RiggedObject::calculateBoneTransforms()
                 else
                 {
                     const int keyIndex =
-                        findInterpolationKeyIndex(timeInTicks, channel->positionKeys);
+                        findInterpolationKeyIndex(timeInTicks, channel->positionKeys, keysSorted);
                     const int nextKeyIndex = keyIndex + 1;
 
                     if (nextKeyIndex < static_cast<int>(channel->positionKeys.size()))
@@ -482,7 +502,7 @@ void RiggedObject::calculateBoneTransforms()
                 else
                 {
                     const int keyIndex =
-                        findInterpolationKeyIndex(timeInTicks, channel->rotationKeys);
+                        findInterpolationKeyIndex(timeInTicks, channel->rotationKeys, keysSorted);
                     const int nextKeyIndex = keyIndex + 1;
 
                     if (nextKeyIndex < static_cast<int>(channel->rotationKeys.size()))
@@ -514,7 +534,7 @@ void RiggedObject::calculateBoneTransforms()
                 else
                 {
                     const int keyIndex =
-                        findInterpolationKeyIndex(timeInTicks, channel->scaleKeys);
+                        findInterpolationKeyIndex(timeInTicks, channel->scaleKeys, keysSorted);
                     const int nextKeyIndex = keyIndex + 1;
 
                     if (nextKeyIndex < static_cast<int>(channel->scaleKeys.size()))
@@ -535,12 +555,15 @@ void RiggedObject::calculateBoneTransforms()
             }
         }
 
-        // Build transformation matrix
-        glm::mat4 translation = glm::translate(glm::mat4(1.0f), position);
-        glm::mat4 rotationMatrix = glm::mat4_cast(rotation);
-        glm::mat4 scaleMatrix = glm::scale(glm::mat4(1.0f), scale);
-
-        glm::mat4 transform = translation * rotationMatrix * scaleMatrix;
+        // translate(position) * mat4_cast(rotation) * scale(scale), composed directly:
+        // the rotation's columns scaled, then the position. Same result as the two
+        // full 4x4 products, whose extra terms are all multiplications by 0 or 1.
+        const glm::mat3 rotationMatrix = glm::mat3_cast(rotation);
+        glm::mat4 transform(1.0f);
+        transform[0] = glm::vec4(rotationMatrix[0] * scale.x, 0.0f);
+        transform[1] = glm::vec4(rotationMatrix[1] * scale.y, 0.0f);
+        transform[2] = glm::vec4(rotationMatrix[2] * scale.z, 0.0f);
+        transform[3] = glm::vec4(position, 1.0f);
 
         // Apply parent transform if this bone has a parent
         if (bone.parentIndex >= 0 &&

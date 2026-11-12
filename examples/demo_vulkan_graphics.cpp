@@ -30,6 +30,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <ctime>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -83,8 +86,12 @@ public:
 class DemoModel : public PhysicsModel
 {
 public:
-	explicit DemoModel(lightGraphics::lightVulkanGraphics& app)
-	    : PhysicsModel(app, "Demo Model")
+	// workerCount > 1 adds that many animated Workers in total (sharing one loaded
+	// model) -- a skinning load for --bench; see DemoApp's argument parsing.
+	DemoModel(lightGraphics::lightVulkanGraphics& app, int workerCount, float freezeSeconds)
+	    : PhysicsModel(app, "Demo Model"),
+	      workerCount_(std::max(workerCount, 0)),
+	      freezeSeconds_(freezeSeconds)
 	{
 	}
 
@@ -98,9 +105,17 @@ public:
 
 	void update(float deltaTime) override
 	{
+		if (freezeSeconds_ >= 0.0f)
+		{
+			return; // --freeze: every Worker holds the pose set at creation
+		}
 		if (worker_)
 		{
 			worker_->updateAnimation(deltaTime);
+		}
+		for (const auto& extraWorker : extraWorkers_)
+		{
+			extraWorker->updateAnimation(deltaTime);
 		}
 	}
 
@@ -169,7 +184,11 @@ private:
 		              glm::vec3(5.0f, 0.06f, 4.5f), glm::vec4(0.34f, 0.38f, 0.36f, 1.0f),
 		              glm::quat(1.0f, 0.0f, 0.0f, 0.0f), "Worker Shadow Ground", 0.0f);
 
-		createRiggedWorker();
+		if (workerCount_ > 0)
+		{
+			createRiggedWorker();
+			createExtraWorkers();
+		}
 		createVolumetricFog();
 		configureDemoShadows();
 
@@ -322,6 +341,10 @@ private:
 			}
 
 			worker_->playAnimation(initialAnimationIndex, true);
+			if (freezeSeconds_ >= 0.0f)
+			{
+				worker_->setAnimationTime(freezeSeconds_);
+			}
 			lightGraphics::consoleInfoStream() << "Playing startup animation "
 			                                   << initialAnimationIndex << ": "
 			                                   << animationNames[initialAnimationIndex] << std::endl;
@@ -350,6 +373,41 @@ private:
 		app_.updateLight(workerLightIndex, workerLight);
 	}
 
+	// Workers 2..N: a grid behind the first one, all playing the same clip at
+	// staggered times so every character has its own pose each frame.
+	void createExtraWorkers()
+	{
+		if (!worker_ || workerCount_ <= 1)
+		{
+			return;
+		}
+
+		constexpr int kColumns = 8;
+		constexpr float kSpacing = 1.1f;
+		const glm::vec3 origin(-1.5f, 0.0f, -5.0f);
+		for (int i = 1; i < workerCount_; ++i)
+		{
+			const int column = i % kColumns;
+			const int row = i / kColumns;
+			const glm::vec3 position = origin + glm::vec3(
+			    (static_cast<float>(column) - 0.5f * static_cast<float>(kColumns - 1)) * kSpacing,
+			    0.0f,
+			    -static_cast<float>(row + 1) * kSpacing);
+			auto extraWorker = std::make_shared<lightGraphics::RiggedObject>(
+			    position, glm::vec3(1.0f), buildWorkerSpawnRotation(position),
+			    "Worker " + std::to_string(i + 1), 1.0f, worker_->getModel());
+			if (worker_->getCurrentAnimationIndex() >= 0)
+			{
+				extraWorker->playAnimation(worker_->getCurrentAnimationIndex(), true);
+				extraWorker->setAnimationTime(std::max(freezeSeconds_, 0.0f) + 0.37f * static_cast<float>(i));
+			}
+			app_.addRiggedObject(extraWorker);
+			extraWorkers_.push_back(std::move(extraWorker));
+		}
+		lightGraphics::consoleInfoStream() << "Added " << extraWorkers_.size()
+		                                   << " extra animated Workers" << std::endl;
+	}
+
 	void configureDemoShadows()
 	{
 		if (app_.getLightCount() == 0)
@@ -367,7 +425,10 @@ private:
 		app_.updateLight(0, sun);
 	}
 
+	int workerCount_ = 1;
+	float freezeSeconds_ = -1.0f;
 	std::shared_ptr<lightGraphics::RiggedObject> worker_;
+	std::vector<std::shared_ptr<lightGraphics::RiggedObject>> extraWorkers_;
 	lightGraphics::Texture3DHandle fogTexture_;
 	lightGraphics::TransferFunctionHandle fogTransferFunction_;
 	lightGraphics::VolumeHandle fogVolume_;
@@ -379,18 +440,41 @@ public:
 	DemoApp(int argc, char* argv[])
 	    : app_("demoVulkanGraphics")
 	{
-		if (argc > 1)
+		for (int i = 1; i < argc; ++i)
 		{
-			const std::string modelArg = argv[1];
-			if (modelArg == "demo" || modelArg == "Demo" || modelArg == "DEMO")
+			const std::string arg = argv[i];
+			const bool hasValue = i + 1 < argc;
+			if (arg == "demo" || arg == "Demo" || arg == "DEMO")
 			{
 				currentModel_ = ModelType::Demo;
+			}
+			else if (arg == "--workers" && hasValue)
+			{
+				workerCount_ = std::max(0, std::atoi(argv[++i]));
+			}
+			else if (arg == "--bench" && hasValue)
+			{
+				benchSeconds_ = std::max(0.0, std::atof(argv[++i]));
+			}
+			else if (arg == "--warmup" && hasValue)
+			{
+				warmupSeconds_ = std::max(0.0, std::atof(argv[++i]));
+			}
+			else if (arg == "--freeze" && hasValue)
+			{
+				freezeSeconds_ = std::max(0.0f, static_cast<float>(std::atof(argv[++i])));
+			}
+			else if (arg == "--capture" && hasValue)
+			{
+				capturePath_ = argv[++i];
 			}
 			else
 			{
 				lightGraphics::consoleInfoStream()
-				    << "Unknown scene argument: " << modelArg
-				    << ". Available scene: demo" << std::endl;
+				    << "Unknown argument: " << arg
+				    << ". Usage: demoVulkanGraphics [demo] [--workers N]"
+				       " [--bench SECONDS] [--warmup SECONDS] [--freeze POSE_SECONDS]"
+				       " [--capture OUT.png]" << std::endl;
 			}
 		}
 
@@ -424,6 +508,8 @@ public:
 			{
 				currentPhysicsModel_->update(realDeltaTime);
 			}
+			sampleBenchmarkFrame();
+			captureFrameIfRequested();
 		});
 
 		app_.run();
@@ -486,7 +572,7 @@ private:
 		{
 		case ModelType::Demo:
 			lightGraphics::consoleInfoStream() << "Loading demo scene..." << std::endl;
-			currentPhysicsModel_ = std::make_unique<DemoModel>(app_);
+			currentPhysicsModel_ = std::make_unique<DemoModel>(app_, workerCount_, freezeSeconds_);
 			break;
 		}
 
@@ -535,6 +621,100 @@ private:
 		lightGraphics::consoleInfoStream() << "============================\n" << std::endl;
 	}
 
+	static double processCpuSeconds()
+	{
+		return static_cast<double>(std::clock()) / static_cast<double>(CLOCKS_PER_SEC);
+	}
+
+	// --bench: after --warmup seconds, records the interval between consecutive
+	// update callbacks (one per frame) for --bench seconds, prints the statistics
+	// on a "BENCH" line and closes the window. Run with LVG_PRESENT_MODE=uncapped
+	// so the frame rate is not held at the monitor's.
+	void sampleBenchmarkFrame()
+	{
+		if (benchSeconds_ <= 0.0 || benchFinished_)
+		{
+			return;
+		}
+
+		const auto now = std::chrono::steady_clock::now();
+		if (!benchStarted_)
+		{
+			benchStarted_ = true;
+			benchStartTime_ = now;
+			return;
+		}
+
+		const double sinceStart = std::chrono::duration<double>(now - benchStartTime_).count();
+		if (sinceStart < warmupSeconds_)
+		{
+			benchLastFrameTime_ = now;
+			benchCpuStart_ = processCpuSeconds();
+			return;
+		}
+
+		benchFrameMs_.push_back(std::chrono::duration<double, std::milli>(now - benchLastFrameTime_).count());
+		benchLastFrameTime_ = now;
+		if (sinceStart < warmupSeconds_ + benchSeconds_)
+		{
+			return;
+		}
+
+		benchFinished_ = true;
+		const double cpuSeconds = processCpuSeconds() - benchCpuStart_;
+		std::vector<double> sorted = benchFrameMs_;
+		std::sort(sorted.begin(), sorted.end());
+		double total = 0.0;
+		for (double ms : sorted)
+		{
+			total += ms;
+		}
+		const size_t count = sorted.size();
+		auto percentile = [&](double p)
+		{
+			return sorted[std::min(count - 1, static_cast<size_t>(p * static_cast<double>(count - 1) + 0.5))];
+		};
+		const double meanMs = total / static_cast<double>(count);
+		std::cout << std::fixed << std::setprecision(3)
+		          << "BENCH workers=" << workerCount_
+		          << " frames=" << count
+		          << " mean_ms=" << meanMs
+		          << " fps=" << 1000.0 / meanMs
+		          << " p50_ms=" << percentile(0.50)
+		          << " p95_ms=" << percentile(0.95)
+		          << " p99_ms=" << percentile(0.99)
+		          << " max_ms=" << sorted.back()
+		          << " cpu_ms_per_frame=" << 1000.0 * cpuSeconds / static_cast<double>(count)
+		          << std::endl;
+		glfwSetWindowShouldClose(window_, GLFW_TRUE);
+	}
+
+	// --capture: saves the 30th frame (late enough for every frame in flight to
+	// have been rebuilt) as a PNG and closes the window. With --freeze the
+	// picture is deterministic, so two runs can be compared pixel for pixel.
+	void captureFrameIfRequested()
+	{
+		if (capturePath_.empty() || captureRequested_ || ++captureFrameCounter_ < 30)
+		{
+			return;
+		}
+		captureRequested_ = true;
+		app_.requestFrameCapture([this](const lightGraphics::CapturedFrame& frame)
+		{
+			std::string error;
+			if (!frame.ok || !lightGraphics::VkApp::writePng(capturePath_, frame, &error))
+			{
+				std::cout << "CAPTURE failed: " << (frame.ok ? error : frame.error) << std::endl;
+			}
+			else
+			{
+				std::cout << "CAPTURE wrote " << capturePath_ << " (" << frame.width << "x"
+				          << frame.height << ")" << std::endl;
+			}
+			glfwSetWindowShouldClose(window_, GLFW_TRUE);
+		});
+	}
+
 	void primeInstanceBuffersIfNeeded()
 	{
 		if (pendingInstanceBufferPrimingFrames_ <= 0)
@@ -563,6 +743,19 @@ private:
 	std::unique_ptr<PhysicsModel> currentPhysicsModel_;
 	ModelType currentModel_ = ModelType::Demo;
 	int pendingInstanceBufferPrimingFrames_ = 0;
+	int workerCount_ = 1;
+	float freezeSeconds_ = -1.0f;
+	std::string capturePath_;
+	int captureFrameCounter_ = 0;
+	bool captureRequested_ = false;
+	double benchSeconds_ = 0.0;
+	double warmupSeconds_ = 3.0;
+	bool benchStarted_ = false;
+	bool benchFinished_ = false;
+	std::chrono::steady_clock::time_point benchStartTime_{};
+	std::chrono::steady_clock::time_point benchLastFrameTime_{};
+	double benchCpuStart_ = 0.0;
+	std::vector<double> benchFrameMs_;
 	bool keysPressed_[GLFW_KEY_LAST + 1] = {false};
 	bool keysJustPressed_[GLFW_KEY_LAST + 1] = {false};
 	bool keysJustReleased_[GLFW_KEY_LAST + 1] = {false};
