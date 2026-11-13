@@ -431,10 +431,6 @@ namespace lightGraphics
 			{
 				logMessage(LogLevel::Info, message);
 			}
-			else
-			{
-				consoleInfoStream() << message << std::endl;
-			}
 			return false;
 		};
 
@@ -514,10 +510,6 @@ namespace lightGraphics
 		if (logCallback_ || debugOutput)
 		{
 			logMessage(LogLevel::Info, message);
-		}
-		else
-		{
-			consoleInfoStream() << message << std::endl;
 		}
 		return true;
 	}
@@ -934,10 +926,6 @@ namespace lightGraphics
 				if (logCallback_ || debugOutput)
 				{
 					logMessage(LogLevel::Info, message.str());
-				}
-				else
-				{
-					consoleInfoStream() << message.str() << std::endl;
 				}
 				} // not cached
 			}

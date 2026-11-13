@@ -229,7 +229,7 @@ createInfo.width = 1280;
 createInfo.height = 720;
 createInfo.shaderPath = "/opt/myapp/share/LightVulkanGraphics/spv";
 createInfo.manageGlfwLifecycle = false; // host app manages glfwInit/glfwTerminate
-createInfo.enableConsoleOutput = false; // process-wide: suppress console output used by the library/examples
+createInfo.enableConsoleOutput = true;  // process-wide: opt in to console output (off by default)
 createInfo.enableDebugOutput = true;    // emit debug logs if no log callback is installed
 
 lightGraphics::LightVulkanGraphics gfx("Light Vulkan Graphics", createInfo);
@@ -239,10 +239,11 @@ Debug logging is disabled by default. If you want diagnostics, either set
 `createInfo.enableDebugOutput = true` before construction or call
 `setDebugOutput(true)` later. For host applications that already own GLFW,
 set `manageGlfwLifecycle = false` before initialization. Console output
-routing is enabled by default and is process-wide, not per-instance. To
-suppress console output entirely, either set
-`createInfo.enableConsoleOutput = false` before construction or call
-`lightGraphics::setConsoleOutputEnabled(false)`.
+routing is disabled by default and is process-wide, not per-instance. To
+enable it, either set `createInfo.enableConsoleOutput = true` before
+construction or call `lightGraphics::setConsoleOutputEnabled(true)`. The
+environment variable `LVG_CONSOLE_OUTPUT=1` (or `0`) overrides the
+application's choice, which is handy for turning output on without a rebuild.
 
 ## GUI (LVGUI)
 `lightGraphics::ui` is a built-in, Vulkan-native GUI layer for parameter/debug panels

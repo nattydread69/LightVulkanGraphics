@@ -361,3 +361,15 @@ foreach(lvgui_test_target IN LISTS lvgui_test_targets)
 		target_compile_options(${lvgui_test_target} PRIVATE -UNDEBUG)
 	endif()
 endforeach()
+
+# Text selection (Label/LogView/ListBox/TextBox, Ctrl+C, middle-click paste) -- headless.
+add_executable(lvgui_textselect_tests
+	test_textselect.cpp
+)
+target_link_libraries(lvgui_textselect_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_textselect_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_textselect_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_textselect_tests COMMAND lvgui_textselect_tests)

@@ -19,11 +19,19 @@
 #include <lightVulkanGraphics/ui/widgets/LogView.h>
 #include <lightVulkanGraphics/ui/GuiContext.h>
 #include "TextWrap.h"
+#include "LineSelection.h"
 
 #include <algorithm>
 #include <cmath>
 
 namespace lightGraphics::ui {
+
+struct LogView::Selection {
+	LineSelection sel;
+	float time = 0.0f;
+	float lastClick = -10.0f;
+	int   clicks = 0;
+};
 
 LogView::LogView(std::string label) {
 	setLabel(std::move(label));
@@ -34,6 +42,9 @@ void LogView::push(std::string line) {
 }
 
 void LogView::clear() {
+	if (m_sel) {
+		m_sel->sel.clear();
+	}
 	m_rawLines.clear();
 	m_scrollRow = 0;
 	m_followBottom = true;
@@ -112,6 +123,9 @@ void LogView::update(GuiContext& ctx) {
 	if (m_followBottom) {
 		while (m_maxLines > 0 && m_rawLines.size() > m_maxLines) {
 			m_rawLines.pop_front();
+			if (m_sel) {
+				m_sel->sel.clear();   // line numbers just shifted under it
+			}
 		}
 	}
 
@@ -154,6 +168,67 @@ void LogView::update(GuiContext& ctx) {
 		}
 		if (in.mouseReleased[leftIdx]) {
 			m_dragTarget = DragTarget::None;
+		}
+	}
+
+	// ---- text selection: drag over the lines, double-click a word, triple-click a line ----
+	{
+		if (!m_sel) {
+			m_sel = std::make_shared<Selection>();
+		}
+		Selection& s = *m_sel;
+		s.time += in.deltaTime;
+		const Theme& th = ctx.theme();
+		const Rect content = contentRect(ctx);
+		const Rect textRect{ content.x, content.y, content.w - th.scrollbarWidth, content.h };
+		const float lh = ctx.font().lineHeight(th.fontSize);
+		if (ctx.hoveredId() == id() && textRect.contains(in.mousePos)) {
+			ctx.requestCursorShape(CursorShape::TextInput);
+		}
+		auto posAt = [&](Vec2 p) {
+			int row = static_cast<int>(std::floor((p.y - textRect.y) / lh));
+			int line = std::clamp(m_scrollRow + row, 0, std::max(0, total - 1));
+			std::size_t byte = 0;
+			if (total > 0) {
+				byte = ctx.font().indexAtOffset(visual[static_cast<std::size_t>(line)], th.fontSize, p.x - textRect.x);
+			}
+			return LinePos{ line, byte };
+		};
+		auto publish = [&]() {
+			ctx.publishSelection(id(), s.sel.text(visual, "\n"));
+		};
+		if (ctx.activeId() == id() && m_dragTarget == DragTarget::None && total > 0) {
+			if (in.mousePressed[leftIdx] && textRect.contains(in.mousePos)) {
+				s.clicks = (s.time - s.lastClick < 0.35f) ? (s.clicks % 3) + 1 : 1;
+				s.lastClick = s.time;
+				const LinePos p = posAt(in.mousePos);
+				if (s.clicks == 2) {
+					s.sel.selectWord(p, visual[static_cast<std::size_t>(p.line)]);
+					publish();
+				} else if (s.clicks >= 3) {
+					s.sel.set({ p.line, 0 }, { p.line, visual[static_cast<std::size_t>(p.line)].size() });
+					publish();
+				} else {
+					s.sel.begin(p);
+					ctx.clearSelection(id());
+				}
+			} else if (in.mouseDown[leftIdx] && s.sel.dragging()) {
+				// Dragging past the top/bottom edge scrolls, one row per frame.
+				if (in.mousePos.y < textRect.y && m_scrollRow > 0) {
+					--m_scrollRow;
+					m_followBottom = false;
+				} else if (in.mousePos.y > textRect.bottom() && m_scrollRow < maxScroll) {
+					++m_scrollRow;
+					m_followBottom = (m_scrollRow >= maxScroll);
+				}
+				s.sel.extend(posAt(in.mousePos));
+				if (!s.sel.empty()) {
+					publish();
+				}
+			}
+		}
+		if (in.mouseReleased[leftIdx]) {
+			s.sel.end();
 		}
 	}
 
@@ -222,6 +297,13 @@ void LogView::draw(DrawList& dl, const GuiContext& ctx) const {
 		int idx = m_scrollRow + row;
 		if (idx < 0 || idx >= total) {
 			break;
+		}
+		if (m_sel && !m_sel->sel.empty() && ctx.selectionOwner() == id()) {
+			std::size_t a = 0, b = 0;
+			const std::string_view line = visual[static_cast<std::size_t>(idx)];
+			if (m_sel->sel.lineRange(idx, line.size(), a, b)) {
+				dl.addRectFilled(selectionRect(ctx.font(), line, th.fontSize, textClip.x, y, lineHeight, a, b), th.selectionBg);
+			}
 		}
 		dl.addText(ctx.font(), th.fontSize, { textClip.x, y }, textColor, visual[static_cast<std::size_t>(idx)]);
 		y += lineHeight;

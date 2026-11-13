@@ -264,6 +264,20 @@ public:
 	// need clipboard access, and hovering a text box requests the I-beam cursor.
 	std::string clipboardText() const;
 	void        setClipboardText(std::string_view text) const;
+
+	// ---- text selection (docs/gui/05-widgets.md, "Text selection") ----
+	// Read-only text widgets (Label, LogView, ListBox, TreeView) let the user drag-select their
+	// text. The widget that owns the current selection publishes the selected text here:
+	//  * Ctrl+C copies it to the system clipboard, from anywhere in the UI;
+	//  * "primary" text -- the most recent non-empty selection, kept after the selection itself is
+	//    dropped -- is what a middle-click pastes into a TextBox (the X11 select-then-middle-click
+	//    idiom, inside the application; the system PRIMARY selection is not reachable through GLFW).
+	// A left press on anything other than the owner clears the selection.
+	void     publishSelection(WidgetId owner, std::string_view text);
+	void     clearSelection(WidgetId owner);
+	WidgetId selectionOwner() const { return m_selectionOwner; }
+	const std::string& selectedText() const { return m_selectedText; }
+	const std::string& primaryText() const { return m_primaryText; }
 	// Asks for `shape` for the CURRENT frame only -- call it from update() every frame the
 	// shape should hold. Every update() starts from Arrow, and the platform's
 	// setCursorShape hook is called only when the shape that results at the end of
@@ -383,6 +397,9 @@ private:
 	WidgetId m_hoveredId = kInvalidWidgetId;
 	WidgetId m_activeId  = kInvalidWidgetId;
 	WidgetId m_focusedId = kInvalidWidgetId;
+	WidgetId m_selectionOwner = kInvalidWidgetId;
+	std::string m_selectedText;   // owner's current selection (empty when none)
+	std::string m_primaryText;    // last non-empty selection, for middle-click paste
 	Panel*   m_hoveredPanel = nullptr;
 
 	// docs/gui/06-layout-and-theme.md, "Tooltips": "reset the hover timer whenever

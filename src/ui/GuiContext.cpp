@@ -681,6 +681,18 @@ void GuiContext::update() {
 		m_tooltipHoverTime += in.deltaTime;
 	}
 
+	// Text selection: a press on anything but the owning widget drops the selection; Ctrl+C
+	// copies whatever is currently selected (a focused TextBox does the same for its own text).
+	if (leftPressed && m_selectionOwner != kInvalidWidgetId &&
+	    (!hoveredWidget || hoveredWidget->id() != m_selectionOwner)) {
+		clearSelection(m_selectionOwner);
+	}
+	for (const KeyEvent& ev : in.keyQueue) {
+		if (ev.pressed && !ev.repeat && ev.key == Key::C && (ev.mods & Mod::Ctrl) != 0 && !m_selectedText.empty()) {
+			setClipboardText(m_selectedText);
+		}
+	}
+
 	// Press: establish capture/focus/z-order before dispatching to widgets, so a widget
 	// observes ctx.activeId() == id() from inside its own update() this same frame.
 	if (leftPressed) {
@@ -706,7 +718,11 @@ void GuiContext::update() {
 		} else if (m_activeId == kInvalidWidgetId && hoveredWidget && hoveredWidget->enabled() &&
 		           hoveredWidget->acceptsCapture()) {
 			m_activeId = hoveredWidget->id();
-			m_focusedId = hoveredWidget->acceptsFocus() ? hoveredWidget->id() : kInvalidWidgetId;
+			if (hoveredWidget->acceptsFocus()) {
+				m_focusedId = hoveredWidget->id();
+			} else if (!hoveredWidget->keepsFocusOnPress()) {
+				m_focusedId = kInvalidWidgetId;
+			}
 		} else if (!hoveredWidget && !hoveredPanel && !pressOnMenuBar) {
 			// A click on the scene, outside every panel. A click on the menu bar is not
 			// one: a menu item acts on the application, and may itself have just moved
@@ -945,6 +961,23 @@ void GuiContext::clearActiveId() { m_activeId = kInvalidWidgetId; }
 
 std::string GuiContext::clipboardText() const {
 	return m_hooks.getClipboardText ? m_hooks.getClipboardText() : std::string();
+}
+
+void GuiContext::publishSelection(WidgetId owner, std::string_view text) {
+	if (text.empty()) {
+		clearSelection(owner);
+		return;
+	}
+	m_selectionOwner = owner;
+	m_selectedText.assign(text);
+	m_primaryText = m_selectedText;
+}
+
+void GuiContext::clearSelection(WidgetId owner) {
+	if (m_selectionOwner == owner) {
+		m_selectionOwner = kInvalidWidgetId;
+		m_selectedText.clear();
+	}
 }
 
 void GuiContext::setClipboardText(std::string_view text) const {

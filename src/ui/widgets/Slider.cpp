@@ -26,6 +26,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <cstdlib>
 #include <type_traits>
 
 namespace lightGraphics::ui {
@@ -230,10 +233,12 @@ void SliderT<T>::setRange(T minVal, T maxVal) {
 template <typename T>
 void SliderT<T>::setScale(SliderScale scale) {
 	if (scale == SliderScale::Logarithmic && !(m_min > T{ 0 })) {
-		std::fprintf(stderr,
-			"SliderT(\"%s\"): logarithmic scale requires minVal > 0 (minVal=%g); a range "
-			"crossing or touching zero must use SliderScale::Linear.\n",
-			m_label.c_str(), static_cast<double>(m_min));
+		const char* quiet = std::getenv("LVG_CONSOLE_OUTPUT");  // printed only with LVG_CONSOLE_OUTPUT=1
+		if (quiet && std::strcmp(quiet, "1") == 0)
+		std::cerr
+			<< "SliderT(\"" << m_label << "\"): logarithmic scale requires minVal > 0 (minVal="
+			<< static_cast<double>(m_min) << "); a range crossing or touching zero must use "
+			"SliderScale::Linear.\n";
 		assert(false && "SliderT: logarithmic scale requires minVal > 0");
 	}
 	m_scale = scale;

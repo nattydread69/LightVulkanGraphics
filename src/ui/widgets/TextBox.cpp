@@ -554,7 +554,16 @@ void TextBox::update(GuiContext& ctx) {
 		}
 		if (ctx.hoveredId() == id()) {
 			ctx.requestCursorShape(CursorShape::TextInput);
+			// Middle-click pastes the most recent text selection (X11 select-then-middle-click idiom).
+			if (!m_readOnly && ctx.input().mousePressed[static_cast<int>(MouseButton::Middle)] &&
+			    !ctx.primaryText().empty()) {
+				ctx.setFocus(this);
+				const std::size_t at = hitIndexAt(ctx, ctx.input().mousePos.x);
+				m_caret = m_anchor = at;
+				paste(ctx.primaryText());
+			}
 		}
+		publishOwnSelection(ctx);
 	}
 
 	bool hasFocusAfter = isFocusedFor(ctx);
@@ -569,6 +578,22 @@ void TextBox::update(GuiContext& ctx) {
 		m_caretMoved = false;
 	}
 	updateScroll(ctx);
+}
+
+void TextBox::publishOwnSelection(GuiContext& ctx) {
+	// A selection in the box becomes the "primary" text, like a selection in any other widget. Never
+	// for a password box: the selection would otherwise be copyable.
+	if (m_passwordMode || !isFocusedFor(ctx)) {
+		return;
+	}
+	if (hasSelection()) {
+		const std::string selected = copy();
+		if (ctx.selectionOwner() != id() || ctx.selectedText() != selected) {
+			ctx.publishSelection(id(), selected);
+		}
+	} else {
+		ctx.clearSelection(id());
+	}
 }
 
 void TextBox::updateEmbedded(GuiContext& ctx) {

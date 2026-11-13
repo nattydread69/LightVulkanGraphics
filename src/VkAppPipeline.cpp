@@ -1335,10 +1335,6 @@ namespace lightGraphics
 					{
 						logMessage(LogLevel::Info, message);
 					}
-					else
-					{
-						consoleInfoStream() << message << std::endl;
-					}
 				}
 				return candidatePath.string();
 			}

@@ -44,9 +44,11 @@ protected:
 };
 ```
 
-`acceptsCapture()` returning false is used by `Label` and `Separator`, so a click passes
-through to whatever is behind — in practice, to the panel, which then does nothing. It
-prevents a stray click on a label from clearing focus in a way that feels arbitrary.
+`acceptsCapture()` returning false is used by `Separator` (and by a `Label` with selection turned off or no
+text), so a click passes through to whatever is behind — in practice, to the panel, which then does nothing.
+A selectable `Label` does take capture, to drag-select its text, but `keepsFocusOnPress()` is true for it, so
+the click never steals or clears keyboard focus: clicking a caption beside a `TextBox` leaves the `TextBox`
+focused.
 
 ### The label / control split
 
@@ -61,7 +63,7 @@ A widget with an empty label gets the full row width for its control.
 
 ## Label
 
-Static, non-interactive text.
+Static text. Selectable by default (see "Text selection" below).
 
 ```cpp
 class Label : public Widget {
@@ -85,7 +87,8 @@ public:
 };
 ```
 
-- `acceptsCapture()` → `false`, `acceptsFocus()` → `false`
+- `acceptsCapture()` → `true` while selectable and non-empty, `acceptsFocus()` → `false`
+  (`setSelectable(false)` restores the old click-through behaviour)
 - `preferredSize`: `measureText` if not wrapping; if wrapping, the row width is known
   only at layout time, so return `{0, lineHeight}` and recompute height in `setBounds`.
   Panels must therefore run layout twice when any wrapping label is present, or accept
@@ -1774,3 +1777,29 @@ file dialogs. The texture comes from `VkApp::registerUiTexture()` and is not own
 box. Setters rebuild the contents immediately (also while open); the height is computed
 from the wrapped text, since the panel is neither Scrollable nor Resizable. `onClose`
 fires for OK, the title-bar X and Escape, not for a programmatic `close()`.
+
+
+## Text selection
+
+`Label`, `LogView`, `ListBox` and `TreeView` let the user select and copy their text; `TextBox` already
+had its own editing selection and now joins the same plumbing.
+
+- **Label / LogView**: drag to select (across lines for wrapped text and log lines; a LogView scrolls when
+  the drag leaves its top or bottom edge), double-click a word, triple-click a Label (everything) or a
+  LogView line. The highlight uses `Theme::selectionBg`. A wrapped Label's segments rejoin with a space,
+  and selecting all of a Label copies its text exactly as set.
+- **ListBox**: drag across rows to select text over several rows; a click without movement still just selects
+  the row. With no dragged selection, Ctrl+C copies the selected row.
+- **TreeView**: Ctrl+C copies the selected node's text.
+- **Ctrl+C** (anywhere in the UI) copies the current selection to the system clipboard.
+- **Middle-click** in a `TextBox` pastes the most recent selection ("primary" text: kept after the selection
+  is dropped, like X11's PRIMARY). This is internal to the application: GLFW offers no access to the
+  system PRIMARY selection, so selecting text in LVG does not make it middle-click-pastable into other
+  programs; use Ctrl+C for that.
+- A left press on anything other than the owning widget clears the selection. A password `TextBox` never
+  publishes its selection.
+
+`GuiContext` carries the shared state: `publishSelection(owner, text)`, `clearSelection(owner)`,
+`selectionOwner()`, `selectedText()` and `primaryText()`. A custom widget that shows read-only text can
+publish its own selection through the same calls. The per-widget mechanics live in
+`include/internal/ui/LineSelection.h`.

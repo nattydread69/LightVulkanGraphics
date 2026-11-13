@@ -18,10 +18,17 @@
 
 #include <lightVulkanGraphics/ui/widgets/ListBox.h>
 #include <lightVulkanGraphics/ui/GuiContext.h>
+#include "LineSelection.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace lightGraphics::ui {
+
+struct ListBox::Selection {
+	LineSelection sel;
+	Vec2 pressPos{};
+};
 
 ListBox::ListBox(std::string label, std::vector<std::string> items, int initialIndex)
 	: m_items(std::move(items)) {
@@ -38,6 +45,9 @@ std::string_view ListBox::selectedText() const {
 
 void ListBox::setItems(std::vector<std::string> items) {
 	m_items = std::move(items);
+	if (m_sel) {
+		m_sel->sel.clear();
+	}
 	int maxIndex = static_cast<int>(m_items.size()) - 1;
 	if (m_selectedIndex > maxIndex) {
 		m_selectedIndex = maxIndex;   // -1 when the new list is empty
@@ -119,13 +129,65 @@ void ListBox::update(GuiContext& ctx) {
 	const int leftIdx = static_cast<int>(MouseButton::Left);
 	Rect list = splitRow(ctx).control;
 
+	if (!m_sel) {
+		m_sel = std::make_shared<Selection>();
+	}
+	Selection& s = *m_sel;
+	const Theme& th = ctx.theme();
+	const int rowsShown = std::min<int>(static_cast<int>(m_items.size()), m_visibleRows);
+	auto lines = [&]() {
+		std::vector<std::string_view> v;
+		v.reserve(m_items.size());
+		for (const std::string& it : m_items) { v.push_back(it); }
+		return v;
+	};
+	// Row under (or nearest to) the pointer, clamped to what is on screen, plus the byte offset in it.
+	auto posAt = [&](Vec2 p) {
+		int row = static_cast<int>(std::floor((p.y - list.y - th.framePadding) / th.rowHeight));
+		row = std::clamp(row, 0, std::max(0, rowsShown - 1));
+		const int idx = std::clamp(m_scrollRow + row, 0, std::max(0, static_cast<int>(m_items.size()) - 1));
+		const float textX = list.x + th.framePadding * 0.5f + th.framePadding;
+		return LinePos{ idx, m_items.empty() ? 0 : ctx.font().indexAtOffset(m_items[static_cast<std::size_t>(idx)], th.fontSize, p.x - textX) };
+	};
+
+	if (ctx.activeId() == id() && in.mousePressed[leftIdx] && !m_items.empty() && itemAtY(ctx, list, in.mousePos.y) >= 0) {
+		s.sel.begin(posAt(in.mousePos));
+		s.pressPos = in.mousePos;
+		ctx.clearSelection(id());
+	}
+	if (ctx.activeId() == id() && in.mouseDown[leftIdx] && s.sel.dragging()) {
+		const float dx = in.mousePos.x - s.pressPos.x, dy = in.mousePos.y - s.pressPos.y;
+		if (s.sel.moved() || dx * dx + dy * dy > 16.0f) {   // a few pixels of travel turns a click into a selection
+			s.sel.extend(posAt(in.mousePos));
+			if (!s.sel.empty()) {
+				ctx.publishSelection(id(), s.sel.text(lines(), "\n"));
+			}
+		}
+	}
+
 	// Release-inside, same convention Button/DropDown's popup rows use: press-then-
 	// drag-away cancels rather than selecting whatever the cursor happens to end up on.
-	if (ctx.activeId() == id() && in.mouseReleased[leftIdx] && list.contains(in.mousePos)) {
-		int idx = itemAtY(ctx, list, in.mousePos.y);
-		if (idx >= 0) {
-			setSelectedIndex(idx, true);
+	// A drag that selected text is not a click on a row.
+	if (ctx.activeId() == id() && in.mouseReleased[leftIdx]) {
+		const bool selectedText = s.sel.moved() && !s.sel.empty();
+		s.sel.end();
+		if (!selectedText && list.contains(in.mousePos)) {
+			int idx = itemAtY(ctx, list, in.mousePos.y);
+			if (idx >= 0) {
+				setSelectedIndex(idx, true);
+			}
+		} else if (!selectedText) {
+			s.sel.clear();
 		}
+	}
+	// With no text selected, Ctrl+C copies the selected row.
+	if (s.sel.empty() && m_selectedIndex >= 0 && m_selectedIndex < static_cast<int>(m_items.size()) &&
+	    ctx.selectionOwner() != id() && ctx.focusedId() == id()) {
+		ctx.publishSelection(id(), m_items[static_cast<std::size_t>(m_selectedIndex)]);
+	} else if (s.sel.empty() && ctx.selectionOwner() == id() && m_selectedIndex >= 0 &&
+	           m_selectedIndex < static_cast<int>(m_items.size()) && ctx.focusedId() == id() &&
+	           ctx.selectedText() != m_items[static_cast<std::size_t>(m_selectedIndex)]) {
+		ctx.publishSelection(id(), m_items[static_cast<std::size_t>(m_selectedIndex)]);   // selection moved by key or click
 	}
 
 	if (ctx.focusedId() == id()) {
@@ -193,6 +255,15 @@ void ListBox::draw(DrawList& dl, const GuiContext& ctx) const {
 			dl.addRectFilled(rowRect, th.frameBgHovered, th.rounding);
 		}
 
+		if (m_sel && !m_sel->sel.empty() && ctx.selectionOwner() == id()) {
+			std::size_t a = 0, b = 0;
+			const std::string& item = m_items[static_cast<std::size_t>(idx)];
+			if (m_sel->sel.lineRange(idx, item.size(), a, b)) {
+				const float lh = ctx.font().lineHeight(th.fontSize);
+				dl.addRectFilled(selectionRect(ctx.font(), item, th.fontSize, rowRect.x + th.framePadding,
+				                                rowRect.y + (rowRect.h - lh) * 0.5f, lh, a, b), th.selectionBg);
+			}
+		}
 		Color textColor = effectivelyEnabled() ? th.text : th.textDisabled;
 		dl.addTextClipped(ctx.font(), th.fontSize, rowRect.insetXY(th.framePadding, 0.0f), textColor,
 		                   m_items[static_cast<std::size_t>(idx)], Align::Start, Align::Center);

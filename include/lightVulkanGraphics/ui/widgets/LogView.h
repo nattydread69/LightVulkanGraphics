@@ -26,6 +26,7 @@
 #include "../Widget.h"
 
 #include <deque>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -76,6 +77,7 @@ public:
 
 private:
 	enum class DragTarget { None, ScrollbarThumb };
+	struct Selection;   // drag-selection state (internal header)
 
 	// Inset by theme.framePadding on all sides -- NOT yet narrowed for the scrollbar
 	// gutter (see computeVisualLines()'s comment on why that narrowing is unconditional,
@@ -90,6 +92,7 @@ private:
 	// rather than cached, since content and width can both change between calls.
 	std::vector<std::string_view> computeVisualLines(const GuiContext&) const;
 
+	std::shared_ptr<Selection> m_sel;
 	std::deque<std::string> m_rawLines;
 	std::size_t m_maxLines = 500;
 	float m_heightPx = 160.0f;

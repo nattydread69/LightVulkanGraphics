@@ -19,6 +19,8 @@
 #include "LightVulkanGraphicsLogging.h"
 
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <ostream>
 #include <streambuf>
@@ -46,7 +48,23 @@ namespace
 		NullStreamBuffer buffer_;
 	};
 
-	std::atomic<bool> consoleOutputEnabled{true};
+	std::atomic<bool> consoleOutputEnabled{false};
+
+	// LVG_CONSOLE_OUTPUT overrides the application's setting: 1/on forces output
+	// on, 0/off forces it off, unset defers to setConsoleOutputEnabled().
+	// Returns -1 (unset), 0 or 1.
+	int environmentOverride()
+	{
+		static const int value = []
+		{
+			const char* v = std::getenv("LVG_CONSOLE_OUTPUT");
+			if (v == nullptr) return -1;
+			if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0) return 1;
+			if (std::strcmp(v, "0") == 0 || std::strcmp(v, "off") == 0) return 0;
+			return -1;
+		}();
+		return value;
+	}
 
 	NullOStream& nullStream()
 	{
@@ -64,7 +82,8 @@ namespace lightGraphics
 
 	bool getConsoleOutputEnabled()
 	{
-		return consoleOutputEnabled.load(std::memory_order_relaxed);
+		const int override = environmentOverride();
+		return override >= 0 ? override == 1 : consoleOutputEnabled.load(std::memory_order_relaxed);
 	}
 
 	std::ostream& consoleInfoStream()

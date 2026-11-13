@@ -547,10 +547,6 @@ namespace lightGraphics
 		{
 			logMessage(LogLevel::Info, summary.str());
 		}
-		else
-		{
-			consoleInfoStream() << summary.str() << std::endl;
-		}
 
 		if (!debugOutput)
 		{

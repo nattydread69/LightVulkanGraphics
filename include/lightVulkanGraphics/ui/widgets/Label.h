@@ -22,9 +22,11 @@
 
 #include "../Widget.h"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace lightGraphics::ui {
 
@@ -34,7 +36,12 @@ class Label : public Widget {
 public:
 	explicit Label(std::string text);
 
-	void setText(std::string text) { m_text = std::move(text); }
+	void setText(std::string text);
+	// Selectable text (default on): drag to select, double-click for a word, triple-click for
+	// everything, Ctrl+C to copy (docs/gui/05-widgets.md, "Text selection"). Turn it off for a
+	// Label that sits over something else the user must be able to click.
+	void setSelectable(bool selectable) { m_selectable = selectable; }
+	bool selectable() const { return m_selectable; }
 	std::string_view text() const { return m_text; }
 	void setAlign(Align h) { m_align = h; }
 	void setWordWrap(bool wrap) { m_wordWrap = wrap; }
@@ -57,18 +64,26 @@ public:
 	FontStyle fontStyle() const { return m_style; }
 
 	Vec2 preferredSize(const GuiContext&) const override;
+	void update(GuiContext&) override;
 	void draw(DrawList&, const GuiContext&) const override;
 
-	bool acceptsCapture() const override { return false; }
+	bool acceptsCapture() const override { return m_selectable && !m_text.empty(); }
+	bool keepsFocusOnPress() const override { return true; }
 	bool acceptsFocus()   const override { return false; }
 
 private:
+	struct Selection;
+	struct Line { std::string_view text; float x; float y; float h; };
+	std::vector<Line> layoutLines(const GuiContext&) const;
+
 	std::string m_text;
 	Align m_align = Align::Start;
 	bool  m_wordWrap = false;
 	bool  m_tabular = false;
 	FontStyle m_style = FontStyle::Regular;
 	std::optional<Color> m_colorOverride;
+	bool  m_selectable = true;
+	std::shared_ptr<Selection> m_sel;   // created on first interaction; keeps this header free of internals
 };
 
 } // namespace lightGraphics::ui

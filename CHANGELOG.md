@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Text selection and copy in the GUI
+- `Label`, `LogView` and `ListBox` text can be selected with the mouse (drag, double-click a word,
+  triple-click a line/label; a ListBox drag spans rows); Ctrl+C copies the selection from anywhere in
+  the UI, and copies the selected row / tree node for `ListBox` / `TreeView`. Middle-click in a
+  `TextBox` pastes the most recent selection (in-application "primary" text; GLFW cannot reach the
+  system PRIMARY selection). A `TextBox` selection joins the same mechanism; password boxes never publish.
+- New `GuiContext::publishSelection/clearSelection/selectionOwner/selectedText/primaryText`,
+  `Label::setSelectable`, and `Widget::keepsFocusOnPress()`. A selectable `Label` now takes mouse
+  capture but still never steals or clears keyboard focus. See docs/gui/05-widgets.md, "Text selection".
+
 ### Loose ends: parallel animation, per-model skinning mode, capture synchronisation
 - **`lightGraphics::updateAnimations(objects, dt)`** (`RiggedAnimation.h`): advances a set of
   rigged objects on a small worker pool. The result is bit-identical to calling

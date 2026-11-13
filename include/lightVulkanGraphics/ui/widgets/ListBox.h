@@ -32,6 +32,7 @@
 #include "../Widget.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -67,6 +68,8 @@ public:
 	bool wantsWheel() const override { return true; }
 
 private:
+	struct Selection;   // drag-selection state across rows (internal header)
+	std::shared_ptr<Selection> m_sel;
 	// mouseY must already be known to fall within `list` -- same "resolve which row from
 	// raw coordinates, don't encode it in the hit-test return value" pattern DropDown's
 	// itemAtY() uses for its popup.

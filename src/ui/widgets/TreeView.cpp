@@ -573,6 +573,13 @@ void TreeView::update(GuiContext& ctx) {
 	}
 	const Theme& th = ctx.theme();
 
+	// Ctrl+C copies the selected node's text: keep it published while this tree holds focus.
+	if (m_selected >= 0 && isValid(m_selected) && ctx.focusedId() == id() &&
+	    (ctx.selectionOwner() == kInvalidWidgetId || ctx.selectionOwner() == id()) &&
+	    ctx.selectedText() != nodeText(m_selected)) {
+		ctx.publishSelection(id(), nodeText(m_selected));
+	}
+
 	Layout const l = computeLayout(ctx);
 	clampScroll();
 

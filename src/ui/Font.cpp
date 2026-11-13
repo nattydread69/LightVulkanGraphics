@@ -49,6 +49,8 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -672,6 +674,8 @@ std::uint32_t Font::slotFor(std::uint32_t codepoint, bool allowBake) const {
 	if (face < 0 || !bakeOneGlyph(codepoint, face)) {
 		if (face >= 0 && !m_impl->warnedAtlasFull) {
 			m_impl->warnedAtlasFull = true;
+			const char* quiet = std::getenv("LVG_CONSOLE_OUTPUT");  // printed only with LVG_CONSOLE_OUTPUT=1
+			if (quiet && std::strcmp(quiet, "1") == 0)
 			std::cerr << "Font: glyph atlas (" << m_atlasWidth << "x" << m_atlasHeight
 			          << ") is full; further new glyphs fall back to the placeholder\n";
 		}

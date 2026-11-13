@@ -127,6 +127,7 @@ private:
 	bool isFocusedFor(const GuiContext& ctx) const;
 	std::string displayText() const;   // m_text, or the bullet string in password mode
 	float pixelOffsetForCaret(const GuiContext& ctx, std::size_t byteIndex) const;
+	void publishOwnSelection(GuiContext& ctx);
 	std::size_t hitIndexAt(const GuiContext& ctx, float mouseX) const;
 	void selectWordAt(std::size_t byteIndex);
 	void updateScroll(const GuiContext& ctx);

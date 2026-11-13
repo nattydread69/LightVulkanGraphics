@@ -43,7 +43,7 @@ namespace lightGraphics
 		std::string shaderPath;
 		bool manageGlfwLifecycle = true;
 		// Process-wide switch shared across all LightVulkanGraphics instances.
-		bool enableConsoleOutput = true;
+		bool enableConsoleOutput = false;
 		bool enableDebugOutput = false;
 	};
 

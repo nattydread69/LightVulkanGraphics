@@ -23,6 +23,7 @@
 namespace lightGraphics
 {
 	// Process-wide console output toggle shared by the library and any consumers.
+	// Off by default. LVG_CONSOLE_OUTPUT=1 forces it on, =0 forces it off.
 	void setConsoleOutputEnabled(bool enabled);
 	bool getConsoleOutputEnabled();
 

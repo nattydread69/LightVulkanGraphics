@@ -86,6 +86,10 @@ public:
 	virtual void update(GuiContext&) {}
 	virtual bool acceptsFocus()   const { return false; }
 	virtual bool acceptsCapture() const { return true;  }
+	// True for a widget that takes mouse capture (to drag-select its text) but must not steal or
+	// clear keyboard focus when clicked -- Label: clicking a caption beside a TextBox leaves the
+	// TextBox focused.
+	virtual bool keepsFocusOnPress() const { return false; }
 	virtual bool wantsTextInput() const { return false; }
 	// True for a widget that consumes the wheel itself while hovered (SliderT, DropDown --
 	// docs/gui/05-widgets.md, Slider's "Wheel while hovered: Step, and consume the wheel
