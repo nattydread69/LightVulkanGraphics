@@ -6,6 +6,15 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Packaging and Assimp
+- Assimp is now built from a pinned tag as a private static library by default (`LVG_USE_SYSTEM_ASSIMP=OFF`), so
+  release packages have no Assimp dependency. `-DLVG_USE_SYSTEM_ASSIMP=ON` restores the old system/`ASSIMP_ROOT`
+  discovery for distro packaging. `ASSIMP_USE_FETCHCONTENT` is deprecated (bundled is the default).
+- Added CPack packaging (`cmake/LvgCPack.cmake`): `.deb` with dpkg-mappable dependencies, `.tar.gz`/`.zip`
+  elsewhere; third-party licence texts are installed. CI builds packages on Linux/Windows/macOS and installs the
+  `.deb` in a clean container to compile a consumer.
+- The package-consumer smoke test now calls `FBXLoader::loadModel` so a missing Assimp fails at link time.
+
 ### Newlines in `Label` text
 - A newline in `Label` text is now a hard line break instead of a stray glyph. `Label` lays out, sizes (`preferredSize`),
   draws and selects each line, with or without word wrap: with wrapping on, every paragraph wraps to the width on its own;

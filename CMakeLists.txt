@@ -29,6 +29,13 @@ option(LVG_BUILD_SHARED "Build the core LightVulkanGraphics library as a shared 
 # keeps the whole library dynamically linked, which proprietary consumers need.
 option(LVG_BUILD_UI_SHARED "Build LVGUI as a shared library instead of a static archive" OFF)
 option(LVG_BUILD_DOXYGEN "Build Doxygen documentation" ON)
+# Assimp (FBX loader) sourcing. OFF (default, used for release artifacts): fetch a pinned
+# Assimp and build it statically with a trimmed importer set, so the shipped package has
+# no Assimp dependency to map or install. ON: use an Assimp already on the machine
+# (ASSIMP_ROOT, /usr, vcpkg...) -- intended for distro packages (.deb/.rpm), where the
+# package manager should supply libassimp and dpkg-shlibdeps can record the dependency.
+option(LVG_USE_SYSTEM_ASSIMP "Use a system/pre-installed Assimp instead of building a bundled static one" OFF)
+set(LVG_ASSIMP_GIT_TAG "v5.4.3" CACHE STRING "Assimp tag fetched when LVG_USE_SYSTEM_ASSIMP is OFF")
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
@@ -222,141 +229,166 @@ else()
 endif()
 
 # ---------------- Assimp (FBX loader) ----------------
-# Prefer local/offline install; FetchContent is opt-in.
+# Two modes, selected by LVG_USE_SYSTEM_ASSIMP (see the option's comment above).
 set(ASSIMP_ROOT "" CACHE PATH "Path to local Assimp installation")
 set(ASSIMP_USE_CONFIG OFF CACHE BOOL "Use assimp's CMake package config")
-set(ASSIMP_USE_FETCHCONTENT OFF CACHE BOOL "Fetch assimp from source (requires network)")
+set(ASSIMP_USE_FETCHCONTENT OFF CACHE BOOL "Deprecated: bundled Assimp is now the default; kept so old command lines still work")
 set(ASSIMP_CONTRIB_INCLUDE_DIR "")
+set(LVG_ASSIMP_BUNDLED OFF)
+set(LVG_ASSIMP_LINK_TARGET assimp::assimp)
 
-if (ASSIMP_ROOT)
-	list(PREPEND CMAKE_PREFIX_PATH "${ASSIMP_ROOT}")
+if (NOT LVG_USE_SYSTEM_ASSIMP OR ASSIMP_USE_FETCHCONTENT)
+	set(LVG_ASSIMP_BUNDLED ON)
 endif()
 
-if (WIN32 AND NOT ASSIMP_ROOT)
-	# Common Windows build-from-source locations (build dir alongside source dir)
-	set(_assimp_win_candidates
-		"C:/dev/assimp/build"
-		"C:/assimp/build"
-		"C:/libs/assimp/build"
-		"$ENV{USERPROFILE}/source/repos/assimp/build"
+if (NOT LVG_ASSIMP_BUNDLED)
+	if (ASSIMP_ROOT)
+		list(PREPEND CMAKE_PREFIX_PATH "${ASSIMP_ROOT}")
+	endif()
+
+	if (WIN32 AND NOT ASSIMP_ROOT)
+		# Common Windows build-from-source locations (build dir alongside source dir)
+		set(_assimp_win_candidates
+			"C:/dev/assimp/build"
+			"C:/assimp/build"
+			"C:/libs/assimp/build"
+			"$ENV{USERPROFILE}/source/repos/assimp/build"
+		)
+		# Also check vcpkg
+		if (DEFINED ENV{VCPKG_ROOT})
+			list(APPEND _assimp_win_candidates "$ENV{VCPKG_ROOT}/installed/x64-windows")
+		endif()
+		foreach(_candidate IN LISTS _assimp_win_candidates)
+			# scene.h is in the source tree; config.h is generated into the build tree
+			cmake_path(GET _candidate PARENT_PATH _candidate_src)
+			if (EXISTS "${_candidate_src}/include/assimp/scene.h" OR
+				EXISTS "${_candidate}/include/assimp/config.h")
+				set(ASSIMP_ROOT "${_candidate}" CACHE PATH "Path to local Assimp installation" FORCE)
+				message(STATUS "Auto-detected Assimp at: ${_candidate}")
+				break()
+			endif()
+		endforeach()
+	endif()
+
+	# When built from source, headers are split: generated headers in the build
+	# tree (include/) and original headers in the source tree (../include/).
+	if (ASSIMP_ROOT)
+		cmake_path(GET ASSIMP_ROOT PARENT_PATH _assimp_src_root)
+		set(_assimp_include_hints "${ASSIMP_ROOT}" "${_assimp_src_root}")
+	else()
+		set(_assimp_include_hints "")
+	endif()
+
+	find_path(ASSIMP_INCLUDE_DIR
+		NAMES assimp/scene.h
+		HINTS ${_assimp_include_hints}
+		PATH_SUFFIXES include
 	)
-	# Also check vcpkg
-	if (DEFINED ENV{VCPKG_ROOT})
-		list(APPEND _assimp_win_candidates "$ENV{VCPKG_ROOT}/installed/x64-windows")
-	endif()
-	foreach(_candidate IN LISTS _assimp_win_candidates)
-		# scene.h is in the source tree; config.h is generated into the build tree
-		cmake_path(GET _candidate PARENT_PATH _candidate_src)
-		if (EXISTS "${_candidate_src}/include/assimp/scene.h" OR
-			EXISTS "${_candidate}/include/assimp/config.h")
-			set(ASSIMP_ROOT "${_candidate}" CACHE PATH "Path to local Assimp installation" FORCE)
-			message(STATUS "Auto-detected Assimp at: ${_candidate}")
-			break()
-		endif()
-	endforeach()
-endif()
 
-# When built from source, headers are split: generated headers in the build
-# tree (include/) and original headers in the source tree (../include/).
-if (ASSIMP_ROOT)
-	cmake_path(GET ASSIMP_ROOT PARENT_PATH _assimp_src_root)
-	set(_assimp_include_hints "${ASSIMP_ROOT}" "${_assimp_src_root}")
-else()
-	set(_assimp_include_hints "")
-endif()
-
-find_path(ASSIMP_INCLUDE_DIR
-	NAMES assimp/scene.h
-	HINTS ${_assimp_include_hints}
-	PATH_SUFFIXES include
-)
-
-find_library(ASSIMP_LIBRARY
-	NAMES assimp libassimp assimp-vc143-mt assimp-vc142-mt assimp-vc141-mt
-	HINTS ${ASSIMP_ROOT}
-	PATH_SUFFIXES lib lib64 lib/Release lib/Debug lib/x86_64-linux-gnu
-)
-
-if (ASSIMP_LIBRARY AND ASSIMP_INCLUDE_DIR)
-	# For from-source builds, also include the build tree for generated headers
-	# (e.g. assimp/config.h, assimp/revision.h which are not in the source tree)
-	set(_assimp_all_includes "${ASSIMP_INCLUDE_DIR}")
-	if (ASSIMP_ROOT AND EXISTS "${ASSIMP_ROOT}/include/assimp/config.h")
-		list(APPEND _assimp_all_includes "${ASSIMP_ROOT}/include")
-	endif()
-
-	add_library(assimp::assimp UNKNOWN IMPORTED)
-	set_target_properties(assimp::assimp PROPERTIES
-		IMPORTED_LOCATION "${ASSIMP_LIBRARY}"
-		INTERFACE_INCLUDE_DIRECTORIES "${_assimp_all_includes}"
+	find_library(ASSIMP_LIBRARY
+		NAMES assimp libassimp assimp-vc143-mt assimp-vc142-mt assimp-vc141-mt
+		HINTS ${ASSIMP_ROOT}
+		PATH_SUFFIXES lib lib64 lib/Release lib/Debug lib/x86_64-linux-gnu
 	)
-	message(STATUS "Found assimp library: ${ASSIMP_LIBRARY}")
-	message(STATUS "Found assimp headers: ${_assimp_all_includes}")
 
-	# On Windows the import lib and DLL live in different trees (lib/ vs bin/).
-	# Derive the DLL path so examples can copy it as a post-build step.
-	if (WIN32 AND ASSIMP_LIBRARY MATCHES "\\.lib$")
-		string(REGEX REPLACE "/lib/" "/bin/" _assimp_dll_path "${ASSIMP_LIBRARY}")
-		string(REGEX REPLACE "\\.lib$" ".dll" _assimp_dll_path "${_assimp_dll_path}")
-		if (EXISTS "${_assimp_dll_path}")
-			set(ASSIMP_DLL "${_assimp_dll_path}" CACHE FILEPATH "Path to the assimp runtime DLL (Windows only)")
-			message(STATUS "Found assimp DLL: ${ASSIMP_DLL}")
+	if (ASSIMP_LIBRARY AND ASSIMP_INCLUDE_DIR)
+		# For from-source builds, also include the build tree for generated headers
+		# (e.g. assimp/config.h, assimp/revision.h which are not in the source tree)
+		set(_assimp_all_includes "${ASSIMP_INCLUDE_DIR}")
+		if (ASSIMP_ROOT AND EXISTS "${ASSIMP_ROOT}/include/assimp/config.h")
+			list(APPEND _assimp_all_includes "${ASSIMP_ROOT}/include")
+		endif()
+
+		add_library(assimp::assimp UNKNOWN IMPORTED)
+		set_target_properties(assimp::assimp PROPERTIES
+			IMPORTED_LOCATION "${ASSIMP_LIBRARY}"
+			INTERFACE_INCLUDE_DIRECTORIES "${_assimp_all_includes}"
+		)
+		message(STATUS "Found assimp library: ${ASSIMP_LIBRARY}")
+		message(STATUS "Found assimp headers: ${_assimp_all_includes}")
+
+		# On Windows the import lib and DLL live in different trees (lib/ vs bin/).
+		# Derive the DLL path so examples can copy it as a post-build step.
+		if (WIN32 AND ASSIMP_LIBRARY MATCHES "\\.lib$")
+			string(REGEX REPLACE "/lib/" "/bin/" _assimp_dll_path "${ASSIMP_LIBRARY}")
+			string(REGEX REPLACE "\\.lib$" ".dll" _assimp_dll_path "${_assimp_dll_path}")
+			if (EXISTS "${_assimp_dll_path}")
+				set(ASSIMP_DLL "${_assimp_dll_path}" CACHE FILEPATH "Path to the assimp runtime DLL (Windows only)")
+				message(STATUS "Found assimp DLL: ${ASSIMP_DLL}")
+			endif()
 		endif()
 	endif()
+
+	if (NOT TARGET assimp::assimp AND ASSIMP_USE_CONFIG)
+		find_package(assimp QUIET)
+		find_package(Assimp QUIET)
+
+		if (TARGET Assimp::Assimp AND NOT TARGET assimp::assimp)
+			add_library(assimp::assimp ALIAS Assimp::Assimp)
+		endif()
+
+		if (NOT TARGET assimp::assimp)
+			if (ASSIMP_LIBRARIES AND NOT ASSIMP_LIBRARY)
+				list(GET ASSIMP_LIBRARIES 0 ASSIMP_LIBRARY)
+			endif()
+			if (ASSIMP_INCLUDE_DIRS AND NOT ASSIMP_INCLUDE_DIR)
+				list(GET ASSIMP_INCLUDE_DIRS 0 ASSIMP_INCLUDE_DIR)
+			endif()
+
+			if (ASSIMP_LIBRARY AND ASSIMP_INCLUDE_DIR)
+				add_library(assimp::assimp UNKNOWN IMPORTED)
+				set_target_properties(assimp::assimp PROPERTIES
+					IMPORTED_LOCATION "${ASSIMP_LIBRARY}"
+					INTERFACE_INCLUDE_DIRECTORIES "${ASSIMP_INCLUDE_DIR}"
+				)
+			endif()
+		endif()
+	endif()
+
 endif()
 
-if (NOT TARGET assimp::assimp AND ASSIMP_USE_CONFIG)
-	find_package(assimp QUIET)
-	find_package(Assimp QUIET)
-
-	if (TARGET Assimp::Assimp AND NOT TARGET assimp::assimp)
-		add_library(assimp::assimp ALIAS Assimp::Assimp)
-	endif()
-
-	if (NOT TARGET assimp::assimp)
-		if (ASSIMP_LIBRARIES AND NOT ASSIMP_LIBRARY)
-			list(GET ASSIMP_LIBRARIES 0 ASSIMP_LIBRARY)
-		endif()
-		if (ASSIMP_INCLUDE_DIRS AND NOT ASSIMP_INCLUDE_DIR)
-			list(GET ASSIMP_INCLUDE_DIRS 0 ASSIMP_INCLUDE_DIR)
-		endif()
-
-		if (ASSIMP_LIBRARY AND ASSIMP_INCLUDE_DIR)
-			add_library(assimp::assimp UNKNOWN IMPORTED)
-			set_target_properties(assimp::assimp PROPERTIES
-				IMPORTED_LOCATION "${ASSIMP_LIBRARY}"
-				INTERFACE_INCLUDE_DIRECTORIES "${ASSIMP_INCLUDE_DIR}"
-			)
-		endif()
-	endif()
-endif()
-
-if (NOT TARGET assimp::assimp AND ASSIMP_USE_FETCHCONTENT)
+if (LVG_ASSIMP_BUNDLED)
 	FetchContent_Declare(
 		assimp
 		GIT_REPOSITORY https://github.com/assimp/assimp.git
-		GIT_TAG        v5.3.1
+		GIT_TAG        ${LVG_ASSIMP_GIT_TAG}
+		GIT_SHALLOW    TRUE
 	)
 
-	# Configure Assimp build options
+	# Static, minimal, no tools: this is linked privately into LightVulkanGraphics.
+	set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 	set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 	set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
 	set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+	set(ASSIMP_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+	set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
 	set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
 	set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+	set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+	set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+	# Importers the engine actually uses. Add formats here if the loaders grow.
+	set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+	foreach(_fmt FBX GLTF OBJ COLLADA STL PLY 3DS BLEND)
+		set(ASSIMP_BUILD_${_fmt}_IMPORTER ON CACHE BOOL "" FORCE)
+	endforeach()
 
 	FetchContent_MakeAvailable(assimp)
-	if (TARGET assimp AND NOT TARGET assimp::assimp)
-		add_library(assimp::assimp ALIAS assimp)
-	endif()
+	set(LVG_ASSIMP_LINK_TARGET assimp)
 	set(ASSIMP_CONTRIB_INCLUDE_DIR "${assimp_SOURCE_DIR}/contrib")
-endif()
-
-if (NOT TARGET assimp::assimp)
+	# Silence third-party warnings so LVG_WARNINGS_AS_ERRORS only judges our code.
+	foreach(_t assimp zlibstatic)
+		if (TARGET ${_t})
+			target_compile_options(${_t} PRIVATE
+				$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-w>
+				$<$<CXX_COMPILER_ID:MSVC>:/w>)
+		endif()
+	endforeach()
+	message(STATUS "Assimp: bundled static ${LVG_ASSIMP_GIT_TAG}")
+elseif (NOT TARGET assimp::assimp)
 	message(FATAL_ERROR
-		"Assimp library not found!\n"
-		"Install assimp locally and reconfigure, or set ASSIMP_ROOT.\n"
-		"Example: cmake -DASSIMP_ROOT=/path/to/assimp .."
+		"LVG_USE_SYSTEM_ASSIMP=ON but no Assimp was found.\n"
+		"Install libassimp-dev (or equivalent), set ASSIMP_ROOT, or configure with\n"
+		"-DLVG_USE_SYSTEM_ASSIMP=OFF to build the bundled copy."
 	)
 endif()
 
@@ -506,7 +538,7 @@ target_link_libraries(${PROJECT_NAME}
     ${CMAKE_DL_LIBS}
 )
 
-target_link_libraries(${PROJECT_NAME} PRIVATE assimp::assimp)
+target_link_libraries(${PROJECT_NAME} PRIVATE ${LVG_ASSIMP_LINK_TARGET})
 # std::thread: updateAnimations()'s worker pool (src/RiggedAnimation.cpp).
 find_package(Threads REQUIRED)
 target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
@@ -621,6 +653,21 @@ install(TARGETS ${PROJECT_NAME}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
 
+# 1a) Bundled Assimp, static core only. A static libLightVulkanGraphics.a keeps
+#     unresolved references to its private deps, so the exported target lists them as
+#     link-only dependencies; they must therefore live in the same export set. (A shared
+#     core absorbs the static Assimp at link time and exports nothing extra.)
+if (LVG_ASSIMP_BUNDLED AND NOT LVG_BUILD_SHARED)
+	set(_lvg_bundled_deps assimp)
+	if (TARGET zlibstatic)
+		list(APPEND _lvg_bundled_deps zlibstatic)
+	endif()
+	install(TARGETS ${_lvg_bundled_deps}
+		EXPORT LightVulkanGraphicsTargets
+		ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}/${LVG_PACKAGE_NAME}/third_party
+	)
+endif()
+
 # 1b) UI Library (optional)
 if(LVG_BUILD_UI)
 	install(TARGETS LightVulkanGraphicsUI
@@ -686,6 +733,18 @@ install(FILES
 	${CMAKE_CURRENT_BINARY_DIR}/${LVG_PACKAGE_NAME}ConfigVersion.cmake
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${LVG_PACKAGE_NAME}
 )
+
+# 6) Third-party licence texts. Bundled (statically linked) code must ship its licence.
+install(FILES ${PROJECT_SOURCE_DIR}/THIRD_PARTY_NOTICES.md
+	DESTINATION ${CMAKE_INSTALL_DOCDIR})
+if (LVG_ASSIMP_BUNDLED AND EXISTS "${assimp_SOURCE_DIR}/LICENSE")
+	install(FILES ${assimp_SOURCE_DIR}/LICENSE
+		DESTINATION ${CMAKE_INSTALL_DOCDIR}/third_party
+		RENAME LICENSE.assimp)
+endif()
+
+# 7) Packaging (`cpack` / `cmake --build build --target package`)
+include(cmake/LvgCPack.cmake)
 
 # Doxygen documentation target
 if(LVG_BUILD_DOXYGEN)
@@ -819,7 +878,7 @@ if (LVG_BUILD_EXAMPLES)
 	endif()
 
 	# Copy the assimp DLL next to each example on Windows so they run in-place.
-	if (WIN32 AND ASSIMP_DLL)
+	if (WIN32 AND ASSIMP_DLL AND NOT LVG_ASSIMP_BUNDLED)
 		foreach(_lvg_ex IN ITEMS simple_fbx_loader_example fbx_rigged_example demoVulkanGraphics)
 			add_custom_command(TARGET ${_lvg_ex} POST_BUILD
 				COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -829,7 +888,7 @@ if (LVG_BUILD_EXAMPLES)
 			)
 		endforeach()
 	endif()
-	if (WIN32 AND ASSIMP_DLL AND TARGET fbx_model_inspector)
+	if (WIN32 AND ASSIMP_DLL AND NOT LVG_ASSIMP_BUNDLED AND TARGET fbx_model_inspector)
 		add_custom_command(TARGET fbx_model_inspector POST_BUILD
 			COMMAND ${CMAKE_COMMAND} -E copy_if_different
 				"${ASSIMP_DLL}"

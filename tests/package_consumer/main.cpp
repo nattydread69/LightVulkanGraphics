@@ -29,7 +29,9 @@ int main()
 	createInfo.manageGlfwLifecycle = false;
 	createInfo.enableDebugOutput = false;
 
-	(void) loader;
+	// Calling into Assimp forces the linker to resolve it, proving the installed package
+	// really carries (bundled) or finds (system) its Assimp. A missing file just returns null.
+	(void) loader.loadModel("lvg_package_smoke_nonexistent.fbx");
 	lightGraphics::Transform transform;
 	(void) transform;
 	lightGraphics::lightVulkanGraphics app("package-consumer", createInfo);

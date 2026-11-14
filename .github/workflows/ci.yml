@@ -30,7 +30,7 @@ jobs:
             glslc
 
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DLVG_WARNINGS_AS_ERRORS=ON
+        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} -DLVG_USE_SYSTEM_ASSIMP=ON -DLVG_WARNINGS_AS_ERRORS=ON
 
       - name: Build Examples
         run: cmake --build build --target LightVulkanGraphicsExamples
@@ -63,6 +63,7 @@ jobs:
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
           -DCMAKE_CXX_COMPILER=clang++
           -DLVG_ENABLE_SANITIZERS=ON
+          -DLVG_USE_SYSTEM_ASSIMP=ON
           -DLVG_WARNINGS_AS_ERRORS=ON
 
       - name: Build
@@ -92,10 +93,85 @@ jobs:
         run: >
           cmake -S . -B build
           -G "Visual Studio 17 2022" -A x64
-          -DASSIMP_USE_FETCHCONTENT=ON
           -DBUILD_TESTING=OFF
           -DLVG_BUILD_EXAMPLES=OFF
           -DLVG_WARNINGS_AS_ERRORS=ON
 
       - name: Build Library
         run: cmake --build build --config Release --target libLightVulkanGraphics
+
+  # Release packaging: build each package, then install it somewhere that has NOT built
+  # the library and compile a consumer against it. This is the "clean machine" check.
+  package-deb:
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ ninja-build git ca-certificates \
+            libglfw3-dev libglm-dev libvulkan-dev glslc libwayland-dev libxkbcommon-dev pkg-config
+      - name: Package (system Assimp, as a distro would)
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y libassimp-dev
+          cmake -S . -B build -G Ninja -DLVG_USE_SYSTEM_ASSIMP=ON -DBUILD_TESTING=OFF \
+            -DLVG_BUILD_EXAMPLES=OFF -DLVG_BUILD_DOXYGEN=OFF
+          cmake --build build
+          cpack --config build/CPackConfig.cmake -G DEB -B out
+          dpkg -I out/*.deb
+      - uses: actions/upload-artifact@v4
+        with: { name: deb, path: out/*.deb }
+
+  package-deb-clean-install:
+    needs: package-deb
+    runs-on: ubuntu-latest
+    container: ubuntu:24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: deb, path: pkg }
+      - name: Install the .deb on a machine that never built it
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y ./pkg/*.deb g++ ninja-build
+          ldconfig
+      - name: Build a consumer against the installed package
+        run: |
+          cmake -S tests/package_consumer -B consumer -G Ninja
+          cmake --build consumer
+
+  package-bundled:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglfw3-dev libglm-dev libvulkan-dev glslc \
+            libwayland-dev libxkbcommon-dev pkg-config
+      - name: macOS deps
+        if: runner.os == 'macOS'
+        run: brew install glfw glm vulkan-headers vulkan-loader shaderc molten-vk
+      - name: Windows Vulkan SDK
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install vulkan-sdk --no-progress -y
+          $s = Get-ChildItem 'C:\VulkanSDK' | Sort-Object Name -Descending | Select-Object -First 1
+          "VULKAN_SDK=$($s.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "$($s.FullName)\Bin" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+      # Default config = bundled static Assimp, i.e. exactly what a release ships.
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DLVG_BUILD_EXAMPLES=OFF -DLVG_BUILD_DOXYGEN=OFF
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Package
+        run: cpack --config build/CPackConfig.cmake -C Release -B out
+      - uses: actions/upload-artifact@v4
+        with: { name: "package-${{ runner.os }}", path: out/*.* }

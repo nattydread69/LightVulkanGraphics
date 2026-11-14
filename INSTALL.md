@@ -24,7 +24,7 @@ LightVulkanGraphics is a high-performance Vulkan graphics library for real-time 
 
 ### Optional
 - **Doxygen** (for building documentation)
-- **Assimp** (for FBX loader component)
+- **Assimp** (for FBX loader component) -- built and linked statically by default, nothing to install; see "Assimp" below
 - **GraphViz/Dot** (for enhanced Doxygen output)
 
 ### Install Prerequisites (Ubuntu/Debian)
@@ -34,8 +34,25 @@ sudo apt-get install cmake vulkan-sdk libvulkan-dev
 sudo apt-get install libglfw3-dev libglm-dev
 # Optional: for documentation
 sudo apt-get install doxygen graphviz
-# Optional: for FBX loader
+# Optional: only if you configure with -DLVG_USE_SYSTEM_ASSIMP=ON
 sudo apt-get install libassimp-dev
+```
+
+## Assimp
+
+By default the build fetches a pinned Assimp (`LVG_ASSIMP_GIT_TAG`, default `v5.4.3`) and links it
+**statically and privately** with a reduced importer set (FBX, glTF, OBJ, COLLADA, STL, PLY, 3DS, Blender).
+Installed packages therefore need no Assimp on the consumer's machine, on any OS. The first configure needs network access.
+
+To use an Assimp you already have (what distro packages do), configure with `-DLVG_USE_SYSTEM_ASSIMP=ON`
+(optionally `-DASSIMP_ROOT=<prefix>`). Build `.deb` files this way in a clean container with `libassimp-dev`
+installed from apt, not against a hand-built copy in `/usr/local`, so `dpkg` can record the dependency.
+
+## Packaging
+
+```bash
+cmake -S . -B build && cmake --build build
+cpack --config build/CPackConfig.cmake -B out   # .deb + .tar.gz (Linux), .zip (Windows), .tar.gz (macOS)
 ```
 
 ## Local Installation

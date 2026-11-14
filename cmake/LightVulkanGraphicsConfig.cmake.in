@@ -18,7 +18,9 @@ if(NOT @LVG_BUILD_SHARED@)
     # not require an Assimp CMake package at consumption time. Several system
     # packages ship broken exported targets even though their shared library and
     # headers are usable.
-    if(NOT TARGET assimp::assimp)
+    # Bundled Assimp (@LVG_ASSIMP_BUNDLED@) is exported as part of this package's own
+    # targets file, so nothing needs to be found on the consumer's machine.
+    if(NOT @LVG_ASSIMP_BUNDLED@ AND NOT TARGET assimp::assimp)
         find_path(_LVG_ASSIMP_INCLUDE_DIR NAMES assimp/Importer.hpp REQUIRED)
         find_library(_LVG_ASSIMP_LIBRARY NAMES assimp REQUIRED)
         add_library(assimp::assimp UNKNOWN IMPORTED GLOBAL)
