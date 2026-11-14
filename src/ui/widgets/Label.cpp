@@ -62,6 +62,7 @@ std::vector<Label::Line> Label::layoutLines(const GuiContext& ctx) const {
 	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
 	const float lh = lf.font.lineHeight(lf.pixelSize);
 	std::vector<Line> out;
+	const bool multiLine = m_wordWrap || m_text.find('\n') != std::string::npos;
 	auto originX = [&](std::string_view line) {
 		if (m_align == Align::Start) {
 			return m_bounds.x;
@@ -69,9 +70,10 @@ std::vector<Label::Line> Label::layoutLines(const GuiContext& ctx) const {
 		const float w = lf.font.measureText(line, lf.pixelSize, flags).x;
 		return m_align == Align::Center ? m_bounds.x + (m_bounds.w - w) * 0.5f : m_bounds.x + m_bounds.w - w;
 	};
-	if (m_wordWrap) {
+	if (multiLine) {
+		// Wrapped to the width when word wrap is on; otherwise only broken at newlines.
 		float y = m_bounds.y;
-		for (std::string_view line : wrapText(lf.font, m_text, lf.pixelSize, m_bounds.w, flags)) {
+		for (std::string_view line : wrapText(lf.font, m_text, lf.pixelSize, m_wordWrap ? m_bounds.w : 0.0f, flags)) {
 			out.push_back({ line, originX(line), y, lh });
 			y += lh;
 		}
@@ -128,11 +130,23 @@ std::string Label::textBetween(const GuiContext& ctx, LinePos a, LinePos b) cons
 	if (a.line == 0 && a.byte == 0 && b.line >= static_cast<int>(lines.size()) - 1 && b.byte >= lines.back().text.size()) {
 		return m_text;
 	}
-	std::vector<std::string_view> texts;
-	for (const Line& l : lines) { texts.push_back(l.text); }
+	// Wrapped segments rejoin with a space; a segment that ended at a newline in the text rejoins with one.
 	LineSelection sel;
 	sel.set(a, b);
-	return sel.text(texts, " ");
+	std::string out;
+	for (int i = a.line; i <= b.line && i < static_cast<int>(lines.size()); ++i) {
+		const Line& l = lines[static_cast<std::size_t>(i)];
+		if (i > a.line) {
+			const Line& previous = lines[static_cast<std::size_t>(i) - 1];
+			const std::size_t end = static_cast<std::size_t>(previous.text.data() - m_text.data()) + previous.text.size();
+			out += (end < m_text.size() && (m_text[end] == '\n' || m_text[end] == '\r')) ? '\n' : ' ';
+		}
+		std::size_t s = 0, e = 0;
+		if (sel.lineRange(i, l.text.size(), s, e) && e > s) {
+			out.append(l.text.substr(s, e - s));
+		}
+	}
+	return out;
 }
 
 void Label::update(GuiContext& ctx) {
@@ -229,7 +243,16 @@ Vec2 Label::preferredSize(const GuiContext& ctx) const {
 	LabelFont lf = resolveLabelFont(ctx, m_style);
 	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
 	if (!m_wordWrap) {
-		return lf.font.measureText(m_text, lf.pixelSize, flags);
+		if (m_text.find('\n') == std::string::npos) {
+			return lf.font.measureText(m_text, lf.pixelSize, flags);
+		}
+		// Broken at newlines only: as wide as the widest line, one line height per line.
+		const auto lines = wrapText(lf.font, m_text, lf.pixelSize, 0.0f, flags);
+		float widest = 0.0f;
+		for (std::string_view line : lines) {
+			widest = std::max(widest, lf.font.measureText(line, lf.pixelSize, flags).x);
+		}
+		return { widest, static_cast<float>(lines.size()) * lf.font.lineHeight(lf.pixelSize) };
 	}
 
 	// m_bounds.w reflects the row width from the PREVIOUS layout pass (0 the very first
@@ -273,8 +296,8 @@ void Label::draw(DrawList& dl, const GuiContext& ctx) const {
 		}
 	}
 
-	if (m_wordWrap) {
-		auto lines = wrapText(lf.font, m_text, lf.pixelSize, m_bounds.w, flags);
+	if (m_wordWrap || m_text.find('\n') != std::string::npos) {
+		auto lines = wrapText(lf.font, m_text, lf.pixelSize, m_wordWrap ? m_bounds.w : 0.0f, flags);
 		float lh = lf.font.lineHeight(lf.pixelSize);
 		float y = m_bounds.y;
 		for (auto& line : lines) {

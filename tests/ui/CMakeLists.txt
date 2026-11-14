@@ -408,3 +408,16 @@ target_link_libraries(lvgui_waylandprimary_tests PRIVATE ${CMAKE_DL_LIBS} Thread
 target_compile_features(lvgui_waylandprimary_tests PRIVATE cxx_std_17)
 
 add_test(NAME lvgui_waylandprimary_tests COMMAND lvgui_waylandprimary_tests)
+
+# Newlines in Label text and wrapText(): hard line breaks, sizing, selection copy.
+add_executable(lvgui_label_multiline_tests
+	test_label_multiline.cpp
+)
+target_include_directories(lvgui_label_multiline_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
+target_link_libraries(lvgui_label_multiline_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_label_multiline_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_label_multiline_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_label_multiline_tests COMMAND lvgui_label_multiline_tests)

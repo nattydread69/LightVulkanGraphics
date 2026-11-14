@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### Newlines in `Label` text
+- A newline in `Label` text is now a hard line break instead of a stray glyph. `Label` lays out, sizes (`preferredSize`),
+  draws and selects each line, with or without word wrap: with wrapping on, every paragraph wraps to the width on its own;
+  with it off, the text is only broken at newlines (top-aligned, as wide as the widest line, one line height per line).
+  Copying a selection puts a newline where the text has one and a space where it only wrapped. A `"\r\n"` pair breaks once.
+  Text without a newline lays out exactly as before.
+- The change is in the shared `wrapText()` (`include/internal/ui/TextWrap.h`), so `LogView`, the `SaveFileDialog` message and the
+  `AboutBox` description also honour newlines. No public header or class layout changed (no ABI change); an application
+  gets the fix by relinking against the rebuilt library. New test: `lvgui_label_multiline_tests`.
+
 ### TextArea: a multi-line text editor
 - New `TextArea` widget (`widgets/TextArea.h`) for pasting or editing a lot of text: newlines, word wrap,
   Up/Down/PageUp/PageDown, wheel scrolling and a draggable scrollbar, selection, Ctrl+C/X/V, middle-click paste.

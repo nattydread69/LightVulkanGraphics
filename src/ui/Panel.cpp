@@ -370,7 +370,9 @@ void Panel::draw(DrawList& dl, const GuiContext& ctx) const {
 		}
 	}
 
-	if (hasFlag(m_flags, PanelFlags::Resizable)) {
+	// Not while collapsed: hitTestResizeGrip() is already inert then, and the grip rect is
+	// anchored to the expanded bounds, so it would float detached from the title bar.
+	if (!m_collapsed && hasFlag(m_flags, PanelFlags::Resizable)) {
 		// Triangle glyph in the bottom-right corner (docs/gui/05, "Resize grip"), built
 		// from addTriangleFilled rather than a font character -- same reasoning as
 		// CollapsingSection's header disclosure triangle.

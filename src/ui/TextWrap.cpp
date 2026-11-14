@@ -21,12 +21,14 @@
 
 namespace lightGraphics::ui {
 
-std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width,
-                                        TextFlags flags) {
-	std::vector<std::string_view> lines;
+namespace {
+
+// Greedy word-wrap of one paragraph (no newlines in it).
+void wrapParagraph(const Font& font, std::string_view text, float pixelSize, float width, TextFlags flags,
+                   std::vector<std::string_view>& lines) {
 	if (width <= 0.0f || text.empty()) {
 		lines.push_back(text);
-		return lines;
+		return;
 	}
 
 	std::size_t lineStart = 0;
@@ -51,6 +53,28 @@ std::vector<std::string_view> wrapText(const Font& font, std::string_view text, 
 			}
 		}
 		++pos;
+	}
+}
+
+} // namespace
+
+std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width,
+                                        TextFlags flags) {
+	std::vector<std::string_view> lines;
+	// A newline is a hard break: each paragraph wraps on its own, and an empty one is an empty line. A "\r\n"
+	// pair breaks once. Text without a newline takes exactly the path it always did.
+	std::size_t start = 0;
+	while (true) {
+		const std::size_t nl = text.find('\n', start);
+		std::string_view paragraph = text.substr(start, nl == std::string_view::npos ? std::string_view::npos : nl - start);
+		if (!paragraph.empty() && paragraph.back() == '\r') {
+			paragraph.remove_suffix(1);
+		}
+		wrapParagraph(font, paragraph, pixelSize, width, flags, lines);
+		if (nl == std::string_view::npos) {
+			break;
+		}
+		start = nl + 1;
 	}
 	return lines;
 }

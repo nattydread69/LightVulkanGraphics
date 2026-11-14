@@ -37,7 +37,9 @@ class Font;
 // single word wider than `width` on its own is never split mid-word -- it overflows
 // that one line rather than being hyphenated (matching Label's own long-standing
 // behaviour; hyphenation is out of scope for a scientific-visualisation parameter panel).
-// `width <= 0` or empty `text` returns the whole string as a single line, unwrapped.
+// A newline ('\n', or "\r\n") is a hard break: each paragraph is wrapped separately and an empty paragraph
+// gives an empty line, so "a\n\nb" is three lines. `width <= 0` does not wrap, but still breaks at newlines;
+// empty `text` returns a single empty line. Every line is a view into `text`.
 std::vector<std::string_view> wrapText(const Font& font, std::string_view text, float pixelSize, float width,
                                         TextFlags flags = TextFlags::None);
 

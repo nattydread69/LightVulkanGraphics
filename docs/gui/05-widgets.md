@@ -87,6 +87,10 @@ public:
 };
 ```
 
+- A newline in the text is a hard line break, whether or not word wrap is on: with wrap on, each paragraph is wrapped to the
+  width on its own (an empty paragraph is an empty line, `"\r\n"` breaks once); with wrap off the text is broken only at newlines,
+  top-aligned, and `preferredSize` is the widest line by one line height per line. Text without a newline behaves as it always did.
+  Selecting across a hard break copies a newline; across a wrapped break, a space.
 - `acceptsCapture()` → `true` while selectable and non-empty, `acceptsFocus()` → `false`
   (`setSelectable(false)` restores the old click-through behaviour)
 - `preferredSize`: `measureText` if not wrapping; if wrapping, the row width is known
