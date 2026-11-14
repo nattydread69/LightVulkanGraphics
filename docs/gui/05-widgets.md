@@ -1332,10 +1332,9 @@ for every registered texture rather than creating one per texture; filtering and
 addressing aren't format-specific, and that sampler already does exactly what a
 legend/icon/thumbnail wants.
 
-Its descriptor pool is sized once, at `init()`, for the atlas plus up to
-`UiRenderer::kMaxRegisteredTextures` (64) additional textures — a fixed cap chosen for
-the expected use case (a modest number of static images registered near startup), not a
-dynamic, high-churn texture stream. `registerTexture()` throws once that cap is reached.
+Its descriptor pools grow on demand: the first holds the atlas plus 64 textures, and
+`registerTexture()` adds another pool of 64 whenever the current ones are full, so there is
+no fixed cap on registered textures. `unregisterTexture()` frees its slot for reuse.
 
 ## ProgressBar
 

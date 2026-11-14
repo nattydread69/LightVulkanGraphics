@@ -110,7 +110,7 @@ jobs:
       - name: Build tools
         run: |
           apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ ninja-build git ca-certificates \
+          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ ninja-build git ca-certificates file \
             libglfw3-dev libglm-dev libvulkan-dev glslc libwayland-dev libxkbcommon-dev pkg-config
       - name: Package (system Assimp, as a distro would)
         run: |

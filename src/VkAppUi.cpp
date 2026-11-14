@@ -188,10 +188,10 @@ namespace lightGraphics
 		}
 		// sRGB swapchains blend linearly already; the gamma-space coverage compensation in
 		// ui.frag / ui_sdf.frag would double-correct there.
-		rendererInfo.textContrast =
-			(swapChainImageFormat_ == VK_FORMAT_B8G8R8A8_SRGB || swapChainImageFormat_ == VK_FORMAT_R8G8B8A8_SRGB)
-				? 0.0f
-				: 1.0f;
+		const bool srgbSwapchain =
+			swapChainImageFormat_ == VK_FORMAT_B8G8R8A8_SRGB || swapChainImageFormat_ == VK_FORMAT_R8G8B8A8_SRGB;
+		rendererInfo.textContrast = srgbSwapchain ? 0.0f : 1.0f;
+		rendererInfo.srgbOutput = srgbSwapchain;
 
 		uiRenderer_ = std::make_unique<ui::UiRenderer>();
 		uiRenderer_->init(rendererInfo, guiContext_->font());

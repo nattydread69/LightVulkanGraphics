@@ -116,6 +116,7 @@ void UiRenderer::init(const UiRendererCreateInfo& createInfo, const Font& font) 
 	m_imageFragmentShaderPath = createInfo.imageFragmentShaderPath;
 	m_sdfFragmentShaderPath = createInfo.sdfFragmentShaderPath;
 	m_textContrast = createInfo.textContrast;
+	m_srgbOutput = createInfo.srgbOutput;
 
 	m_frames.assign(createInfo.framesInFlight, FrameBuffers{});
 
@@ -150,6 +151,10 @@ void UiRenderer::destroy() {
 	}
 	m_textures.clear();
 
+	for (VkDescriptorPool extra : m_extraPools) {
+		vkDestroyDescriptorPool(m_device, extra, nullptr);
+	}
+	m_extraPools.clear();
 	if (m_descriptorPool != VK_NULL_HANDLE) {
 		vkDestroyDescriptorPool(m_device, m_descriptorPool, nullptr);
 		m_descriptorPool = VK_NULL_HANDLE;
@@ -446,21 +451,18 @@ void UiRenderer::createDescriptorSet() {
 	check(vkCreateDescriptorSetLayout(m_device, &layoutInfo, nullptr, &m_descriptorSetLayout),
 	      "vkCreateDescriptorSetLayout");
 
-	// Sized for the atlas's own set PLUS every slot registerTexture() might ever hand
-	// out (kMaxRegisteredTextures, UiRenderer.h) -- allocating additional sets from this
-	// same pool well after creation (inside registerTexture(), not here) is ordinary
-	// Vulkan usage as long as the pool was sized with enough headroom up front, which
-	// this is. FREE_DESCRIPTOR_SET_BIT lets unregisterTexture() give its slot back
-	// individually rather than every registration permanently consuming pool capacity.
+	// The first pool holds the atlas's set plus kTexturesPerPool registered textures;
+	// allocateTextureSet() adds further pools when it fills. FREE_DESCRIPTOR_SET_BIT lets
+	// unregisterTexture() give a slot back individually.
 	VkDescriptorPoolSize poolSize{};
 	poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-	poolSize.descriptorCount = 1 + kMaxRegisteredTextures;
+	poolSize.descriptorCount = 1 + kTexturesPerPool;
 
 	VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
 	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 	poolInfo.poolSizeCount = 1;
 	poolInfo.pPoolSizes = &poolSize;
-	poolInfo.maxSets = 1 + kMaxRegisteredTextures;
+	poolInfo.maxSets = 1 + kTexturesPerPool;
 	check(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &m_descriptorPool), "vkCreateDescriptorPool");
 
 	VkDescriptorSetAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
@@ -490,8 +492,9 @@ void UiRenderer::destroyRegisteredTexture(RegisteredTexture& tex) {
 	// FREE_DESCRIPTOR_SET_BIT (createDescriptorSet()) is what makes this legal --
 	// without it, individual sets can only ever be reclaimed by resetting the whole pool.
 	if (tex.descriptorSet != VK_NULL_HANDLE) {
-		vkFreeDescriptorSets(m_device, m_descriptorPool, 1, &tex.descriptorSet);
+		vkFreeDescriptorSets(m_device, tex.pool, 1, &tex.descriptorSet);
 		tex.descriptorSet = VK_NULL_HANDLE;
+		tex.pool = VK_NULL_HANDLE;
 	}
 	if (tex.view != VK_NULL_HANDLE) {
 		vkDestroyImageView(m_device, tex.view, nullptr);
@@ -505,6 +508,54 @@ void UiRenderer::destroyRegisteredTexture(RegisteredTexture& tex) {
 		vkFreeMemory(m_device, tex.memory, nullptr);
 		tex.memory = VK_NULL_HANDLE;
 	}
+}
+
+VkDescriptorPool UiRenderer::createTexturePool() {
+	VkDescriptorPoolSize poolSize{};
+	poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+	poolSize.descriptorCount = kTexturesPerPool;
+	VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+	poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+	poolInfo.poolSizeCount = 1;
+	poolInfo.pPoolSizes = &poolSize;
+	poolInfo.maxSets = kTexturesPerPool;
+	VkDescriptorPool pool = VK_NULL_HANDLE;
+	check(vkCreateDescriptorPool(m_device, &poolInfo, nullptr, &pool), "vkCreateDescriptorPool");
+	return pool;
+}
+
+// Tries each existing pool (slots freed by unregisterTexture() are reused), then adds one.
+VkDescriptorSet UiRenderer::allocateTextureSet(VkDescriptorPool& outPool) {
+	VkDescriptorSetAllocateInfo allocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+	allocInfo.descriptorSetCount = 1;
+	allocInfo.pSetLayouts = &m_descriptorSetLayout;
+	VkDescriptorSet set = VK_NULL_HANDLE;
+
+	auto tryPool = [&](VkDescriptorPool pool) {
+		allocInfo.descriptorPool = pool;
+		const VkResult result = vkAllocateDescriptorSets(m_device, &allocInfo, &set);
+		if (result == VK_SUCCESS) {
+			outPool = pool;
+			return true;
+		}
+		if (result != VK_ERROR_OUT_OF_POOL_MEMORY && result != VK_ERROR_FRAGMENTED_POOL) {
+			check(result, "vkAllocateDescriptorSets");
+		}
+		return false;
+	};
+
+	if (tryPool(m_descriptorPool)) {
+		return set;
+	}
+	for (VkDescriptorPool pool : m_extraPools) {
+		if (tryPool(pool)) {
+			return set;
+		}
+	}
+	VkDescriptorPool fresh = createTexturePool();
+	m_extraPools.push_back(fresh);
+	check(tryPool(fresh) ? VK_SUCCESS : VK_ERROR_OUT_OF_POOL_MEMORY, "vkAllocateDescriptorSets");
+	return set;
 }
 
 UiRenderer::RegisteredTexture UiRenderer::createTextureResources(const std::uint8_t* rgbaPixels,
@@ -590,11 +641,7 @@ UiRenderer::RegisteredTexture UiRenderer::createTextureResources(const std::uint
 		viewInfo.subresourceRange.layerCount = 1;
 		check(vkCreateImageView(m_device, &viewInfo, nullptr, &tex.view), "vkCreateImageView");
 
-		VkDescriptorSetAllocateInfo dsAllocInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
-		dsAllocInfo.descriptorPool = m_descriptorPool;
-		dsAllocInfo.descriptorSetCount = 1;
-		dsAllocInfo.pSetLayouts = &m_descriptorSetLayout;
-		check(vkAllocateDescriptorSets(m_device, &dsAllocInfo, &tex.descriptorSet), "vkAllocateDescriptorSets");
+		tex.descriptorSet = allocateTextureSet(tex.pool);
 
 		// Reuses m_atlasSampler -- see its own comment (UiRenderer.h) on why one sampler
 		// serves the atlas and every registered texture.
@@ -635,13 +682,6 @@ TextureId UiRenderer::registerTexture(const std::uint8_t* rgbaPixels, std::uint3
 	if (rgbaPixels == nullptr || width == 0 || height == 0) {
 		throw std::runtime_error("UiRenderer::registerTexture: empty pixel buffer");
 	}
-	if (m_textures.size() >= kMaxRegisteredTextures) {
-		throw std::runtime_error("UiRenderer::registerTexture: kMaxRegisteredTextures (" +
-		                          std::to_string(kMaxRegisteredTextures) +
-		                          ") are already registered -- see UiRenderer.h's comment "
-		                          "on that constant");
-	}
-
 	RegisteredTexture tex = createTextureResources(rgbaPixels, width, height);
 	tex.kind = kind;
 	TextureId id = m_nextTextureId++;
@@ -785,12 +825,14 @@ void UiRenderer::createPipeline() {
 	stages[1].pName = "main";
 	// constant_id 0 of ui.frag / ui_sdf.frag (kTextContrast). Entries naming a constant a
 	// shader does not declare (ui_image.frag has none) are ignored by Vulkan.
-	VkSpecializationMapEntry contrastEntry{ 0, 0, sizeof(float) };
+	// constant_id 1 (kSrgbOutput) selects sRGB-space dithering.
+	const float specData[2] = { m_textContrast, m_srgbOutput ? 1.0f : 0.0f };
+	const VkSpecializationMapEntry specEntries[2] = { { 0, 0, sizeof(float) }, { 1, sizeof(float), sizeof(float) } };
 	VkSpecializationInfo specialization{};
-	specialization.mapEntryCount = 1;
-	specialization.pMapEntries = &contrastEntry;
-	specialization.dataSize = sizeof(float);
-	specialization.pData = &m_textContrast;
+	specialization.mapEntryCount = 2;
+	specialization.pMapEntries = specEntries;
+	specialization.dataSize = sizeof(specData);
+	specialization.pData = specData;
 	stages[1].pSpecializationInfo = &specialization;
 
 	try {

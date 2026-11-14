@@ -73,6 +73,9 @@ struct UiRendererCreateInfo {
 	// text in gamma space. 1 for UNORM swapchains; 0 for *_SRGB swapchains, whose blending
 	// is already linear.
 	float textContrast = 1.0f;
+	// True when the render target is a *_SRGB format. The fragment shaders dither colour
+	// before the 8-bit write to hide banding; this tells them which space the steps are in.
+	bool srgbOutput = false;
 };
 
 // How a registered texture is sampled.
@@ -124,9 +127,7 @@ public:
 	// height * 4` bytes) as a new sampled image and returns a TextureId a DrawList can
 	// pass to addImage(). Synchronous, like createAtlas(): safe to call at any point
 	// between frames (not mid-record()), same restriction as rebuildAtlas(). Throws
-	// std::runtime_error if more than kMaxRegisteredTextures are currently registered --
-	// see that constant's comment for why this backend caps it rather than growing the
-	// descriptor pool on demand.
+	// std::runtime_error only if Vulkan itself cannot allocate (there is no fixed cap).
 	//
 	// `colour` = true (the default, and what VkApp::registerUiTexture() uses) draws the
 	// texture's own RGBA, tinted by the vertex colour, through the image pipeline.
@@ -195,16 +196,14 @@ private:
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		VkImageView view = VK_NULL_HANDLE;
 		VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+		VkDescriptorPool pool = VK_NULL_HANDLE;   // pool descriptorSet was allocated from
 		TextureKind kind = TextureKind::Colour;   // which pipeline draws it (see registerTexture())
 	};
 
-	// Sized into the descriptor pool up front (createDescriptorSet()) rather than grown
-	// on demand: this backend targets a modest number of static UI images (legends,
-	// icons, thumbnails) registered once near startup, not a dynamic, high-churn texture
-	// stream -- growing the pool at runtime would mean either over-allocating "just in
-	// case" or a pool-recreation path this feature doesn't otherwise need. Raise this if
-	// a real use case needs more; nothing else here assumes this exact value.
-	static constexpr std::uint32_t kMaxRegisteredTextures = 64;
+	// Sets per descriptor pool. Registered textures are not capped: when the pool in use
+	// is full, allocateTextureSet() creates another of this size, and every pool is freed
+	// in destroy(). Individual sets are returned to the pool they came from.
+	static constexpr std::uint32_t kTexturesPerPool = 64;
 
 	void createPipeline();
 	void destroyPipeline();
@@ -237,6 +236,7 @@ private:
 	std::string m_imageFragmentShaderPath;
 	std::string m_sdfFragmentShaderPath;
 	float m_textContrast = 1.0f;
+	bool m_srgbOutput = false;
 	std::uint64_t m_atlasRevision = 0;   // Font::atlasRevision() of the last atlas upload
 
 	VkPipeline m_pipeline = VK_NULL_HANDLE;
@@ -247,7 +247,10 @@ private:
 	VkPipeline m_sdfPipeline = VK_NULL_HANDLE;
 	VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
 	VkDescriptorSetLayout m_descriptorSetLayout = VK_NULL_HANDLE;
-	VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+	VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;   // atlas set + first kTexturesPerPool textures
+	std::vector<VkDescriptorPool> m_extraPools;           // grown on demand by allocateTextureSet()
+	VkDescriptorPool createTexturePool();
+	VkDescriptorSet allocateTextureSet(VkDescriptorPool& outPool);
 	VkDescriptorSet m_descriptorSet = VK_NULL_HANDLE;
 
 	VkImage m_atlasImage = VK_NULL_HANDLE;

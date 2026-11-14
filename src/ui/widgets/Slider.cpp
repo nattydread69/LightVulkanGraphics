@@ -37,6 +37,25 @@ namespace {
 	// Not specified in docs/gui/05-widgets.md; 0.35s matches the common native default
 	// (Windows/GTK land around 0.3-0.5s) and reads comfortably in testing.
 	constexpr float kDoubleClickSeconds = 0.35f;
+
+	// The MSVC secure CRT rejects std::getenv under /WX.
+	bool consoleOutputRequested()
+	{
+#if defined(_WIN32)
+		char* value = nullptr;
+		std::size_t length = 0;
+		if (_dupenv_s(&value, &length, "LVG_CONSOLE_OUTPUT") != 0 || value == nullptr)
+		{
+			return false;
+		}
+		bool const enabled = std::strcmp(value, "1") == 0;
+		std::free(value);
+		return enabled;
+#else
+		char const* value = std::getenv("LVG_CONSOLE_OUTPUT");
+		return value && std::strcmp(value, "1") == 0;
+#endif
+	}
 }
 
 template <typename T>
@@ -233,8 +252,7 @@ void SliderT<T>::setRange(T minVal, T maxVal) {
 template <typename T>
 void SliderT<T>::setScale(SliderScale scale) {
 	if (scale == SliderScale::Logarithmic && !(m_min > T{ 0 })) {
-		const char* quiet = std::getenv("LVG_CONSOLE_OUTPUT");  // printed only with LVG_CONSOLE_OUTPUT=1
-		if (quiet && std::strcmp(quiet, "1") == 0)
+		if (consoleOutputRequested())
 		std::cerr
 			<< "SliderT(\"" << m_label << "\"): logarithmic scale requires minVal > 0 (minVal="
 			<< static_cast<double>(m_min) << "); a range crossing or touching zero must use "

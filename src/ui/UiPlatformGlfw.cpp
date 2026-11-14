@@ -22,7 +22,9 @@
 
 #include <GLFW/glfw3.h>
 
+#if defined(__linux__) && defined(GLFW_PLATFORM_WAYLAND)
 #include <dlfcn.h>
+#endif
 
 #include <unordered_map>
 
@@ -310,7 +312,7 @@ PlatformHooks UiPlatformGlfw::makeHooks(GLFWwindow* window) const {
 		}
 	}
 #endif
-#if defined(GLFW_PLATFORM_WAYLAND)
+#if defined(__linux__) && defined(GLFW_PLATFORM_WAYLAND)
 	// Native Wayland: GLFW has no PRIMARY support there either, so speak the primary-selection
 	// protocol on its display; see WaylandPrimary.h. Looked up at run time because
 	// glfwGetWaylandDisplay() only exists in a GLFW built with its Wayland backend.

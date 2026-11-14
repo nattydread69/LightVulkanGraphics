@@ -6,6 +6,12 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### GUI: no texture cap, no gradient banding
+- `registerUiTexture()` is no longer limited to 64 textures: `UiRenderer` adds descriptor pools of 64 as needed.
+- The UI fragment shaders dither colour (stochastic rounding, so values already on an 8-bit level stay exact) before the
+  8-bit write, which removes banding in dark gradients despite 8-bit vertex colours. sRGB swapchains dither in sRGB space.
+  Rebuild shaders to pick it up.
+
 ### Packaging and Assimp
 - Assimp is now built from a pinned tag as a private static library by default (`LVG_USE_SYSTEM_ASSIMP=OFF`), so
   release packages have no Assimp dependency. `-DLVG_USE_SYSTEM_ASSIMP=ON` restores the old system/`ASSIMP_ROOT`

@@ -346,19 +346,6 @@ if (LVG_ENABLE_SANITIZERS)
 	endif()
 endif()
 
-# Every add_test() above names its test after the executable target it runs, so this
-# directory's TESTS property doubles as the executable target list. CI's "Build
-# Examples" step only builds the LightVulkanGraphicsExamples target before running
-# ctest (it doesn't build "all"), and light_vulkan_graphics_unit_tests/
-# worker_skinning_sanity already get wired into that target the same way (see the
-# root CMakeLists.txt, right after they're added) -- these were missing the same
-# wiring, so ctest ran them without ever building them ("Not Run").
-if (TARGET LightVulkanGraphicsExamples)
-	get_property(_lvgui_test_targets DIRECTORY PROPERTY TESTS)
-	if (_lvgui_test_targets)
-		add_dependencies(LightVulkanGraphicsExamples ${_lvgui_test_targets})
-	endif()
-endif()
 
 # Keep assert() live in every suite here, whatever the build type. These tests check
 # with assert(), and NDEBUG -- which RelWithDebInfo and Release both define -- compiles
@@ -421,3 +408,17 @@ target_compile_definitions(lvgui_label_multiline_tests PRIVATE
 )
 
 add_test(NAME lvgui_label_multiline_tests COMMAND lvgui_label_multiline_tests)
+
+# Every add_test() above names its test after the executable target it runs, so this
+# directory's TESTS property doubles as the executable target list. CI's "Build
+# Examples" step only builds the LightVulkanGraphicsExamples target before running
+# ctest (it doesn't build "all"), and light_vulkan_graphics_unit_tests/
+# worker_skinning_sanity already get wired into that target the same way (see the
+# root CMakeLists.txt, right after they're added) -- these were missing the same
+# wiring, so ctest ran them without ever building them ("Not Run").
+if (TARGET LightVulkanGraphicsExamples)
+	get_property(_lvgui_test_targets DIRECTORY PROPERTY TESTS)
+	if (_lvgui_test_targets)
+		add_dependencies(LightVulkanGraphicsExamples ${_lvgui_test_targets})
+	endif()
+endif()
