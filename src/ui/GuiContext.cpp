@@ -968,15 +968,31 @@ void GuiContext::publishSelection(WidgetId owner, std::string_view text) {
 		clearSelection(owner);
 		return;
 	}
+	if (m_span.owner != owner) {
+		m_span = TextSpan{};
+	}
 	m_selectionOwner = owner;
 	m_selectedText.assign(text);
 	m_primaryText = m_selectedText;
+	if (m_hooks.setPrimaryText) {
+		m_hooks.setPrimaryText(m_primaryText);
+	}
+}
+
+std::string GuiContext::primaryText() const {
+	if (m_hooks.getPrimaryText) {
+		return m_hooks.getPrimaryText();
+	}
+	return m_primaryText;
 }
 
 void GuiContext::clearSelection(WidgetId owner) {
 	if (m_selectionOwner == owner) {
 		m_selectionOwner = kInvalidWidgetId;
 		m_selectedText.clear();
+	}
+	if (m_span.owner == owner) {
+		m_span = TextSpan{};
 	}
 }
 

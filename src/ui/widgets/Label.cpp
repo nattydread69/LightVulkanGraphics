@@ -39,7 +39,8 @@ namespace {
 }
 
 struct Label::Selection {
-	LineSelection sel;
+	LinePos anchor;
+	bool  anchorSet = false;
 	float time = 0.0f;
 	float lastClick = -10.0f;
 	int   clicks = 0;
@@ -51,7 +52,7 @@ void Label::setText(std::string text) {
 	if (text != m_text) {
 		m_text = std::move(text);
 		if (m_sel) {
-			m_sel->sel.clear();   // the old byte offsets no longer mean anything
+			m_sel->anchorSet = false;   // the old byte offsets no longer mean anything
 		}
 	}
 }
@@ -80,6 +81,60 @@ std::vector<Label::Line> Label::layoutLines(const GuiContext& ctx) const {
 	return out;
 }
 
+namespace {
+	// The Labels of `panel` that can take part in a selection, in reading (= layout) order.
+	std::vector<Label*> selectableLabels(const Panel* panel) {
+		std::vector<Label*> out;
+		if (!panel) {
+			return out;
+		}
+		for (std::size_t i = 0; i < panel->widgetCount(); ++i) {
+			if (auto* l = dynamic_cast<Label*>(panel->widgetAt(i)); l && l->visible() && l->selectable() && !l->text().empty()) {
+				out.push_back(l);
+			}
+		}
+		return out;
+	}
+
+	float distanceToRect(const Rect& r, Vec2 p) {
+		const float dx = std::max({ r.x - p.x, 0.0f, p.x - r.right() });
+		const float dy = std::max({ r.y - p.y, 0.0f, p.y - r.bottom() });
+		return dx * dx + dy * dy;
+	}
+}
+
+// Nearest (line, byte) in this label to `p` (clamped to its first/last line and its text).
+LinePos Label::hitPosition(const GuiContext& ctx, Vec2 p) const {
+	LabelFont lf = resolveLabelFont(ctx, m_style);
+	const std::vector<Line> lines = layoutLines(ctx);
+	if (lines.empty()) {
+		return {};
+	}
+	int li = 0;
+	for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+		if (p.y >= lines[static_cast<std::size_t>(i)].y) { li = i; }
+	}
+	const Line& l = lines[static_cast<std::size_t>(li)];
+	return LinePos{ li, lf.font.indexAtOffset(l.text, lf.pixelSize, p.x - l.x) };
+}
+
+// The text between two positions of this label (a wrapped label's segments rejoin with a space; the
+// whole label comes back exactly as set).
+std::string Label::textBetween(const GuiContext& ctx, LinePos a, LinePos b) const {
+	const std::vector<Line> lines = layoutLines(ctx);
+	if (lines.empty() || b < a) {
+		return {};
+	}
+	if (a.line == 0 && a.byte == 0 && b.line >= static_cast<int>(lines.size()) - 1 && b.byte >= lines.back().text.size()) {
+		return m_text;
+	}
+	std::vector<std::string_view> texts;
+	for (const Line& l : lines) { texts.push_back(l.text); }
+	LineSelection sel;
+	sel.set(a, b);
+	return sel.text(texts, " ");
+}
+
 void Label::update(GuiContext& ctx) {
 	if (!m_selectable || m_text.empty() || !effectivelyEnabled()) {
 		return;
@@ -95,52 +150,78 @@ void Label::update(GuiContext& ctx) {
 	s.time += in.deltaTime;
 	const int left = static_cast<int>(MouseButton::Left);
 	if (ctx.activeId() != id()) {
-		s.sel.end();
+		s.anchorSet = false;
 		return;
 	}
-	LabelFont lf = resolveLabelFont(ctx, m_style);
 	const std::vector<Line> lines = layoutLines(ctx);
 	if (lines.empty()) {
 		return;
 	}
-	auto posAt = [&](Vec2 p) {
-		int li = 0;
-		for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
-			if (p.y >= lines[static_cast<std::size_t>(i)].y) { li = i; }
+	const LinePos endOfThis{ static_cast<int>(lines.size()) - 1, lines.back().text.size() };
+
+	auto setSpan = [&](const std::vector<Label*>& ls, std::size_t fromIdx, std::size_t toIdx, LinePos first, LinePos last) {
+		GuiContext::TextSpan span;
+		span.owner = id();
+		for (std::size_t i = fromIdx; i <= toIdx; ++i) { span.widgets.push_back(ls[i]->id()); }
+		span.firstLine = first.line; span.firstByte = first.byte;
+		span.lastLine = last.line;   span.lastByte = last.byte;
+		ctx.setTextSpan(span);
+		std::string text;
+		for (std::size_t i = fromIdx; i <= toIdx; ++i) {
+			const std::vector<Line> theirs = ls[i]->layoutLines(ctx);
+			if (theirs.empty()) { continue; }
+			const LinePos a = (i == fromIdx) ? first : LinePos{ 0, 0 };
+			const LinePos b = (i == toIdx) ? last : LinePos{ static_cast<int>(theirs.size()) - 1, theirs.back().text.size() };
+			if (i != fromIdx) { text += "\n"; }
+			text += ls[i]->textBetween(ctx, a, b);
 		}
-		const Line& l = lines[static_cast<std::size_t>(li)];
-		return LinePos{ li, lf.font.indexAtOffset(l.text, lf.pixelSize, p.x - l.x) };
+		if (!text.empty()) { ctx.publishSelection(id(), text); }
 	};
-	auto publish = [&]() {
-		std::vector<std::string_view> texts;
-		for (const Line& l : lines) { texts.push_back(l.text); }
-		const LinePos a = s.sel.first(), b = s.sel.last();
-		std::string text = (a.line == 0 && a.byte == 0 && b.line == static_cast<int>(lines.size()) - 1 &&
-		                    b.byte >= lines.back().text.size())
-		                       ? m_text
-		                       : s.sel.text(texts, " ");   // wrapped segments rejoin with the space they broke at
-		ctx.publishSelection(id(), text);
+	auto selectWithin = [&](LinePos a, LinePos b) {
+		const std::vector<Label*> ls{ this };
+		setSpan(ls, 0, 0, a < b ? a : b, a < b ? b : a);
 	};
+
 	if (in.mousePressed[left]) {
 		s.clicks = (s.time - s.lastClick < 0.35f) ? (s.clicks % 3) + 1 : 1;
 		s.lastClick = s.time;
-		const LinePos p = posAt(in.mousePos);
+		const LinePos p = hitPosition(ctx, in.mousePos);
 		if (s.clicks == 2) {
-			s.sel.selectWord(p, lines[static_cast<std::size_t>(p.line)].text);
-			publish();
+			LineSelection word;
+			word.selectWord(p, lines[static_cast<std::size_t>(p.line)].text);
+			selectWithin(word.first(), word.last());
 		} else if (s.clicks >= 3) {
-			s.sel.set({ 0, 0 }, { static_cast<int>(lines.size()) - 1, lines.back().text.size() });
-			publish();
+			selectWithin({ 0, 0 }, endOfThis);
 		} else {
-			s.sel.begin(p);
 			ctx.clearSelection(id());
+			s.anchor = p;
+			s.anchorSet = true;
 		}
-	} else if (in.mouseDown[left] && s.sel.dragging()) {
-		s.sel.extend(posAt(in.mousePos));
-		if (!s.sel.empty()) { publish(); }
+	} else if (in.mouseDown[left] && s.anchorSet) {
+		// Drag: the pointer may be over this label or over another selectable Label of the same panel
+		// (above or below it), in which case the selection runs across them in reading order.
+		const std::vector<Label*> ls = selectableLabels(panel());
+		std::size_t self = 0, target = 0;
+		float best = -1.0f;
+		for (std::size_t i = 0; i < ls.size(); ++i) {
+			if (ls[i] == this) { self = i; }
+			const float d = distanceToRect(ls[i]->bounds(), in.mousePos);
+			if (best < 0.0f || d < best) { best = d; target = i; }
+		}
+		if (ls.empty() || ls[target] == this) {
+			const LinePos here = hitPosition(ctx, in.mousePos);
+			if (!(here == s.anchor)) { selectWithin(s.anchor, here); }
+		} else {
+			const LinePos there = ls[target]->hitPosition(ctx, in.mousePos);
+			if (target > self) {
+				setSpan(ls, self, target, s.anchor, there);
+			} else {
+				setSpan(ls, target, self, there, s.anchor);
+			}
+		}
 	}
 	if (in.mouseReleased[left]) {
-		s.sel.end();
+		s.anchorSet = false;
 	}
 }
 
@@ -173,13 +254,21 @@ void Label::draw(DrawList& dl, const GuiContext& ctx) const {
 	TextFlags flags = m_tabular ? TextFlags::Tabular : TextFlags::None;
 	LabelFont lf = resolveLabelFont(ctx, m_style);
 
-	if (m_sel && !m_sel->sel.empty() && ctx.selectionOwner() == id()) {
+	const GuiContext::TextSpan& span = ctx.textSpan();
+	if (!span.widgets.empty() && std::find(span.widgets.begin(), span.widgets.end(), id()) != span.widgets.end()) {
 		const std::vector<Line> lines = layoutLines(ctx);
-		for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
-			const Line& l = lines[static_cast<std::size_t>(i)];
-			std::size_t a = 0, b = 0;
-			if (m_sel->sel.lineRange(i, l.text.size(), a, b)) {
-				dl.addRectFilled(selectionRect(lf.font, l.text, lf.pixelSize, l.x, l.y, l.h, a, b), th.selectionBg);
+		if (!lines.empty()) {
+			const LinePos endOfThis{ static_cast<int>(lines.size()) - 1, lines.back().text.size() };
+			const LinePos from = (id() == span.widgets.front()) ? LinePos{ span.firstLine, span.firstByte } : LinePos{ 0, 0 };
+			const LinePos to = (id() == span.widgets.back()) ? LinePos{ span.lastLine, span.lastByte } : endOfThis;
+			LineSelection sel;
+			sel.set(from, to);
+			for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+				const Line& l = lines[static_cast<std::size_t>(i)];
+				std::size_t a = 0, b = 0;
+				if (sel.lineRange(i, l.text.size(), a, b)) {
+					dl.addRectFilled(selectionRect(lf.font, l.text, lf.pixelSize, l.x, l.y, l.h, a, b), th.selectionBg);
+				}
 			}
 		}
 	}

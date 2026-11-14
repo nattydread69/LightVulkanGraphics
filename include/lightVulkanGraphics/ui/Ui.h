@@ -48,6 +48,7 @@
 #include "widgets/Slider.h"
 #include "widgets/DragValue.h"
 #include "widgets/TextBox.h"
+#include "widgets/TextArea.h"
 #include "widgets/CompositeWidget.h"
 #include "widgets/DropDown.h"
 #include "widgets/Row.h"

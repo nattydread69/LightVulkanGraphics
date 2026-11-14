@@ -120,6 +120,19 @@ target_compile_definitions(lvgui_textedit_tests PRIVATE
 
 add_test(NAME lvgui_textedit_tests COMMAND lvgui_textedit_tests)
 
+# TextArea (multi-line editor): editing operations headless, wrap/scroll/keyboard via a
+# real GuiContext -- same pattern as the TextBox tests above.
+add_executable(lvgui_textarea_tests
+	test_textarea.cpp
+)
+target_link_libraries(lvgui_textarea_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_textarea_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_textarea_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_textarea_tests COMMAND lvgui_textarea_tests)
+
 # CompositeWidget (covered inline in test_layout.cpp, since it's a
 # layout-mechanics concern) and DropDown's popup, headless -- same pattern as the tests
 # above.
@@ -373,3 +386,25 @@ target_compile_definitions(lvgui_textselect_tests PRIVATE
 )
 
 add_test(NAME lvgui_textselect_tests COMMAND lvgui_textselect_tests)
+
+# X11 PRIMARY selection round trip -- needs an X display; skips itself without one.
+add_executable(lvgui_x11primary_tests
+	test_x11primary.cpp
+	${PROJECT_SOURCE_DIR}/src/ui/X11Primary.cpp
+)
+target_include_directories(lvgui_x11primary_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
+target_link_libraries(lvgui_x11primary_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+target_compile_features(lvgui_x11primary_tests PRIVATE cxx_std_17)
+
+add_test(NAME lvgui_x11primary_tests COMMAND lvgui_x11primary_tests)
+
+# Wayland PRIMARY selection against a live compositor -- skips itself without a Wayland session.
+add_executable(lvgui_waylandprimary_tests
+	test_waylandprimary.cpp
+	${PROJECT_SOURCE_DIR}/src/ui/WaylandPrimary.cpp
+)
+target_include_directories(lvgui_waylandprimary_tests PRIVATE ${PROJECT_SOURCE_DIR}/include/internal/ui)
+target_link_libraries(lvgui_waylandprimary_tests PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+target_compile_features(lvgui_waylandprimary_tests PRIVATE cxx_std_17)
+
+add_test(NAME lvgui_waylandprimary_tests COMMAND lvgui_waylandprimary_tests)

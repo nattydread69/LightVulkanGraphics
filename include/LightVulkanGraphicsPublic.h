@@ -92,6 +92,7 @@
 	#include "lightVulkanGraphics/ui/widgets/RadioButton.h"
 	#include "lightVulkanGraphics/ui/widgets/Checkbox.h"
 	#include "lightVulkanGraphics/ui/widgets/TextBox.h"
+	#include "lightVulkanGraphics/ui/widgets/TextArea.h"
 #endif
 
 // ============================================================================

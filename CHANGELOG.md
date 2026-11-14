@@ -6,12 +6,25 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### TextArea: a multi-line text editor
+- New `TextArea` widget (`widgets/TextArea.h`) for pasting or editing a lot of text: newlines, word wrap,
+  Up/Down/PageUp/PageDown, wheel scrolling and a draggable scrollbar, selection, Ctrl+C/X/V, middle-click paste.
+  Height is set in rows (`setVisibleRows`); Enter inserts a newline and Ctrl+Enter fires `onSubmit`. The
+  `gui_demo` "Prompt..." button opens one in a large modal. See docs/gui/05-widgets.md, "TextArea".
+
 ### Text selection and copy in the GUI
 - `Label`, `LogView` and `ListBox` text can be selected with the mouse (drag, double-click a word,
   triple-click a line/label; a ListBox drag spans rows); Ctrl+C copies the selection from anywhere in
   the UI, and copies the selected row / tree node for `ListBox` / `TreeView`. Middle-click in a
   `TextBox` pastes the most recent selection (in-application "primary" text; GLFW cannot reach the
   system PRIMARY selection). A `TextBox` selection joins the same mechanism; password boxes never publish.
+- Middle-click uses the real X11 PRIMARY selection on X11/XWayland (new `PlatformHooks::setPrimaryText` /
+  `getPrimaryText`, implemented by `X11Primary`, an own X connection loaded via `dlopen`), both directions between
+  LVG and other programs. On native Wayland it uses the `zwp_primary_selection_unstable_v1` protocol instead
+  (`WaylandPrimary`: its own seat/keyboard/pointer/device on a private event queue of GLFW's `wl_display`,
+  libwayland-client loaded via `dlopen`; set `LVG_DEBUG_PRIMARY=1` to log it). `X11Primary` now handles
+  selections larger than one X property (INCR), both receiving and serving. A drag can run across
+  several `Label`s of a panel (`GuiContext::TextSpan`).
 - New `GuiContext::publishSelection/clearSelection/selectionOwner/selectedText/primaryText`,
   `Label::setSelectable`, and `Widget::keepsFocusOnPress()`. A selectable `Label` now takes mouse
   capture but still never steals or clears keyboard focus. See docs/gui/05-widgets.md, "Text selection".

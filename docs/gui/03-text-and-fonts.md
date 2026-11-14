@@ -423,6 +423,6 @@ Write these into the public header docs so expectations are set:
   for scripts this library's users do not need yet.
 - No LCD sub-pixel anti-aliasing (would need an RGB atlas and dual-source blending)
 - No IME / composition events
-- No line breaking or word wrap in `TextBox` (single-line only); `Label` gets simple
-  greedy word wrap at spaces, which is enough
+- No line breaking or word wrap in `TextBox` (single-line only); use `TextArea` for
+  multi-line text. `Label` gets simple greedy word wrap at spaces, which is enough
 - No rich text, no per-run styling within a single string

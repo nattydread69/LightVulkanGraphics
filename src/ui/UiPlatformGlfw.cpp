@@ -17,8 +17,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #include "UiPlatformGlfw.h"
+#include "WaylandPrimary.h"
+#include "X11Primary.h"
 
 #include <GLFW/glfw3.h>
+
+#include <dlfcn.h>
 
 #include <unordered_map>
 
@@ -250,6 +254,9 @@ void onCharTrampoline(GLFWwindow* window, unsigned int codepoint) {
 } // namespace
 
 UiPlatformGlfw::~UiPlatformGlfw() {
+	if (m_waylandPrimary) {
+		m_waylandPrimary->shutdown();
+	}
 	uninstallCallbacks();
 }
 
@@ -294,6 +301,31 @@ PlatformHooks UiPlatformGlfw::makeHooks(GLFWwindow* window) const {
 	hooks.getClipboardText = [window]() { return UiPlatformGlfw::getClipboardText(window); };
 	hooks.setClipboardText = [window](std::string_view text) { UiPlatformGlfw::setClipboardText(window, text); };
 	hooks.setCursorShape   = [window](CursorShape shape) { UiPlatformGlfw::setCursorShape(window, shape); };
+#if defined(GLFW_PLATFORM_X11)
+	// On X11 (including XWayland) provide the real PRIMARY selection; see X11Primary.h.
+	if (glfwGetPlatform() == GLFW_PLATFORM_X11) {
+		if (auto primary = X11Primary::create()) {
+			hooks.setPrimaryText = [primary](std::string_view text) { primary->setText(text); };
+			hooks.getPrimaryText = [primary]() { return primary->getText(); };
+		}
+	}
+#endif
+#if defined(GLFW_PLATFORM_WAYLAND)
+	// Native Wayland: GLFW has no PRIMARY support there either, so speak the primary-selection
+	// protocol on its display; see WaylandPrimary.h. Looked up at run time because
+	// glfwGetWaylandDisplay() only exists in a GLFW built with its Wayland backend.
+	if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
+		using GetDisplayFn = void* (*)();
+		auto getDisplay = reinterpret_cast<GetDisplayFn>(dlsym(RTLD_DEFAULT, "glfwGetWaylandDisplay"));
+		if (getDisplay) {
+			m_waylandPrimary = WaylandPrimary::create(getDisplay());
+		}
+		if (auto primary = m_waylandPrimary) {
+			hooks.setPrimaryText = [primary](std::string_view text) { primary->setText(text); };
+			hooks.getPrimaryText = [primary]() { return primary->getText(); };
+		}
+	}
+#endif
 	return hooks;
 }
 

@@ -31,6 +31,7 @@
 namespace lightGraphics::ui {
 
 class Font;
+struct LinePos;   // include/internal/ui/LineSelection.h
 
 class Label : public Widget {
 public:
@@ -75,6 +76,8 @@ private:
 	struct Selection;
 	struct Line { std::string_view text; float x; float y; float h; };
 	std::vector<Line> layoutLines(const GuiContext&) const;
+	LinePos hitPosition(const GuiContext&, Vec2) const;
+	std::string textBetween(const GuiContext&, LinePos, LinePos) const;
 
 	std::string m_text;
 	Align m_align = Align::Start;

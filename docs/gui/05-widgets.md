@@ -625,6 +625,87 @@ string for caret positioning, not the source. Easy to get wrong.
 
 ---
 
+## TextArea
+
+TextBox's multi-line sibling, for pasting or editing a lot of text (a log, notes, a
+prompt). It shares TextBox's editing model: a UTF-8 buffer with byte-index caret and
+anchor that always sit on codepoint boundaries, selection, clipboard, and middle-click
+paste of the PRIMARY selection. What it adds is newlines, word wrap, vertical caret
+movement and scrolling. Implemented in `src/ui/widgets/TextArea.cpp`.
+
+```cpp
+class TextArea : public Widget {
+public:
+    explicit TextArea(std::string initial = {});
+
+    std::string_view text() const;
+    void setText(std::string, bool fireCallback = false);
+    void bind(std::string* target);
+
+    void setPlaceholder(std::string);
+    void setReadOnly(bool);
+    void setWordWrap(bool);                 // default on; off clips long lines (no horizontal scroll)
+    void setVisibleRows(int);               // height in text rows, default 8
+
+    void setOnChange(std::function<void(std::string_view)>);  // every edit
+    void setOnSubmit(std::function<void(std::string_view)>);  // Ctrl+Enter
+
+    bool acceptsFocus()   const override { return true; }
+    bool wantsTextInput() const override { return true; }
+    bool wantsWheel()     const override { return true; }     // consumes the wheel, like ListBox
+};
+```
+
+There is no label column: the area takes the full row width and has no `label`
+parameter. Put a `Label` above it. Its height is fixed by `setVisibleRows()`, because a
+`Panel` stacks widgets at their preferred size; the content scrolls inside it.
+
+**Text handling.** The buffer holds only `\n` line breaks. Typed and pasted text is
+normalised on the way in: CR and CRLF become LF, a tab becomes four spaces, and other
+control characters are dropped. Enter inserts a newline. Ctrl+Enter fires `onSubmit`
+instead, because plain Enter has to stay available for newlines.
+
+**Keys.** Left/Right (Ctrl: by word), Up/Down, PageUp/PageDown, Home/End (the visual
+line; with Ctrl the whole text) all extend the selection when Shift is held;
+also Backspace/Delete and Ctrl+A/C/X/V. Up/Down keep their horizontal position across consecutive moves
+(`m_preferredX`, cleared by any other movement); on the first or last line they go to
+the start or end of the text.
+
+**Mouse.** Click places the caret, drag selects, double-click selects a word and
+triple-click a whole line (up to the next `\n`, not just the wrapped row). Dragging past
+the top or bottom edge scrolls. The wheel scrolls three rows per notch, and a scrollbar
+on the right can be dragged (clicking the track recentres the thumb on the cursor).
+
+**Layout.** `update()` splits the text into *visual lines*: each `\n`-terminated line,
+further broken at spaces to fit the width (minus the scrollbar). A word wider than the
+box is broken at the last glyph that fits. The result is cached and recomputed only when
+the text, width or font size changes. Words are measured with `Font::measureText`, so
+the cost per visual line is bounded by the words on it; an unbroken run is measured in
+windows of at most 8 KiB so one huge line cannot make wrapping quadratic.
+
+A wrapped line keeps the spaces it broke at, so a caret index at the end of one wrapped
+line is also the start of the next. `lineForIndex()` resolves that tie to the **later**
+line (the last line whose start is `<= idx`), and `End` on a wrapped line stops before
+its last character (the space it broke at) so the caret stays on that line. Everything caret-related (drawing,
+Up/Down, mouse hit-testing) goes through that rule.
+
+**Scrolling.** `m_scrollY` is in pixels. It is clamped every frame, and moved to keep
+the caret visible only on frames where the caret actually moved: doing it every frame
+would undo wheel scrolling. Drawing walks only the visible lines.
+
+**Testing.** The editing operations (`insertText`, `deleteBackward`, `moveCaret`, ...)
+mutate only text, caret and anchor and need no `GuiContext`. The ones that depend on
+wrapping (`moveCaretVertical`, `moveLineStart/End`) use the layout from
+`computeLayout(font, pixelSize, width)`, which `update()` calls itself.
+`tests/ui/test_textarea.cpp` covers normalisation, editing, Ctrl+C/X/V through a
+clipboard hook, a 400-line paste with scrolling and navigation, and wrapping (nothing
+lost or duplicated across visual lines, including an unbroken 300-character word).
+`test_textselect.cpp` covers middle-click paste, including inside a `Modal` panel.
+
+Not implemented: horizontal scrolling when wrapping is off, undo/redo, IME.
+
+---
+
 ## DropDown
 
 ```cpp
@@ -1784,7 +1865,9 @@ fires for OK, the title-bar X and Escape, not for a programmatic `close()`.
 `Label`, `LogView`, `ListBox` and `TreeView` let the user select and copy their text; `TextBox` already
 had its own editing selection and now joins the same plumbing.
 
-- **Label / LogView**: drag to select (across lines for wrapped text and log lines; a LogView scrolls when
+- **Label / LogView**: drag to select (across lines for wrapped text and log lines, and from one `Label`
+  into the next ones of the same panel -- the selection runs across them in reading order, copying one line
+  per label; a LogView scrolls when
   the drag leaves its top or bottom edge), double-click a word, triple-click a Label (everything) or a
   LogView line. The highlight uses `Theme::selectionBg`. A wrapped Label's segments rejoin with a space,
   and selecting all of a Label copies its text exactly as set.
@@ -1792,10 +1875,20 @@ had its own editing selection and now joins the same plumbing.
   the row. With no dragged selection, Ctrl+C copies the selected row.
 - **TreeView**: Ctrl+C copies the selected node's text.
 - **Ctrl+C** (anywhere in the UI) copies the current selection to the system clipboard.
-- **Middle-click** in a `TextBox` pastes the most recent selection ("primary" text: kept after the selection
-  is dropped, like X11's PRIMARY). This is internal to the application: GLFW offers no access to the
-  system PRIMARY selection, so selecting text in LVG does not make it middle-click-pastable into other
-  programs; use Ctrl+C for that.
+- **Middle-click** in a `TextBox` pastes the PRIMARY selection ("select to copy, middle-click to paste"). On X11
+  (including XWayland) this is the real system PRIMARY, so it works both ways: text selected in LVG pastes into
+  other programs, and text selected in other programs pastes into an LVG `TextBox`. GLFW cannot reach PRIMARY, so
+  `include/internal/ui/X11Primary.h` opens its own X connection (libX11 loaded with `dlopen`, no link
+  dependency) and serves it from a worker thread. Selections larger than one X property (64 KiB and up) use the
+  INCR protocol in both directions: it reassembles what it receives (up to 256 MiB), and serves its own text in
+  32 KiB chunks. On native Wayland it is the same, through `include/internal/ui/WaylandPrimary.h`: GLFW's Wayland
+  backend has no PRIMARY either, so this speaks `zwp_primary_selection_unstable_v1` on GLFW's own `wl_display`,
+  with its own `wl_seat`/`wl_keyboard`/`wl_pointer`/primary-selection device on a private event queue (a
+  compositor gives input serials and selection offers only to the client with the focused surface, so it cannot
+  use a connection of its own). Text selected in other programs reaches the box only while the window has
+  keyboard focus, and the compositor accepts our selection only for a serial from a real key or button press.
+  If the compositor lacks the protocol, only the in-application primary text is pasted; use Ctrl+C/V. Set
+  `LVG_DEBUG_PRIMARY=1` to log what the Wayland path does.
 - A left press on anything other than the owning widget clears the selection. A password `TextBox` never
   publishes its selection.
 

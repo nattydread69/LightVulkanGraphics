@@ -124,6 +124,10 @@ struct PlatformHooks {
 	std::function<std::string()>          getClipboardText;
 	std::function<void(std::string_view)> setClipboardText;
 	std::function<void(CursorShape)>      setCursorShape;
+	// The system PRIMARY selection (X11 select-then-middle-click). Optional: left empty where the platform
+	// has none, and GuiContext keeps an in-application primary text instead.
+	std::function<void(std::string_view)> setPrimaryText;
+	std::function<std::string()>          getPrimaryText;
 };
 
 class GuiContext {
@@ -273,11 +277,27 @@ public:
 	//    dropped -- is what a middle-click pastes into a TextBox (the X11 select-then-middle-click
 	//    idiom, inside the application; the system PRIMARY selection is not reachable through GLFW).
 	// A left press on anything other than the owner clears the selection.
+	// A selection can run across several widgets (drag from one Label down into the next); each widget in
+	// it highlights its own part. `widgets` is in reading order; the first/last positions are
+	// (line, byte) in the first and last widget, the ones in between are selected whole. Set by the
+	// widget that owns the selection, cleared with it.
+	struct TextSpan {
+		WidgetId              owner = kInvalidWidgetId;
+		std::vector<WidgetId> widgets;
+		int                   firstLine = 0;
+		std::size_t           firstByte = 0;
+		int                   lastLine = 0;
+		std::size_t           lastByte = 0;
+	};
+	void            setTextSpan(TextSpan span) { m_span = std::move(span); }
+	const TextSpan& textSpan() const { return m_span; }
 	void     publishSelection(WidgetId owner, std::string_view text);
 	void     clearSelection(WidgetId owner);
 	WidgetId selectionOwner() const { return m_selectionOwner; }
 	const std::string& selectedText() const { return m_selectedText; }
-	const std::string& primaryText() const { return m_primaryText; }
+	// What a middle-click pastes: the system PRIMARY selection when the platform provides one (so it can come
+	// from another program), else the last selection made inside the application.
+	std::string primaryText() const;
 	// Asks for `shape` for the CURRENT frame only -- call it from update() every frame the
 	// shape should hold. Every update() starts from Arrow, and the platform's
 	// setCursorShape hook is called only when the shape that results at the end of
@@ -398,6 +418,7 @@ private:
 	WidgetId m_activeId  = kInvalidWidgetId;
 	WidgetId m_focusedId = kInvalidWidgetId;
 	WidgetId m_selectionOwner = kInvalidWidgetId;
+	TextSpan m_span;
 	std::string m_selectedText;   // owner's current selection (empty when none)
 	std::string m_primaryText;    // last non-empty selection, for middle-click paste
 	Panel*   m_hoveredPanel = nullptr;

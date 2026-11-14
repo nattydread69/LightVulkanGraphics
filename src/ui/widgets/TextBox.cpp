@@ -555,12 +555,14 @@ void TextBox::update(GuiContext& ctx) {
 		if (ctx.hoveredId() == id()) {
 			ctx.requestCursorShape(CursorShape::TextInput);
 			// Middle-click pastes the most recent text selection (X11 select-then-middle-click idiom).
-			if (!m_readOnly && ctx.input().mousePressed[static_cast<int>(MouseButton::Middle)] &&
-			    !ctx.primaryText().empty()) {
-				ctx.setFocus(this);
-				const std::size_t at = hitIndexAt(ctx, ctx.input().mousePos.x);
-				m_caret = m_anchor = at;
-				paste(ctx.primaryText());
+			if (!m_readOnly && ctx.input().mousePressed[static_cast<int>(MouseButton::Middle)]) {
+				const std::string primary = ctx.primaryText();
+				if (!primary.empty()) {
+					ctx.setFocus(this);
+					const std::size_t at = hitIndexAt(ctx, ctx.input().mousePos.x);
+					m_caret = m_anchor = at;
+					paste(primary);
+				}
 			}
 		}
 		publishOwnSelection(ctx);

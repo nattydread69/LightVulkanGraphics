@@ -38,6 +38,7 @@
 #include <lightVulkanGraphics/ui/Types.h>
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,8 @@
 struct GLFWwindow;
 
 namespace lightGraphics::ui {
+
+class WaylandPrimary;
 
 class UiPlatformGlfw {
 public:
@@ -106,6 +109,9 @@ private:
 	std::vector<PendingButtonEvent> m_pendingButtonEvents;
 	CursorShape m_requestedCursor = CursorShape::Arrow;
 	GLFWwindow* m_window = nullptr;
+	// Built by makeHooks() on native Wayland; shut down in the destructor, while the display
+	// is still connected, so the copies the hooks hold become harmless no-ops.
+	mutable std::shared_ptr<WaylandPrimary> m_waylandPrimary;
 };
 
 } // namespace lightGraphics::ui

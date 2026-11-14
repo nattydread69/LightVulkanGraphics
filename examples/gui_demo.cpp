@@ -87,6 +87,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <vector>
@@ -568,6 +569,48 @@ int main()
 			// the overlay list regardless of its own raw z-order position
 			// (docs/gui/05, "Panel", "Modal panels"), so a modal shown again after
 			// being hidden doesn't need reordering to appear on top and receive input.
+		});
+
+		// Prompt dialog: a large modal Panel holding a multi-line TextArea, for testing
+		// paste of a lot of text (Ctrl+V; Enter inserts a newline, Ctrl+Enter submits).
+		// OK or Ctrl+Enter accepts; Cancel or Escape dismisses without changing the
+		// result label.
+		auto* promptModal = gui.createPanel("Enter text", { 200.0f, 60.0f, 880.0f, 640.0f },
+			lvgui::PanelFlags::Modal | lvgui::PanelFlags::Closable);
+		promptModal->setVisible(false);
+		promptModal->add<lvgui::Label>("Type or paste text (Ctrl+V). Ctrl+Enter accepts.");
+		auto* promptBox = promptModal->add<lvgui::TextArea>();
+		promptBox->setPlaceholder("paste here...");
+		promptBox->setVisibleRows(28);
+		auto* promptRow = promptModal->add<lvgui::Row>();
+		auto* promptCancel = promptRow->add<lvgui::Button>("Cancel");
+		auto* promptOk = promptRow->add<lvgui::Button>("OK");
+
+		auto* promptResult = panel->add<lvgui::Label>("Prompt result: (none)");
+		promptResult->setWordWrap(true);
+
+		auto acceptPrompt = [promptModal, promptResult](std::string_view s) {
+			std::string text(s);
+			std::size_t lines = 1 + static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n'));
+			std::string preview = text.substr(0, text.find('\n'));
+			if (preview.size() > 40 || lines > 1) {
+				preview = preview.substr(0, 40) + "...";
+			}
+			std::cout << "[gui-demo] prompt accepted: " << text.size() << " bytes, "
+				<< lines << " lines" << std::endl;
+			promptResult->setText("Prompt result: " + std::to_string(text.size()) + " bytes, "
+				+ std::to_string(lines) + " lines: \"" + preview + "\"");
+			promptModal->setVisible(false);
+		};
+		promptBox->setOnSubmit(acceptPrompt);
+		promptOk->setOnClick([promptBox, acceptPrompt] { acceptPrompt(promptBox->text()); });
+		promptCancel->setOnClick([promptModal] { promptModal->setVisible(false); });
+
+		auto* promptButton = panel->add<lvgui::Button>("Prompt...");
+		promptButton->setOnClick([&gui, promptModal, promptBox] {
+			promptBox->setText("");
+			promptModal->setVisible(true);
+			gui.setFocus(promptBox);
 		});
 
 		// ContextMenu: right-click anywhere in the window for it. GuiContext has no

@@ -97,6 +97,37 @@ namespace {
 		std::cout << "✓ testLabelDragSelectsAndCtrlCCopies\n";
 	}
 
+	void testDragRunsAcrossSeveralLabels() {
+		g_clipboard.clear();
+		lvgui::GuiContext ctx(testCreateInfo(), hooks());
+		auto* panel = ctx.createPanel("Panel", { 20.0f, 20.0f, 400.0f, 300.0f });
+		auto* one = panel->add<lvgui::Label>("First label");
+		auto* two = panel->add<lvgui::Label>("Second label");
+		auto* three = panel->add<lvgui::Label>("Third label");
+		step(ctx);
+
+		const lvgui::Rect a = one->bounds(), c = three->bounds();
+		press(ctx, lvgui::MouseButton::Left, { a.x + 1.0f, a.y + a.h * 0.5f });
+		ctx.injectMousePos({ c.x + c.w - 1.0f, c.y + c.h * 0.5f });
+		step(ctx);
+		release(ctx, lvgui::MouseButton::Left);
+
+		assert(ctx.textSpan().widgets.size() == 3);
+		assert(ctx.selectedText() == "First label\nSecond label\nThird label");
+		ctrlC(ctx);
+		assert(g_clipboard == "First label\nSecond label\nThird label");
+
+		// And upwards, from the last label to the middle of the first.
+		press(ctx, lvgui::MouseButton::Left, { c.x + c.w - 1.0f, c.y + c.h * 0.5f });
+		ctx.injectMousePos({ a.x + 1.0f, a.y + a.h * 0.5f });
+		step(ctx);
+		release(ctx, lvgui::MouseButton::Left);
+		assert(ctx.selectedText() == "First label\nSecond label\nThird label");
+		(void)two;
+
+		std::cout << "✓ testDragRunsAcrossSeveralLabels\n";
+	}
+
 	void testLabelClickDoesNotClearTextBoxFocus() {
 		lvgui::GuiContext ctx(testCreateInfo(), hooks());
 		auto* panel = ctx.createPanel("Panel", { 20.0f, 20.0f, 400.0f, 200.0f });
@@ -150,6 +181,49 @@ namespace {
 		assert(box->text() == "pasteme");
 
 		std::cout << "✓ testMiddleClickPastesPrimaryIntoTextBox\n";
+	}
+
+	void testMiddleClickPastesPrimaryIntoTextArea() {
+		lvgui::GuiContext ctx(testCreateInfo(), hooks());
+		auto* panel = ctx.createPanel("Panel", { 20.0f, 20.0f, 400.0f, 300.0f });
+		auto* label = panel->add<lvgui::Label>("pasteme");
+		auto* area = panel->add<lvgui::TextArea>();
+		step(ctx);
+		dragAcross(ctx, label->bounds());
+		assert(ctx.selectedText() == "pasteme");
+
+		lvgui::Rect ab = area->bounds();
+		press(ctx, lvgui::MouseButton::Middle, { ab.x + ab.w * 0.5f, ab.y + 20.0f });
+		release(ctx, lvgui::MouseButton::Middle);
+		assert(area->text() == "pasteme");
+
+		std::cout << "\xE2\x9C\x93 testMiddleClickPastesPrimaryIntoTextArea\n";
+	}
+
+	// The demo's prompt dialog: a Modal panel, text selected inside the same TextArea.
+	void testMiddleClickPastesInsideModalTextArea() {
+		lvgui::GuiContext ctx(testCreateInfo(), hooks());
+		auto* modal = ctx.createPanel("Prompt", { 20.0f, 20.0f, 500.0f, 400.0f },
+			lvgui::PanelFlags::Modal | lvgui::PanelFlags::Closable);
+		auto* area = modal->add<lvgui::TextArea>();
+		area->setText("alpha beta");
+		step(ctx);
+
+		lvgui::Rect ab = area->bounds();
+		const float y = ab.y + ab.h * 0.5f;
+		// Select the word "alpha" by double-click at the start of the first line.
+		const float lineY = ab.y + 10.0f;
+		press(ctx, lvgui::MouseButton::Left, { ab.x + 6.0f, lineY });
+		release(ctx, lvgui::MouseButton::Left);
+		press(ctx, lvgui::MouseButton::Left, { ab.x + 6.0f, lineY });
+		release(ctx, lvgui::MouseButton::Left);
+		assert(ctx.selectedText() == "alpha");
+
+		press(ctx, lvgui::MouseButton::Middle, { ab.x + 40.0f, y });
+		release(ctx, lvgui::MouseButton::Middle);
+		assert(area->text().find("alpha") != area->text().rfind("alpha"));   // pasted a second copy
+
+		std::cout << "\xE2\x9C\x93 testMiddleClickPastesInsideModalTextArea\n";
 	}
 
 	void testListBoxDragAcrossRowsSelectsText() {
@@ -223,9 +297,12 @@ namespace {
 
 int main() {
 	testLabelDragSelectsAndCtrlCCopies();
+	testDragRunsAcrossSeveralLabels();
 	testLabelClickDoesNotClearTextBoxFocus();
 	testClickElsewhereClearsSelection();
 	testMiddleClickPastesPrimaryIntoTextBox();
+	testMiddleClickPastesPrimaryIntoTextArea();
+	testMiddleClickPastesInsideModalTextArea();
 	testListBoxDragAcrossRowsSelectsText();
 	testListBoxClickThenCtrlCCopiesRow();
 	testLogViewDragSelectsLines();
