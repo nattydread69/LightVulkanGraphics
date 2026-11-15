@@ -6,6 +6,16 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.4: 2D textures, textured and splat-map materials, compute
+- New `createTexture2D` / `createTexture2DFromImage` / `updateTexture2D` / `destroyTexture2D` (CPU mip chains, repeat or clamp,
+  sRGB or linear).
+- `MaterialDescription` gained `textures` (10 slots), `parameters` and `parameters2`; new `ShaderSelection::Textured` and
+  `ShaderSelection::TerrainSplat` (up to 8 layers from two RGBA weight maps) with shaders `textured_mesh.*` and `splat_terrain.frag`.
+  Recompile applications against the new header; existing materials are unchanged.
+- New compute API: `createGpuBuffer`, `createComputeKernel`, `runCompute` (+ `ComputeRecorder`), `upload/downloadGpuBuffer`.
+- Defines `LVG_HAS_MATERIAL_TEXTURES` and `LVG_HAS_COMPUTE`. Version 3.4.0. See docs/materials_and_compute.md. New GPU test:
+  `material_texture_compute_integration_test`.
+
 ### GUI: no texture cap, no gradient banding
 - `registerUiTexture()` is no longer limited to 64 textures: `UiRenderer` adds descriptor pools of 64 as needed.
 - The UI fragment shaders dither colour (stochastic rounding, so values already on an 8-bit level stay exact) before the

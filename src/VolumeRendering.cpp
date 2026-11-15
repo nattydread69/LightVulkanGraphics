@@ -130,6 +130,13 @@ void validateMaterialDescription(const MaterialDescription& description)
 		throw std::invalid_argument(
 			"Custom material requires both vertex and fragment shader modules");
 	}
+	if ((description.shaderProgram.selection == ShaderSelection::Textured ||
+		 description.shaderProgram.selection == ShaderSelection::TerrainSplat) &&
+		!description.textures[0].isValid())
+	{
+		throw std::invalid_argument(
+			"Textured and TerrainSplat materials require MaterialDescription::textures[0]");
+	}
 	if (description.polygonMode == PolygonMode::Line &&
 		description.alphaBlendingEnabled)
 	{

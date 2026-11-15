@@ -1,0 +1,42 @@
+diff --git a/src/LightVulkanGraphicsLogging.cpp b/src/LightVulkanGraphicsLogging.cpp
+--- a/src/LightVulkanGraphicsLogging.cpp
++++ b/src/LightVulkanGraphicsLogging.cpp
+@@ -24,6 +24,7 @@
+ #include <iostream>
+ #include <ostream>
+ #include <streambuf>
++#include <string>
+ 
+ namespace
+ {
+@@ -57,10 +58,26 @@
+ 	{
+ 		static const int value = []
+ 		{
+-			const char* v = std::getenv("LVG_CONSOLE_OUTPUT");
+-			if (v == nullptr) return -1;
+-			if (std::strcmp(v, "1") == 0 || std::strcmp(v, "on") == 0) return 1;
+-			if (std::strcmp(v, "0") == 0 || std::strcmp(v, "off") == 0) return 0;
++			std::string setting;
++#if defined(_WIN32)
++			char* raw = nullptr;
++			std::size_t length = 0;
++			if (_dupenv_s(&raw, &length, "LVG_CONSOLE_OUTPUT") != 0 || raw == nullptr)
++			{
++				return -1;
++			}
++			setting.assign(raw);
++			std::free(raw);
++#else
++			char const* raw = std::getenv("LVG_CONSOLE_OUTPUT");
++			if (raw == nullptr)
++			{
++				return -1;
++			}
++			setting.assign(raw);
++#endif
++			if (setting == "1" || setting == "on") return 1;
++			if (setting == "0" || setting == "off") return 0;
+ 			return -1;
+ 		}();
+ 		return value;

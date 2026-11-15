@@ -433,22 +433,36 @@ MaterialHandle VkApp::createMaterial(const MaterialDescription& description)
 	}
 	MaterialResource& material = materials_[index];
 	material.description = description;
-	VkPushConstantRange pushRange{};
-	pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-	pushRange.size = sizeof(glm::mat4);
+	const bool textured = description.shaderProgram.selection == ShaderSelection::Textured ||
+		description.shaderProgram.selection == ShaderSelection::TerrainSplat;
+	// Textured materials: set 1 = their textures, and a fragment push constant (parameters) after the model matrix.
+	std::array<VkPushConstantRange, 2> pushRanges {};
+	pushRanges[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+	pushRanges[0].size = sizeof(glm::mat4);
+	pushRanges[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+	pushRanges[1].offset = sizeof(glm::mat4);
+	pushRanges[1].size = 2 * sizeof(glm::vec4);
+	std::array<VkDescriptorSetLayout, 2> setLayouts {descriptorSetLayout_, textured ? materialTextureSetLayout() : VK_NULL_HANDLE};
 	VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-	layoutInfo.setLayoutCount = 1;
-	layoutInfo.pSetLayouts = &descriptorSetLayout_;
-	layoutInfo.pushConstantRangeCount = 1;
-	layoutInfo.pPushConstantRanges = &pushRange;
+	layoutInfo.setLayoutCount = textured ? 2 : 1;
+	layoutInfo.pSetLayouts = setLayouts.data();
+	layoutInfo.pushConstantRangeCount = textured ? 2 : 1;
+	layoutInfo.pPushConstantRanges = pushRanges.data();
 	checkVk(vkCreatePipelineLayout(device_, &layoutInfo, nullptr, &material.layout),
 		"Failed to create custom material pipeline layout");
+	material.textureSet = VK_NULL_HANDLE;
 	try
 	{
+		if (textured)
+		{
+			material.textureSet = createMaterialTextureSet(description);
+		}
 		material.pipeline = createMaterialPipeline(description, material.layout);
 	}
 	catch (...)
 	{
+		freeMaterialTextureSet(material.textureSet);
+		material.textureSet = VK_NULL_HANDLE;
 		vkDestroyPipelineLayout(device_, material.layout, nullptr);
 		material.layout = VK_NULL_HANDLE;
 		freeMaterials_.push_back(index);
@@ -474,6 +488,8 @@ void VkApp::destroyMaterial(MaterialHandle handle)
 					request.material.generation == handle.generation;
 			}), meshDrawRequests_.end());
 	rebuildOrderedDrawResources();
+	freeMaterialTextureSet(material.textureSet);
+	material.textureSet = VK_NULL_HANDLE;
 	retire([device = device_, pipeline = material.pipeline, layout = material.layout]()
 	{
 		vkDestroyPipeline(device, pipeline, nullptr);
@@ -1430,6 +1446,16 @@ VkPipeline VkApp::createMaterialPipeline(
 	std::string vertexName = "custom_mesh.vert.spv";
 	std::string fragmentName = description.shaderProgram.selection == ShaderSelection::VertexColorUnlit
 		? "custom_mesh_unlit.frag.spv" : "custom_mesh.frag.spv";
+	if (description.shaderProgram.selection == ShaderSelection::Textured)
+	{
+		vertexName = "textured_mesh.vert.spv";
+		fragmentName = "textured_mesh.frag.spv";
+	}
+	else if (description.shaderProgram.selection == ShaderSelection::TerrainSplat)
+	{
+		vertexName = "textured_mesh.vert.spv";
+		fragmentName = "splat_terrain.frag.spv";
+	}
 	if (description.shaderProgram.selection == ShaderSelection::Custom)
 	{
 		vertexName = description.shaderProgram.vertexShader.string();
@@ -1601,6 +1627,14 @@ void VkApp::drawCustomMeshRequest(
 	const glm::mat4 model = request.transform.matrix();
 	vkCmdPushConstants(commandBuffer, material.layout, VK_SHADER_STAGE_VERTEX_BIT,
 		0, sizeof(model), &model);
+	if (material.textureSet != VK_NULL_HANDLE)
+	{
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+			material.layout, 1, 1, &material.textureSet, 0, nullptr);
+		const std::array<glm::vec4, 2> parameters {material.description.parameters, material.description.parameters2};
+		vkCmdPushConstants(commandBuffer, material.layout, VK_SHADER_STAGE_FRAGMENT_BIT,
+			sizeof(glm::mat4), sizeof(parameters), parameters.data());
+	}
 	const VkDeviceSize offset = 0;
 	vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mesh.vertexBuffer.buffer, &offset);
 	vkCmdBindIndexBuffer(commandBuffer, mesh.indexBuffer.buffer, 0, VK_INDEX_TYPE_UINT32);
@@ -1805,6 +1839,8 @@ void VkApp::destroyCustomResources()
 	}
 	materials_.clear();
 	freeMaterials_.clear();
+	destroyTexture2DResources();
+	destroyComputeResources();
 }
 
 }

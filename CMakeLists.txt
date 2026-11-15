@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(libLightVulkanGraphics VERSION 3.3.0 LANGUAGES CXX)
+project(libLightVulkanGraphics VERSION 3.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,7 @@ include(CTest)
 set(LVG_PACKAGE_NAME "LightVulkanGraphics")
 set(LVG_ABI_VERSION 3)
 set(LVG_VERSION_MAJOR 3)
-set(LVG_VERSION_MINOR 3)
+set(LVG_VERSION_MINOR 4)
 set(LVG_VERSION_PATCH 0)
 set(LVG_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/${LVG_PACKAGE_NAME}")
 set(LVG_SHADER_INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
@@ -493,6 +493,9 @@ lvg_compile_shader(frag shadow_cutout)
 lvg_compile_shader(vert custom_mesh)
 lvg_compile_shader(frag custom_mesh)
 lvg_compile_shader(frag custom_mesh_unlit)
+lvg_compile_shader(vert textured_mesh)
+lvg_compile_shader(frag textured_mesh)
+lvg_compile_shader(frag splat_terrain)
 lvg_compile_shader(vert screen_text)
 lvg_compile_shader(frag screen_text)
 lvg_compile_shader(vert volume_raymarch)
@@ -967,6 +970,24 @@ if (BUILD_TESTING)
 		add_test(
 			NAME volume_vulkan_integration_test
 			COMMAND volume_vulkan_integration_test
+		)
+		add_executable(material_texture_compute_integration_test
+			tests/material_texture_compute_integration.cpp
+		)
+		lvg_configure_build_tree_example(material_texture_compute_integration_test)
+		target_link_libraries(material_texture_compute_integration_test PRIVATE glfw)
+		set(LVG_TEST_COMPUTE_SPV "${SPV_DIR}/compute_selftest.comp.spv")
+		add_custom_command(
+			OUTPUT ${LVG_TEST_COMPUTE_SPV}
+			COMMAND ${GLSLC} -fshader-stage=comp -o ${LVG_TEST_COMPUTE_SPV} ${PROJECT_SOURCE_DIR}/tests/shaders/compute_selftest.comp
+			DEPENDS ${PROJECT_SOURCE_DIR}/tests/shaders/compute_selftest.comp
+		)
+		add_custom_target(LvgTestShaders DEPENDS ${LVG_TEST_COMPUTE_SPV})
+		add_dependencies(material_texture_compute_integration_test LvgTestShaders)
+		target_compile_definitions(material_texture_compute_integration_test PRIVATE LVG_TEST_COMPUTE_SPV="${LVG_TEST_COMPUTE_SPV}")
+		add_test(
+			NAME material_texture_compute_integration_test
+			COMMAND material_texture_compute_integration_test
 		)
 		add_executable(volume_bricked_integration_test
 			tests/volume_bricked_integration.cpp

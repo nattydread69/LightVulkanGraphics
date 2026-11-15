@@ -986,6 +986,19 @@ namespace
 		require(material.alphaBlendingEnabled && !material.depthWriteEnabled,
 			"transparent material state should preserve independent depth-write control");
 
+		// 3.4: textured and splat materials need textures[0].
+		for (const auto selection : {lightGraphics::ShaderSelection::Textured, lightGraphics::ShaderSelection::TerrainSplat})
+		{
+			lightGraphics::MaterialDescription textured;
+			textured.shaderProgram.selection = selection;
+			bool rejected = false;
+			try { lightGraphics::validateMaterialDescription(textured); }
+			catch (const std::invalid_argument&) { rejected = true; }
+			require(rejected, "a textured material without textures[0] should be rejected");
+			textured.textures[0] = {0, 1};
+			lightGraphics::validateMaterialDescription(textured);
+		}
+
 		lightGraphics::ClippingDescription clipping;
 		clipping.clipPlaneEnabled = true;
 		clipping.clipPlaneNormal = {0.0f, 1.0f, 0.0f};

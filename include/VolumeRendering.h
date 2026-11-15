@@ -32,6 +32,10 @@
 
 // Defined from 3.3: bricked (sparse) volumes, BrickPool, updateTexture3DRegions.
 #define LVG_HAS_BRICKED_VOLUMES 1
+// Defined from 3.4: 2D textures, textured and splat-map mesh materials (MaterialDescription::textures), and the
+// general compute API (GpuBuffer, ComputeKernel, VkApp::runCompute).
+#define LVG_HAS_MATERIAL_TEXTURES 1
+#define LVG_HAS_COMPUTE 1
 
 namespace lightGraphics
 {
@@ -55,6 +59,9 @@ struct Texture3DTag;
 struct TransferFunctionTag;
 struct VolumeTag;
 struct BrickedTextureTag;
+struct Texture2DTag;
+struct GpuBufferTag;
+struct ComputeKernelTag;
 
 using MeshHandle = ResourceHandle<MeshTag>;
 using MaterialHandle = ResourceHandle<MaterialTag>;
@@ -63,6 +70,9 @@ using Texture3DHandle = ResourceHandle<Texture3DTag>;
 using TransferFunctionHandle = ResourceHandle<TransferFunctionTag>;
 using VolumeHandle = ResourceHandle<VolumeTag>;
 using BrickedTextureHandle = ResourceHandle<BrickedTextureTag>;
+using Texture2DHandle = ResourceHandle<Texture2DTag>;
+using GpuBufferHandle = ResourceHandle<GpuBufferTag>;
+using ComputeKernelHandle = ResourceHandle<ComputeKernelTag>;
 
 struct MeshVertex
 {
@@ -141,7 +151,15 @@ enum class ShaderSelection
 	VertexColorLit,
 	VertexColorUnlit,
 	VolumeRaymarch,
-	Custom
+	Custom,
+	// 3.4: the mesh colour (and lighting) of VertexColorLit multiplied by `MaterialDescription::textures[0]` sampled at
+	// (uv * parameters.xy). Needs textures[0].
+	Textured,
+	// 3.4: terrain splat-map for up to 8 layers. textures[0] and textures[1] = weights of layers 0-3 and 4-7 (RGBA, one layer per
+	// channel) sampled at the mesh uv (0..1 across the terrain); textures[2..9] = the layer colours, each tiled with a world-space
+	// period in metres (parameters.xyzw for layers 0-3, parameters2.xyzw for layers 4-7; sampled at world xz). Unused layers
+	// (no texture) have weight 0 in a correct weight map. The result is multiplied by the vertex colour and lit like VertexColorLit.
+	TerrainSplat
 };
 
 struct ShaderProgramDescription
@@ -159,6 +177,55 @@ struct MaterialDescription
 	CullMode cullMode = CullMode::Back;
 	PolygonMode polygonMode = PolygonMode::Fill;
 	ShaderProgramDescription shaderProgram;
+	// 3.4: textures for the Textured and TerrainSplat shaders (slot i is binding i of descriptor set 1). Unused slots are
+	// left default; the material samples a white texel there. The textures must outlive the material.
+	std::array<Texture2DHandle, 10> textures {};
+	// 3.4: per-material constants for those shaders (see ShaderSelection::Textured / TerrainSplat).
+	glm::vec4 parameters {1.0f, 1.0f, 1.0f, 1.0f};
+	glm::vec4 parameters2 {1.0f, 1.0f, 1.0f, 1.0f};
+};
+
+// ---- 2D textures (3.4) ----
+enum class Texture2DFormat
+{
+	// 8-bit RGBA, sRGB-encoded: sampled values are linearised by the hardware (colour maps).
+	RGBA8_SRGB,
+	// 8-bit RGBA, linear (weights, masks, data).
+	RGBA8_UNORM
+};
+
+struct Texture2DDescription
+{
+	std::uint32_t width = 0;
+	std::uint32_t height = 0;
+	Texture2DFormat format = Texture2DFormat::RGBA8_SRGB;
+	// Repeat addressing (tiled surfaces); otherwise clamp to edge.
+	bool repeat = true;
+	// Builds a full mip chain on the CPU (box filter) at creation and on every update.
+	bool generateMipmaps = true;
+};
+
+// ---- compute (3.4) ----
+struct ComputeKernelDescription
+{
+	// SPIR-V compute shader (GLSL: #version 450, local_size set by the shader).
+	std::filesystem::path spirv;
+	// Storage buffers bound in order at set 0, bindings 0..storageBufferCount-1.
+	std::uint32_t storageBufferCount = 0;
+	// Size of the push-constant block (0 = none, at most 128).
+	std::uint32_t pushConstantBytes = 0;
+};
+
+class ComputeRecorder
+{
+public:
+	virtual ~ComputeRecorder() = default;
+	// Records one dispatch of `kernel` over `buffers` (one per declared storage buffer). Consecutive dispatches are
+	// separated by a full memory barrier, so each sees the previous one's writes.
+	virtual void dispatch(ComputeKernelHandle kernel, std::vector<GpuBufferHandle> const& buffers, void const* pushConstants,
+		std::size_t pushConstantBytes, std::uint32_t groupsX, std::uint32_t groupsY = 1, std::uint32_t groupsZ = 1) = 0;
+	// Copies bytes between two GPU buffers inside the recording.
+	virtual void copy(GpuBufferHandle source, GpuBufferHandle destination, std::size_t bytes) = 0;
 };
 
 enum class TextureFormat

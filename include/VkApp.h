@@ -584,6 +584,32 @@ namespace lightGraphics
 		void setScreenTextVisible(ScreenTextHandle handle, bool visible);
 		void destroyScreenText(ScreenTextHandle handle);
 
+		// ==================== 2D TEXTURES AND TEXTURED MATERIALS (3.4) ====================
+
+		// Creates a 2D texture from tightly packed RGBA8 pixels (width*height*4 bytes). Used by MaterialDescription::textures.
+		Texture2DHandle createTexture2D(const Texture2DDescription& description, const void* rgba8, std::size_t byteSize);
+		// Decodes a PNG/JPEG/BMP/TGA from memory (stb) and creates the texture from it. Returns an invalid handle if the
+		// data cannot be decoded. `width`/`height` receive the decoded size when non-null.
+		Texture2DHandle createTexture2DFromImage(const void* data, std::size_t byteSize, Texture2DFormat format, bool repeat,
+			std::uint32_t* width = nullptr, std::uint32_t* height = nullptr);
+		// Replaces all pixels (same size as at creation). Materials using the texture show the new pixels.
+		void updateTexture2D(Texture2DHandle handle, const void* rgba8, std::size_t byteSize);
+		// Frees it once the GPU is done with it. Destroy materials that use it first.
+		void destroyTexture2D(Texture2DHandle handle);
+
+		// ==================== COMPUTE (3.4) ====================
+		// A small synchronous compute API for tools and simulations: storage buffers, kernels, and one blocking submission.
+		// It runs on the graphics queue after any pending uploads, so it is ordered with them. Requires init().
+		GpuBufferHandle createGpuBuffer(std::size_t byteSize);
+		void destroyGpuBuffer(GpuBufferHandle handle);
+		// Blocking copies between host memory and a buffer.
+		void uploadGpuBuffer(GpuBufferHandle handle, const void* data, std::size_t byteSize, std::size_t byteOffset = 0);
+		void downloadGpuBuffer(GpuBufferHandle handle, void* data, std::size_t byteSize, std::size_t byteOffset = 0);
+		ComputeKernelHandle createComputeKernel(const ComputeKernelDescription& description);
+		void destroyComputeKernel(ComputeKernelHandle handle);
+		// Calls `record` with a recorder, submits everything it recorded and waits for completion.
+		void runCompute(const std::function<void(ComputeRecorder&)>& record);
+
 		// ==================== VOLUME RENDERING ====================
 
 		Texture3DHandle createTexture3D(
@@ -1197,6 +1223,8 @@ namespace lightGraphics
 			MaterialDescription description;
 			VkPipeline pipeline = VK_NULL_HANDLE;
 			VkPipelineLayout layout = VK_NULL_HANDLE;
+			// 3.4: descriptor set 1 (textured materials only; owned by the Texture2D side table).
+			VkDescriptorSet textureSet = VK_NULL_HANDLE;
 		};
 
 		struct ScreenTextResource
@@ -1499,6 +1527,12 @@ namespace lightGraphics
 		// no longer be using what it destroys. Replaces vkDeviceWaitIdle() before
 		// destroying a resource that frames in flight or pending uploads may reference.
 		void retire(std::function<void()> destroy);
+		// 3.4 helpers (state lives in side tables, see VkAppTexture2D.cpp / VkAppCompute.cpp).
+		VkDescriptorSet createMaterialTextureSet(const MaterialDescription& description);
+		void freeMaterialTextureSet(VkDescriptorSet set);
+		VkDescriptorSetLayout materialTextureSetLayout();
+		void destroyTexture2DResources();
+		void destroyComputeResources();
 		// True while recorded or submitted uploads may still reference a resource being
 		// destroyed: destroyBuffer()/destroyTexture() then defer through retire().
 		bool uploadsMayReferenceResources() const;
