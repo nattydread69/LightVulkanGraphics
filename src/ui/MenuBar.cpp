@@ -218,10 +218,11 @@ void MenuBar::update(GuiContext& ctx) {
 	if (depth >= 0 && isMenuOpen()) {
 		auto const* items = itemsAtDepth(static_cast<std::size_t>(depth));
 		int index = -1;
+		bool overSeparator = false;
 		float y = rects[static_cast<std::size_t>(depth)].y + ctx.theme().framePadding;
 		if (items) for (std::size_t i = 0; i < items->size(); ++i) {
 			float const h = (*items)[i].isSeparator ? ctx.theme().itemSpacing : ctx.theme().rowHeight;
-			if (mouse.y >= y && mouse.y < y + h) { if (!(*items)[i].isSeparator) index = static_cast<int>(i); break; }
+			if (mouse.y >= y && mouse.y < y + h) { if ((*items)[i].isSeparator) overSeparator = true; else index = static_cast<int>(i); break; }
 			y += h;
 		}
 		if (index >= 0) {
@@ -235,6 +236,8 @@ void MenuBar::update(GuiContext& ctx) {
 				closeMenu();
 			}
 		}
+		// Releasing on a separator isn't selectable but still closes the menu (ContextMenu convention).
+		if (index < 0 && overSeparator && released && m_pressStartedInOpenMenu) closeMenu();
 	}
 	if (released) m_pressStartedInOpenMenu = false;
 }

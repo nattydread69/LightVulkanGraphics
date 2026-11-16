@@ -6,6 +6,11 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### GUI: OpenFolderDialog
+- New `OpenFolderDialog` (`widgets/OpenFolderDialog.h`, included by `Ui.h`): a modal folder picker built on `FileDialogBase`.
+  `FileDialogBase` gained a protected `setFoldersOnly()` for it. Existing dialogs are unchanged. New test:
+  `lvgui_openfolderdialog_tests`.
+
 ### 3.4: 2D textures, textured and splat-map materials, compute
 - New `createTexture2D` / `createTexture2DFromImage` / `updateTexture2D` / `destroyTexture2D` (CPU mip chains, repeat or clamp,
   sRGB or linear).

@@ -163,6 +163,11 @@ protected:
 	// Panel::setOnClose's doc comment for why setVisible(false) alone is silent).
 	void finish(const std::string& fullPath);
 
+	// true: only folders are listed (files are hidden and the file-type dropdown is hidden),
+	// for a dialog that picks a folder. Default false.
+	void setFoldersOnly(bool foldersOnly);
+	bool foldersOnly() const { return m_foldersOnly; }
+
 	void setStatus(std::string text, bool isError);
 	// The active filter, or nullptr when there is none (every file is shown).
 	const FileTypeFilter* activeFilter() const;
@@ -201,6 +206,7 @@ private:
 	std::string m_typedPath;   // the path field's text as of its last commit
 	bool m_navigationEnabled = true;
 	bool m_showHidden = false;
+	bool m_foldersOnly = false;
 	std::string m_searchText;
 	std::vector<FileTypeFilter> m_filters;
 	int m_filterIndex = 0;

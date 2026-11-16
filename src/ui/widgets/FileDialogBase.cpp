@@ -512,7 +512,7 @@ void FileDialogBase::applyFilters() {
 		if (!m_showHidden && isHiddenName(entry.name)) {
 			continue;
 		}
-		if (entry.isDirectory ? !m_navigationEnabled : !matchesTypeFilter(entry.name)) {
+		if (entry.isDirectory ? !m_navigationEnabled : (m_foldersOnly || !matchesTypeFilter(entry.name))) {
 			continue;
 		}
 		if (!containsIgnoreCase(entry.name, m_searchText)) {
@@ -531,6 +531,8 @@ void FileDialogBase::applyFilters() {
 		m_fileList->setEmptyText("No matches for \"" + m_searchText + "\"");
 	} else if (m_scanned.empty()) {
 		m_fileList->setEmptyText("This folder is empty");
+	} else if (m_foldersOnly) {
+		m_fileList->setEmptyText("No folders here");
 	} else {
 		m_fileList->setEmptyText("No files of this type here");
 	}
@@ -550,17 +552,17 @@ void FileDialogBase::updateStatusSummary() {
 	// folder that looks empty or half-empty doesn't look like a scanning problem.
 	std::size_t otherTypes = 0;
 	for (const FileEntry& entry : m_scanned) {
-		if (!entry.isDirectory && (m_showHidden || !isHiddenName(entry.name)) &&
+		if (!m_foldersOnly && !entry.isDirectory && (m_showHidden || !isHiddenName(entry.name)) &&
 		    containsIgnoreCase(entry.name, m_searchText) && !matchesTypeFilter(entry.name)) {
 			++otherTypes;
 		}
 	}
 
 	std::string text;
-	if (files > 0 || folders == 0) {
+	if (!m_foldersOnly && (files > 0 || folders == 0)) {
 		text = countPhrase(files, "file");
 	}
-	if (folders > 0) {
+	if (folders > 0 || (m_foldersOnly && text.empty())) {
 		text += (text.empty() ? "" : ", ") + countPhrase(folders, "folder");
 	}
 	if (otherTypes > 0) {
@@ -568,6 +570,15 @@ void FileDialogBase::updateStatusSummary() {
 			" of other types not shown";
 	}
 	setStatus(text, false);
+}
+
+void FileDialogBase::setFoldersOnly(bool foldersOnly) {
+	if (m_foldersOnly == foldersOnly) {
+		return;
+	}
+	m_foldersOnly = foldersOnly;
+	m_typeDropDown->setVisible(!foldersOnly);
+	applyFilters();
 }
 
 void FileDialogBase::setStatus(std::string text, bool isError) {

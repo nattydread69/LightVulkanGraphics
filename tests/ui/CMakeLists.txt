@@ -284,6 +284,18 @@ target_compile_definitions(lvgui_openfiledialog_tests PRIVATE
 
 add_test(NAME lvgui_openfiledialog_tests COMMAND lvgui_openfiledialog_tests)
 
+# OpenFolderDialog -- headless, same pattern as OpenFileDialog above (real temp directory).
+add_executable(lvgui_openfolderdialog_tests
+	test_openfolderdialog.cpp
+)
+target_link_libraries(lvgui_openfolderdialog_tests PRIVATE LightVulkanGraphics::UI)
+target_compile_features(lvgui_openfolderdialog_tests PRIVATE cxx_std_17)
+target_compile_definitions(lvgui_openfolderdialog_tests PRIVATE
+	LVG_UI_TEST_FONT_PATH="${PROJECT_SOURCE_DIR}/assets/fonts/Inter-Regular.ttf"
+)
+
+add_test(NAME lvgui_openfolderdialog_tests COMMAND lvgui_openfolderdialog_tests)
+
 # FileListView -- headless, same pattern as tests above. Entries are made up in
 # memory (the widget never touches the filesystem itself), so no temp directory.
 add_executable(lvgui_filelistview_tests

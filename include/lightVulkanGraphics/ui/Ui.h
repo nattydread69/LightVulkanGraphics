@@ -68,4 +68,5 @@
 #include "widgets/FileDialogBase.h"
 #include "widgets/SaveFileDialog.h"
 #include "widgets/OpenFileDialog.h"
+#include "widgets/OpenFolderDialog.h"
 #include "widgets/AboutBox.h"

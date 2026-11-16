@@ -994,6 +994,20 @@ expand/collapse — so a pathologically deep tree (a 20 000-level chain in the t
 fine. Single selection only; there is no drag-and-drop reparenting or per-node
 checkbox.
 
+## OpenFolderDialog
+
+```cpp
+OpenFolderDialog pick(gui, "data");              // starting directory
+pick.setOnConfirm([](const std::string& folder) { /* absolute path */ });
+pick.open();
+```
+
+A `FileDialogBase` that lists only folders (no file-type dropdown). Double-click or Enter
+goes into a folder; **Select** confirms the highlighted folder, or the folder being
+listed when nothing is highlighted. Everything else (path field, up button, search,
+Hidden, remembered folder, new-folder button, `setOnCancel`) is as for the file dialogs
+below.
+
 ## OpenFileDialog and SaveFileDialog
 
 ```cpp

@@ -31,7 +31,9 @@ endif()
 set(CPACK_DEBIAN_PACKAGE_DEPENDS "${_lvg_deb_deps}")
 # A .deb built against an Assimp in /usr/local would declare libassimp-dev but be built
 # against a different, dpkg-invisible version. Fail loudly instead of shipping that.
-if (NOT LVG_ASSIMP_BUNDLED AND ASSIMP_LIBRARY MATCHES "^/usr/local/" AND "DEB" IN_LIST CPACK_GENERATOR)
+# Only when this library is the top-level project: as a subproject its own packages are not made
+# (the parent defines its packaging), so the warning would be noise there.
+if (CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR AND NOT LVG_ASSIMP_BUNDLED AND ASSIMP_LIBRARY MATCHES "^/usr/local/" AND "DEB" IN_LIST CPACK_GENERATOR)
 	message(WARNING
 		"Assimp was found in /usr/local (${ASSIMP_LIBRARY}), which dpkg does not own. "
 		"Do not publish a .deb from this build: use a clean container with libassimp-dev, "
