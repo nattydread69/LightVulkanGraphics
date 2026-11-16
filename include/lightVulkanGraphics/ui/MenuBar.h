@@ -38,6 +38,7 @@
 
 #include <functional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace lightGraphics::ui {
@@ -60,12 +61,16 @@ public:
 		void addItem(std::string label, std::function<void()> onSelect, std::string shortcutHint = "");
 		// A thin divider between groups of items -- not selectable.
 		void addSeparator();
+		// Opens a nested menu when the pointer enters this row.
+		Menu addSubmenu(std::string label);
 
 	private:
 		friend class MenuBar;
-		Menu(MenuBar& owner, std::size_t index) : m_owner(&owner), m_index(index) {}
+		Menu(MenuBar& owner, std::size_t index, std::vector<std::size_t> path = {})
+			: m_owner(&owner), m_index(index), m_path(std::move(path)) {}
 		MenuBar* m_owner;
 		std::size_t m_index;
+		std::vector<std::size_t> m_path;
 	};
 
 	// Appends a new top-level menu (e.g. "File") to the end of the bar and returns a
@@ -81,7 +86,7 @@ public:
 	// just opened before the next draw ever shows it as open, since MenuBar has no way
 	// to change an already-added item's label in place. See clearKeepingOpenMenu() for
 	// that case instead.
-	void clear() { m_menus.clear(); m_openMenuIndex = -1; }
+	void clear() { m_menus.clear(); m_openMenuIndex = -1; m_openPath.clear(); }
 	// Same as clear(), but preserves openIndex() across the call instead of resetting
 	// it -- for a consumer that rebuilds the SAME menu bar shape every frame (same
 	// addMenu() calls, same order) purely to refresh item labels/state, so an open
@@ -124,12 +129,13 @@ private:
 	{
 		return m_openMenuIndex >= 0 && static_cast<std::size_t>(m_openMenuIndex) < m_menus.size();
 	}
-	void closeMenu() { m_openMenuIndex = -1; }
+	void closeMenu() { m_openMenuIndex = -1; m_openPath.clear(); }
 	// True iff the bar row itself (any title) OR the currently open dropdown was under
 	// the cursor as of the last update() call -- cached, not recomputed, so wantsMouse()
 	// (const) can read it without re-deriving hit state itself. Mirrors how
 	// GuiContext::m_hoveredPanel is a per-frame-cached value read later the same way.
 	bool isHovered() const { return m_hovered; }
+	bool containsOpenMenu(const GuiContext& ctx, Vec2 point) const;
 
 	// Resolves hover/press/release against the bar row and any open dropdown, opens/
 	// switches/closes menus, and fires the selected item's callback on release-inside.
@@ -150,13 +156,19 @@ private:
 		std::function<void()> onSelect;
 		std::string shortcutHint;
 		bool isSeparator = false;
+		std::vector<Item> children;
 	};
 	struct MenuData {
 		std::string title;
 		std::vector<Item> items;
 	};
 
+	std::vector<Item>& itemsAt(std::size_t menu, const std::vector<std::size_t>& path);
+	std::vector<Rect> openRects(const GuiContext& ctx) const;
+	const std::vector<Item>* itemsAtDepth(std::size_t depth) const;
+
 	std::vector<MenuData> m_menus;
+	std::vector<std::size_t> m_openPath;
 	int m_openMenuIndex = -1;   // -1 = nothing open
 	bool m_hovered = false;
 	// Recorded at press time, consulted at release -- same reasoning as ContextMenu's

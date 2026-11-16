@@ -1738,6 +1738,7 @@ public:
         void addItem(std::string label, std::function<void()> onSelect,
                      std::string shortcutHint = "");
         void addSeparator();
+        Menu addSubmenu(std::string label);
     };
 
     Menu addMenu(std::string title);
@@ -1756,6 +1757,8 @@ public:
 auto file = gui.menuBar().addMenu("File");
 file.addItem("New Scene", [] { ... });
 file.addItem("Open...", [] { ... }, "Ctrl+O");
+auto recent = file.addSubmenu("Recent");
+recent.addItem("Scene", [] { ... });
 file.addSeparator();
 file.addItem("Exit", [] { ... }, "Ctrl+Q");
 ```
@@ -1763,6 +1766,11 @@ file.addItem("Exit", [] { ... }, "Ctrl+Q");
 Starts empty (`menuCount() == 0`) and stays entirely inert — zero draw calls, zero
 interaction cost — until `addMenu()` is called at least once; a consumer who never
 touches `gui.menuBar()` sees no change to their existing layout or behaviour at all.
+
+`addSubmenu` returns another `Menu`; it can contain items, separators and further
+submenus. Hovering a submenu row opens its children beside the parent. The child
+opens to the left if it would otherwise extend beyond the right edge. Selecting
+an item closes the menu tree.
 
 **`shortcutHint` is display-only.** "Ctrl+O" draws right-aligned in the row, dimmed
 (`theme.textDisabled`) — it does not read or dispatch the actual key combination. Wiring

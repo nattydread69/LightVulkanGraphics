@@ -30,18 +30,85 @@ MenuBar::Menu MenuBar::addMenu(std::string title) {
 	return Menu(*this, m_menus.size() - 1);
 }
 
+std::vector<MenuBar::Item>& MenuBar::itemsAt(std::size_t menu, const std::vector<std::size_t>& path) {
+	auto* items = &m_menus.at(menu).items;
+	for (std::size_t index : path) {
+		items = &items->at(index).children;
+	}
+	return *items;
+}
+
 void MenuBar::Menu::addItem(std::string label, std::function<void()> onSelect, std::string shortcutHint) {
 	Item item;
 	item.label = std::move(label);
 	item.onSelect = std::move(onSelect);
 	item.shortcutHint = std::move(shortcutHint);
-	m_owner->m_menus[m_index].items.push_back(std::move(item));
+	m_owner->itemsAt(m_index, m_path).push_back(std::move(item));
 }
 
 void MenuBar::Menu::addSeparator() {
 	Item item;
 	item.isSeparator = true;
-	m_owner->m_menus[m_index].items.push_back(std::move(item));
+	m_owner->itemsAt(m_index, m_path).push_back(std::move(item));
+}
+
+MenuBar::Menu MenuBar::Menu::addSubmenu(std::string label) {
+	auto& items = m_owner->itemsAt(m_index, m_path);
+	Item item;
+	item.label = std::move(label);
+	items.push_back(std::move(item));
+	auto path = m_path;
+	path.push_back(items.size() - 1);
+	return Menu(*m_owner, m_index, std::move(path));
+}
+
+const std::vector<MenuBar::Item>* MenuBar::itemsAtDepth(std::size_t depth) const {
+	if (!isMenuOpen()) return nullptr;
+	auto const* items = &m_menus[static_cast<std::size_t>(m_openMenuIndex)].items;
+	for (std::size_t level = 0; level < depth; ++level) {
+		if (level >= m_openPath.size() || m_openPath[level] >= items->size()) return nullptr;
+		items = &(*items)[m_openPath[level]].children;
+		if (items->empty()) return nullptr;
+	}
+	return items;
+}
+
+std::vector<Rect> MenuBar::openRects(const GuiContext& ctx) const {
+	std::vector<Rect> result;
+	if (!isMenuOpen()) return result;
+	result.push_back(openMenuRect(ctx));
+	const Theme& th = ctx.theme();
+	Vec2 display = ctx.input().displaySize;
+	for (std::size_t depth = 0; depth < m_openPath.size(); ++depth) {
+		auto const* parent = itemsAtDepth(depth);
+		auto const* children = itemsAtDepth(depth + 1);
+		if (!parent || !children || m_openPath[depth] >= parent->size()) break;
+		float width = 8.0f * th.fontSize;
+		float height = 2.0f * th.framePadding;
+		for (auto const& item : *children) {
+			height += item.isSeparator ? th.itemSpacing : th.rowHeight;
+			if (!item.isSeparator) {
+				float w = ctx.font().measureText(item.label, th.fontSize).x;
+				if (!item.shortcutHint.empty()) w += th.windowPadding + ctx.font().measureText(item.shortcutHint, th.fontSize).x;
+				if (!item.children.empty()) w += 2.0f * th.windowPadding;
+				width = std::max(width, w + 2.0f * th.framePadding + th.windowPadding);
+			}
+		}
+		Rect const prior = result.back();
+		float y = prior.y;
+		for (std::size_t i = 0; i < m_openPath[depth]; ++i) y += (*parent)[i].isSeparator ? th.itemSpacing : th.rowHeight;
+		float x = prior.right();
+		if (x + width > display.x) x = prior.x - width;
+		x = std::max(0.0f, x);
+		y = std::max(0.0f, std::min(y, display.y - height));
+		result.push_back({x, y, width, height});
+	}
+	return result;
+}
+
+bool MenuBar::containsOpenMenu(const GuiContext& ctx, Vec2 point) const {
+	for (Rect const& rect : openRects(ctx)) if (rect.contains(point)) return true;
+	return false;
 }
 
 float MenuBar::height(const GuiContext& ctx) const {
@@ -78,6 +145,7 @@ Rect MenuBar::openMenuRect(const GuiContext& ctx) const {
 		} else {
 			height += th.rowHeight;
 			float w = ctx.font().measureText(item.label, th.fontSize).x;
+			if (!item.children.empty()) w += 2.0f * th.windowPadding;
 			if (!item.shortcutHint.empty()) {
 				// windowPadding as the gap between label and shortcut hint -- same token
 				// ContextMenu-adjacent widgets already use for "comfortable gap between
@@ -121,78 +189,54 @@ int MenuBar::itemAtY(const GuiContext& ctx, const Rect& menu, float mouseY) cons
 
 void MenuBar::update(GuiContext& ctx) {
 	m_hovered = false;
-	if (m_menus.empty()) {
-		return;
-	}
-	// docs/gui/05-widgets.md, "MenuBar", "Modal panels": stays visually present (still
-	// drawn every frame -- see draw()/drawOpenMenu(), which don't check this) but non-
-	// interactive while a modal panel blocks everything else, matching the "modal blocks
-	// INTERACTION, not the rest of the app" idiom GuiContext::update() already applies to
-	// background panels' own update() calls.
-	if (ctx.activeModalPanel() != nullptr) {
-		return;
-	}
-
+	if (m_menus.empty() || ctx.activeModalPanel() != nullptr) return;
 	const InputState& in = ctx.input();
 	Vec2 mouse = in.mousePos;
-	const int leftIdx = static_cast<int>(MouseButton::Left);
-	bool leftPressed = in.mousePressed[leftIdx];
-	bool leftReleased = in.mouseReleased[leftIdx];
-
-	Rect bar = barRect(ctx);
-	bool overBar = bar.contains(mouse);
-
-	Rect openRect = isMenuOpen() ? openMenuRect(ctx) : Rect{};
-	bool overOpenMenu = isMenuOpen() && openRect.contains(mouse);
-
-	m_hovered = overBar || overOpenMenu;
-
+	int const button = static_cast<int>(MouseButton::Left);
+	bool const pressed = in.mousePressed[button];
+	bool const released = in.mouseReleased[button];
+	bool const overBar = barRect(ctx).contains(mouse);
 	int hoveredTitle = -1;
-	if (overBar) {
-		for (std::size_t i = 0; i < m_menus.size(); ++i) {
-			if (menuTitleRect(ctx, i).contains(mouse)) {
-				hoveredTitle = static_cast<int>(i);
-				break;
-			}
-		}
+	if (overBar) for (std::size_t i = 0; i < m_menus.size(); ++i) {
+		if (menuTitleRect(ctx, i).contains(mouse)) { hoveredTitle = static_cast<int>(i); break; }
 	}
-
-	if (leftPressed) {
+	auto rects = openRects(ctx);
+	int depth = -1;
+	for (std::size_t i = 0; i < rects.size(); ++i) if (rects[i].contains(mouse)) depth = static_cast<int>(i);
+	m_hovered = overBar || depth >= 0;
+	if (pressed) {
 		if (hoveredTitle >= 0) {
-			// A second click of the ALREADY-open title closes it (DropDown's own "closes
-			// on a second click of the control" convention); a click on any OTHER title
-			// always opens/switches to it.
-			m_openMenuIndex = (m_openMenuIndex == hoveredTitle) ? -1 : hoveredTitle;
-		} else if (overOpenMenu) {
-			m_pressStartedInOpenMenu = true;
-		} else {
-			// Press outside both the bar and the open dropdown -- dismiss, same as a
-			// widget popup closing on an outside press (GuiContext::update()).
-			m_openMenuIndex = -1;
-		}
+			if (m_openMenuIndex == hoveredTitle) closeMenu();
+			else { m_openMenuIndex = hoveredTitle; m_openPath.clear(); }
+		} else if (depth >= 0) m_pressStartedInOpenMenu = true;
+		else closeMenu();
 	}
-
-	// Hover-switch: once a menu is open, moving onto a SIBLING title with no click
-	// switches to it -- the standard menu-bar feel the "keep it simple" scope still
-	// wants. Unconditional on !leftPressed: a press this same frame already resolved its
-	// own open/close/toggle immediately above, so this must not re-decide anything then.
-	if (!leftPressed && isMenuOpen() && hoveredTitle >= 0 && hoveredTitle != m_openMenuIndex) {
+	if (!pressed && isMenuOpen() && hoveredTitle >= 0 && hoveredTitle != m_openMenuIndex) {
 		m_openMenuIndex = hoveredTitle;
+		m_openPath.clear();
 	}
-
-	if (leftReleased) {
-		if (m_pressStartedInOpenMenu && overOpenMenu) {
-			int idx = itemAtY(ctx, openRect, mouse.y);
-			if (idx >= 0) {
-				const Item& item = m_menus[static_cast<std::size_t>(m_openMenuIndex)].items[static_cast<std::size_t>(idx)];
-				if (item.onSelect) {
-					item.onSelect();
-				}
-			}
-			m_openMenuIndex = -1;
+	if (depth >= 0 && isMenuOpen()) {
+		auto const* items = itemsAtDepth(static_cast<std::size_t>(depth));
+		int index = -1;
+		float y = rects[static_cast<std::size_t>(depth)].y + ctx.theme().framePadding;
+		if (items) for (std::size_t i = 0; i < items->size(); ++i) {
+			float const h = (*items)[i].isSeparator ? ctx.theme().itemSpacing : ctx.theme().rowHeight;
+			if (mouse.y >= y && mouse.y < y + h) { if (!(*items)[i].isSeparator) index = static_cast<int>(i); break; }
+			y += h;
 		}
-		m_pressStartedInOpenMenu = false;
+		if (index >= 0) {
+			Item const& item = (*items)[static_cast<std::size_t>(index)];
+			if (!item.children.empty()) {
+				m_openPath.resize(static_cast<std::size_t>(depth));
+				m_openPath.push_back(static_cast<std::size_t>(index));
+			} else m_openPath.resize(static_cast<std::size_t>(depth));
+			if (released && m_pressStartedInOpenMenu && item.children.empty()) {
+				if (item.onSelect) item.onSelect();
+				closeMenu();
+			}
+		}
 	}
+	if (released) m_pressStartedInOpenMenu = false;
 }
 
 void MenuBar::draw(DrawList& dl, const GuiContext& ctx) const {
@@ -217,41 +261,33 @@ void MenuBar::draw(DrawList& dl, const GuiContext& ctx) const {
 }
 
 void MenuBar::drawOpenMenu(DrawList& dl, const GuiContext& ctx) const {
-	if (!isMenuOpen()) {
-		return;
-	}
 	const Theme& th = ctx.theme();
-	Rect menu = openMenuRect(ctx);
-	const MenuData& data = m_menus[static_cast<std::size_t>(m_openMenuIndex)];
-
-	dl.addRectFilled(menu, th.frameBg, th.rounding);
-	dl.addRect(menu, th.accent, 1.0f, th.rounding);
-
+	auto rects = openRects(ctx);
 	Vec2 mouse = ctx.input().mousePos;
-	int hoveredItem = menu.contains(mouse) ? itemAtY(ctx, menu, mouse.y) : -1;
-
-	float y = menu.y + th.framePadding;
-	for (std::size_t i = 0; i < data.items.size(); ++i) {
-		const Item& item = data.items[i];
-		if (item.isSeparator) {
-			float lineY = y + th.itemSpacing * 0.5f;
-			dl.addLine({ menu.x + th.framePadding, lineY }, { menu.right() - th.framePadding, lineY },
-			           th.border, 1.0f);
-			y += th.itemSpacing;
-			continue;
+	for (std::size_t depth = 0; depth < rects.size(); ++depth) {
+		Rect const menu = rects[depth];
+		auto const* items = itemsAtDepth(depth);
+		if (!items) break;
+		dl.addRectFilled(menu, th.frameBg, th.rounding);
+		dl.addRect(menu, th.accent, 1.0f, th.rounding);
+		float y = menu.y + th.framePadding;
+		for (std::size_t i = 0; i < items->size(); ++i) {
+			Item const& item = (*items)[i];
+			if (item.isSeparator) {
+				float lineY = y + th.itemSpacing * 0.5f;
+				dl.addLine({menu.x + th.framePadding, lineY}, {menu.right() - th.framePadding, lineY}, th.border, 1.0f);
+				y += th.itemSpacing;
+				continue;
+			}
+			Rect row{menu.x + th.framePadding * 0.5f, y, menu.w - th.framePadding, th.rowHeight};
+			bool const selected = depth < m_openPath.size() && m_openPath[depth] == i;
+			if (row.contains(mouse) || selected) dl.addRectFilled(row, th.frameBgHovered, th.rounding);
+			Rect text = row.insetXY(th.framePadding, 0.0f);
+			dl.addTextClipped(ctx.font(), th.fontSize, text, th.text, item.label, Align::Start, Align::Center);
+			std::string const hint = item.children.empty() ? item.shortcutHint : ">";
+			if (!hint.empty()) dl.addTextClipped(ctx.font(), th.fontSize, text, th.textDisabled, hint, Align::End, Align::Center);
+			y += th.rowHeight;
 		}
-
-		Rect rowRect{ menu.x + th.framePadding * 0.5f, y, menu.w - th.framePadding, th.rowHeight };
-		if (static_cast<int>(i) == hoveredItem) {
-			dl.addRectFilled(rowRect, th.frameBgHovered, th.rounding);
-		}
-		Rect textRect = rowRect.insetXY(th.framePadding, 0.0f);
-		dl.addTextClipped(ctx.font(), th.fontSize, textRect, th.text, item.label, Align::Start, Align::Center);
-		if (!item.shortcutHint.empty()) {
-			dl.addTextClipped(ctx.font(), th.fontSize, textRect, th.textDisabled, item.shortcutHint, Align::End,
-			                   Align::Center);
-		}
-		y += th.rowHeight;
 	}
 }
 

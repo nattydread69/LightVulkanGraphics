@@ -582,7 +582,7 @@ void GuiContext::update() {
 	// callback had just set -- e.g. SaveFileDialog::open() focusing its filename field.
 	const bool pressOnMenuBar = leftPressed && m_menuBar.menuCount() > 0 &&
 		(m_menuBar.barRect(*this).contains(mouse) ||
-		 (m_menuBar.isMenuOpen() && m_menuBar.openMenuRect(*this).contains(mouse)));
+		 m_menuBar.containsOpenMenu(*this, mouse));
 
 	// docs/gui/05-widgets.md, "MenuBar": resolved first, ahead of even the popup -- it is
 	// not a Widget (see MenuBar.h's class comment) so it cannot participate in the
