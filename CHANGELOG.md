@@ -6,6 +6,20 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.5: unlit textured materials and nearest-neighbour textures
+- New `ShaderSelection::TexturedUnlit` (appended to the enum, so existing values are unchanged): `textures[0]` multiplied by the vertex
+  colour and written with no lighting, alpha included. Use it with `alphaBlendingEnabled` for sprites and other artwork that must keep
+  its own colours. Shader `textured_mesh_unlit.frag` (shares `textured_mesh.vert`); it needs `textures[0]` like `Textured`.
+- New `Texture2DDescription::filter` (`Texture2DFilter::Linear` default, or `Nearest`). Nearest also selects nearest mip selection;
+  pair it with `generateMipmaps = false` for crisp pixel art. The default is the 3.4 behaviour, so existing textures are unchanged.
+- New `createTexture2DFromImage(data, size, const Texture2DDescription& options, ...)` overload, so decoded images can use any option
+  (filter, repeat, format, mip chain). The existing overload is unchanged and forwards to it.
+- Defines `LVG_HAS_TEXTURED_UNLIT` and `LVG_HAS_TEXTURE_FILTER`. Version 3.5.0. Additive: `VkApp` and the other public classes did not
+  change layout (`Texture2DDescription` is a plain description struct introduced in 3.4 and gained one defaulted field at the end), so
+  `libLightVulkanGraphics.so.3` keeps its ABI, but applications that build `Texture2DDescription` should recompile. Rebuild the shaders
+  to pick up `textured_mesh_unlit.frag`. Tests: `test_core_types` (validation, default filter) and the extended
+  `material_texture_compute_integration_test`.
+
 ### GUI: OpenFolderDialog
 - New `OpenFolderDialog` (`widgets/OpenFolderDialog.h`, included by `Ui.h`): a modal folder picker built on `FileDialogBase`.
   `FileDialogBase` gained a protected `setFoldersOnly()` for it. Existing dialogs are unchanged. New test:

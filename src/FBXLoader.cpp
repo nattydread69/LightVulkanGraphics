@@ -23,6 +23,7 @@
 #include <assimp/postprocess.h>
 #include <assimp/metadata.h>
 #include <assimp/material.h>
+#include <assimp/version.h>
 #ifndef GLM_ENABLE_EXPERIMENTAL
 #define GLM_ENABLE_EXPERIMENTAL
 #endif
@@ -36,6 +37,7 @@
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>
+#include <vector>
 
 namespace lightGraphics
 {
@@ -155,6 +157,92 @@ namespace lightGraphics
             for (unsigned int i = 0; i < node->mNumChildren; ++i)
             {
                 scaleNodeTranslationsRecursive(node->mChildren[i], factor);
+            }
+        }
+
+        // Assimp < 6.0 computes every skinned FBX mesh's bone offset matrices from the
+        // wrong "absolute transform" of the mesh's node. FBXConverter::ConvertNodes
+        // seeds it with only the immediate parent aiNode's *local* transform and never
+        // folds in the node's own pivot chain, whereas Assimp >= 6.0 (fixed upstream in
+        // v6.0.0, "Restore 4x4 matrix function param...", #5813) passes down the
+        // accumulated root-to-node transform. The offset is
+        //     inverse(cluster TransformLink) * absoluteTransform,
+        // so on 5.x any rig whose skeleton sits under a transformed ancestor (e.g.
+        // Blender's x100 "CharacterArmature" node) gets offsets that cancel the node
+        // pose instead of the true bind pose. Skinning then degenerates to ~identity
+        // and every animation frame collapses to the raw bind-pose vertices
+        // (Worker.fbx's Wave first frame stayed in the T-pose). Vertices, node
+        // transforms and animation keys are identical across versions; only the
+        // offsets differ.
+        //
+        // This recomputes what 6.x would have produced:
+        //     offset6 = offset5 * inverse(A5) * A6
+        // where A6 is the node's accumulated transform (scene root excluded: the
+        // converter runs before Assimp's own root up-axis correction) and A5 is the
+        // local transform of the parent of the node's pivot chain (the converter names
+        // chain nodes "..._$AssimpFbx$_<Component>"; the real model node is last). For
+        // this asset the corrected 5.4.3 offsets match 6.0.4's for every bone.
+        // Must run before correctImplausibleFileScale(), which rescales node
+        // translations and offsets assuming Assimp's raw, unmodified values.
+        constexpr const char* kAssimpFbxChainMarker = "_$AssimpFbx$_";
+
+        void correctLegacyAssimpFbxSkinOffsets(aiScene* scene, bool isFbxSource)
+        {
+            if (!scene || !scene->mRootNode || !isFbxSource || aiGetVersionMajor() >= 6)
+            {
+                return;
+            }
+
+            std::unordered_set<unsigned int> correctedMeshes;
+            std::vector<aiNode*> stack{scene->mRootNode};
+            while (!stack.empty())
+            {
+                aiNode* node = stack.back();
+                stack.pop_back();
+                for (unsigned int c = 0; c < node->mNumChildren; ++c)
+                {
+                    stack.push_back(node->mChildren[c]);
+                }
+                if (!node->mParent || node->mNumMeshes == 0)
+                {
+                    continue; // the root never carries FBX skinned meshes
+                }
+
+                aiMatrix4x4 absolute6;
+                for (const aiNode* n = node; n && n->mParent; n = n->mParent)
+                {
+                    absolute6 = n->mTransformation * absolute6;
+                }
+
+                const aiNode* chainTop = node;
+                while (chainTop->mParent &&
+                       std::strstr(chainTop->mParent->mName.C_Str(), kAssimpFbxChainMarker) != nullptr)
+                {
+                    chainTop = chainTop->mParent;
+                }
+                aiMatrix4x4 absolute5; // identity when the chain hangs off the (identity-at-conversion) root
+                if (chainTop->mParent && chainTop->mParent->mParent)
+                {
+                    absolute5 = chainTop->mParent->mTransformation;
+                }
+
+                aiMatrix4x4 absolute5Inverse = absolute5;
+                absolute5Inverse.Inverse();
+                const aiMatrix4x4 correction = absolute5Inverse * absolute6;
+
+                for (unsigned int m = 0; m < node->mNumMeshes; ++m)
+                {
+                    const unsigned int meshIndex = node->mMeshes[m];
+                    if (meshIndex >= scene->mNumMeshes || !correctedMeshes.insert(meshIndex).second)
+                    {
+                        continue;
+                    }
+                    aiMesh* mesh = scene->mMeshes[meshIndex];
+                    for (unsigned int b = 0; b < mesh->mNumBones; ++b)
+                    {
+                        mesh->mBones[b]->mOffsetMatrix = mesh->mBones[b]->mOffsetMatrix * correction;
+                    }
+                }
             }
         }
 
@@ -415,6 +503,7 @@ std::shared_ptr<RiggedModel> FBXLoader::loadModel(const std::string& filePath)
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     }
     bool const isFbxSource = earlyExtension == ".fbx";
+    correctLegacyAssimpFbxSkinOffsets(const_cast<aiScene*>(scene), isFbxSource);
     correctImplausibleFileScale(const_cast<aiScene*>(scene), isFbxSource);
 
     // Create the model

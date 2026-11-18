@@ -36,6 +36,9 @@
 // general compute API (GpuBuffer, ComputeKernel, VkApp::runCompute).
 #define LVG_HAS_MATERIAL_TEXTURES 1
 #define LVG_HAS_COMPUTE 1
+// Defined from 3.5: ShaderSelection::TexturedUnlit and Texture2DDescription::filter.
+#define LVG_HAS_TEXTURED_UNLIT 1
+#define LVG_HAS_TEXTURE_FILTER 1
 
 namespace lightGraphics
 {
@@ -159,7 +162,11 @@ enum class ShaderSelection
 	// channel) sampled at the mesh uv (0..1 across the terrain); textures[2..9] = the layer colours, each tiled with a world-space
 	// period in metres (parameters.xyzw for layers 0-3, parameters2.xyzw for layers 4-7; sampled at world xz). Unused layers
 	// (no texture) have weight 0 in a correct weight map. The result is multiplied by the vertex colour and lit like VertexColorLit.
-	TerrainSplat
+	TerrainSplat,
+	// 3.5: like Textured but with no lighting: `MaterialDescription::textures[0]` (sampled at uv * parameters.xy) multiplied by the
+	// vertex colour and written as is, alpha included (enable `alphaBlendingEnabled` for soft edges). For sprites and other artwork
+	// that must keep its own colours. Needs textures[0].
+	TexturedUnlit
 };
 
 struct ShaderProgramDescription
@@ -177,7 +184,7 @@ struct MaterialDescription
 	CullMode cullMode = CullMode::Back;
 	PolygonMode polygonMode = PolygonMode::Fill;
 	ShaderProgramDescription shaderProgram;
-	// 3.4: textures for the Textured and TerrainSplat shaders (slot i is binding i of descriptor set 1). Unused slots are
+	// 3.4: textures for the Textured, TexturedUnlit and TerrainSplat shaders (slot i is binding i of descriptor set 1). Unused slots are
 	// left default; the material samples a white texel there. The textures must outlive the material.
 	std::array<Texture2DHandle, 10> textures {};
 	// 3.4: per-material constants for those shaders (see ShaderSelection::Textured / TerrainSplat).
@@ -194,6 +201,13 @@ enum class Texture2DFormat
 	RGBA8_UNORM
 };
 
+// How a texture is sampled when magnified or minified. Nearest keeps hard texel edges (pixel art); Linear blends.
+enum class Texture2DFilter
+{
+	Linear,
+	Nearest
+};
+
 struct Texture2DDescription
 {
 	std::uint32_t width = 0;
@@ -203,6 +217,8 @@ struct Texture2DDescription
 	bool repeat = true;
 	// Builds a full mip chain on the CPU (box filter) at creation and on every update.
 	bool generateMipmaps = true;
+	// 3.5: sampling filter. Nearest also selects nearest mip selection; pair it with generateMipmaps = false for crisp pixel art.
+	Texture2DFilter filter = Texture2DFilter::Linear;
 };
 
 // ---- compute (3.4) ----

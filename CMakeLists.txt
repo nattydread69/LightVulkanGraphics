@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(libLightVulkanGraphics VERSION 3.4.0 LANGUAGES CXX)
+project(libLightVulkanGraphics VERSION 3.5.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -45,7 +45,7 @@ include(CTest)
 set(LVG_PACKAGE_NAME "LightVulkanGraphics")
 set(LVG_ABI_VERSION 3)
 set(LVG_VERSION_MAJOR 3)
-set(LVG_VERSION_MINOR 4)
+set(LVG_VERSION_MINOR 5)
 set(LVG_VERSION_PATCH 0)
 set(LVG_INSTALL_INCLUDEDIR "${CMAKE_INSTALL_INCLUDEDIR}/${LVG_PACKAGE_NAME}")
 set(LVG_SHADER_INSTALL_DIR "${CMAKE_INSTALL_DATAROOTDIR}/${LVG_PACKAGE_NAME}/spv")
@@ -383,6 +383,14 @@ if (LVG_ASSIMP_BUNDLED)
 				$<$<CXX_COMPILER_ID:MSVC>:/w>)
 		endif()
 	endforeach()
+	# Assimp's bundled zlib 1.2.13 (also in Assimp 6.x) has `#define fdopen(fd,mode) NULL`
+	# for TARGET_OS_MAC unless `fdopen` is already a macro. Recent Apple SDKs (Xcode 16)
+	# declare the real fdopen() in <stdio.h>, so that override mangles the declaration
+	# and zutil.c fails to compile. Pre-defining fdopen as itself makes zlib's
+	# `#ifndef fdopen` guard skip the override and leaves the SDK declaration intact.
+	if (APPLE AND TARGET zlibstatic)
+		target_compile_definitions(zlibstatic PRIVATE fdopen=fdopen)
+	endif()
 	message(STATUS "Assimp: bundled static ${LVG_ASSIMP_GIT_TAG}")
 elseif (NOT TARGET assimp::assimp)
 	message(FATAL_ERROR
@@ -495,6 +503,7 @@ lvg_compile_shader(frag custom_mesh)
 lvg_compile_shader(frag custom_mesh_unlit)
 lvg_compile_shader(vert textured_mesh)
 lvg_compile_shader(frag textured_mesh)
+lvg_compile_shader(frag textured_mesh_unlit)
 lvg_compile_shader(frag splat_terrain)
 lvg_compile_shader(vert screen_text)
 lvg_compile_shader(frag screen_text)

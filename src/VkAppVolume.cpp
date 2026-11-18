@@ -434,6 +434,7 @@ MaterialHandle VkApp::createMaterial(const MaterialDescription& description)
 	MaterialResource& material = materials_[index];
 	material.description = description;
 	const bool textured = description.shaderProgram.selection == ShaderSelection::Textured ||
+		description.shaderProgram.selection == ShaderSelection::TexturedUnlit ||
 		description.shaderProgram.selection == ShaderSelection::TerrainSplat;
 	// Textured materials: set 1 = their textures, and a fragment push constant (parameters) after the model matrix.
 	std::array<VkPushConstantRange, 2> pushRanges {};
@@ -1455,6 +1456,11 @@ VkPipeline VkApp::createMaterialPipeline(
 	{
 		vertexName = "textured_mesh.vert.spv";
 		fragmentName = "splat_terrain.frag.spv";
+	}
+	else if (description.shaderProgram.selection == ShaderSelection::TexturedUnlit)
+	{
+		vertexName = "textured_mesh.vert.spv";
+		fragmentName = "textured_mesh_unlit.frag.spv";
 	}
 	if (description.shaderProgram.selection == ShaderSelection::Custom)
 	{

@@ -16,7 +16,7 @@
 // You should have received a copy of the GNU Lesser General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// 2D textures (3.4) and the descriptor sets that bind them to Textured / TerrainSplat materials.
+// 2D textures (3.4) and the descriptor sets that bind them to Textured / TexturedUnlit / TerrainSplat materials.
 //
 // State lives in a side table keyed by the VkApp (like bricked volumes), so VkApp's data layout does not grow.
 
@@ -267,9 +267,10 @@ Texture2DHandle VkApp::createTexture2D(const Texture2DDescription& description, 
 		viewInfo.subresourceRange.layerCount = 1;
 		check(vkCreateImageView(device_, &viewInfo, nullptr, &state.view), "Failed to create the Texture2D view");
 		VkSamplerCreateInfo samplerInfo {VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
-		samplerInfo.magFilter = VK_FILTER_LINEAR;
-		samplerInfo.minFilter = VK_FILTER_LINEAR;
-		samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+		const bool nearest = description.filter == Texture2DFilter::Nearest;
+		samplerInfo.magFilter = nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+		samplerInfo.minFilter = nearest ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+		samplerInfo.mipmapMode = nearest ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		const VkSamplerAddressMode mode = description.repeat ? VK_SAMPLER_ADDRESS_MODE_REPEAT : VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		samplerInfo.addressModeU = mode;
 		samplerInfo.addressModeV = mode;
@@ -384,6 +385,15 @@ void VkApp::updateTexture2D(Texture2DHandle handle, const void* rgba8, std::size
 Texture2DHandle VkApp::createTexture2DFromImage(const void* data, std::size_t byteSize, Texture2DFormat format, bool repeat,
 	std::uint32_t* width, std::uint32_t* height)
 {
+	Texture2DDescription description;
+	description.format = format;
+	description.repeat = repeat;
+	return createTexture2DFromImage(data, byteSize, description, width, height);
+}
+
+Texture2DHandle VkApp::createTexture2DFromImage(const void* data, std::size_t byteSize, const Texture2DDescription& options,
+	std::uint32_t* width, std::uint32_t* height)
+{
 	ImageRgba image;
 	if (data == nullptr || !decodeImageRgba(data, byteSize, image) || image.width <= 0 || image.height <= 0)
 	{
@@ -391,11 +401,10 @@ Texture2DHandle VkApp::createTexture2DFromImage(const void* data, std::size_t by
 	}
 	if (width != nullptr) *width = static_cast<std::uint32_t>(image.width);
 	if (height != nullptr) *height = static_cast<std::uint32_t>(image.height);
-	Texture2DDescription description;
+	// The decoded size replaces whatever width and height `options` carries; every other field is used as given.
+	Texture2DDescription description = options;
 	description.width = static_cast<std::uint32_t>(image.width);
 	description.height = static_cast<std::uint32_t>(image.height);
-	description.format = format;
-	description.repeat = repeat;
 	return createTexture2D(description, image.rgba.data(), image.rgba.size());
 }
 

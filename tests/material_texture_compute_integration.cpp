@@ -89,6 +89,22 @@ int main()
 		splat.parameters = {4.0f, 4.0f, 8.0f, 8.0f};
 		const auto splatMaterial = app.createMaterial(splat);
 		expect(texturedMaterial.isValid() && splatMaterial.isValid(), "textured and splat materials are created");
+
+		// 3.5: an unlit textured material over a nearest-filtered texture, decoded-image overload included.
+		lightGraphics::Texture2DDescription crisp = description;
+		crisp.filter = lightGraphics::Texture2DFilter::Nearest;
+		crisp.generateMipmaps = false;
+		const auto pixelArt = app.createTexture2D(crisp, pixels.data(), pixels.size());
+		lightGraphics::MaterialDescription unlit;
+		unlit.shaderProgram.selection = lightGraphics::ShaderSelection::TexturedUnlit;
+		unlit.textures[0] = pixelArt;
+		unlit.alphaBlendingEnabled = true;
+		unlit.depthWriteEnabled = false;
+		unlit.cullMode = lightGraphics::CullMode::None;
+		const auto unlitMaterial = app.createMaterial(unlit);
+		expect(pixelArt.isValid() && unlitMaterial.isValid(), "a nearest-filtered texture and an unlit textured material are created");
+		const std::uint8_t notAnImage[] = {1, 2, 3, 4};
+		expect(!app.createTexture2DFromImage(notAnImage, sizeof notAnImage, crisp).isValid(), "the options overload rejects undecodable data");
 		bool missing = false;
 		try { lightGraphics::MaterialDescription bad; bad.shaderProgram.selection = lightGraphics::ShaderSelection::Textured; (void)app.createMaterial(bad); }
 		catch (const std::invalid_argument&) { missing = true; }
@@ -101,6 +117,7 @@ int main()
 		const auto mesh = app.createStaticMesh(quad);
 		app.drawMesh(mesh, lightGraphics::Transform {}, texturedMaterial);
 		app.drawMesh(mesh, lightGraphics::Transform {}, splatMaterial);
+		app.drawMesh(mesh, lightGraphics::Transform {}, unlitMaterial);
 		app.finalizeScene();
 		// Frames draw both materials without a validation or device error; the window closes itself after a few.
 		int frames = 0;
@@ -116,6 +133,8 @@ int main()
 
 		app.destroyMaterial(texturedMaterial);
 		app.destroyMaterial(splatMaterial);
+		app.destroyMaterial(unlitMaterial);
+		app.destroyTexture2D(pixelArt);
 		app.destroyTexture2D(weights);
 		app.destroyTexture2D(layer);
 	}

@@ -17,8 +17,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y \
             cmake \
             clang \
             g++ \
@@ -46,8 +46,8 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y \
             clang \
             cmake \
             ninja-build \
@@ -109,12 +109,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build tools
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y cmake g++ ninja-build git ca-certificates file \
+          apt-get -o Acquire::Retries=5 update
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y cmake g++ ninja-build git ca-certificates file \
             libglfw3-dev libglm-dev libvulkan-dev glslc libwayland-dev libxkbcommon-dev pkg-config
       - name: Package (system Assimp, as a distro would)
         run: |
-          DEBIAN_FRONTEND=noninteractive apt-get install -y libassimp-dev
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y libassimp-dev
           cmake -S . -B build -G Ninja -DLVG_USE_SYSTEM_ASSIMP=ON -DBUILD_TESTING=OFF \
             -DLVG_BUILD_EXAMPLES=OFF -DLVG_BUILD_DOXYGEN=OFF
           cmake --build build
@@ -133,8 +133,8 @@ jobs:
         with: { name: deb, path: pkg }
       - name: Install the .deb on a machine that never built it
         run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y ./pkg/*.deb g++ ninja-build
+          apt-get -o Acquire::Retries=5 update
+          DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y ./pkg/*.deb g++ ninja-build
           ldconfig
       - name: Build a consumer against the installed package
         run: |
@@ -145,15 +145,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-2022, macos-14]
+        os: [ubuntu-latest, windows-2022, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Linux deps
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build libglfw3-dev libglm-dev libvulkan-dev glslc \
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y ninja-build libglfw3-dev libglm-dev libvulkan-dev glslc \
             libwayland-dev libxkbcommon-dev pkg-config
       - name: macOS deps
         if: runner.os == 'macOS'

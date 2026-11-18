@@ -592,6 +592,10 @@ namespace lightGraphics
 		// data cannot be decoded. `width`/`height` receive the decoded size when non-null.
 		Texture2DHandle createTexture2DFromImage(const void* data, std::size_t byteSize, Texture2DFormat format, bool repeat,
 			std::uint32_t* width = nullptr, std::uint32_t* height = nullptr);
+		// 3.5: same, taking every option (format, repeat, filter, generateMipmaps) from `options`. Its width and height are ignored:
+		// the decoded size is used (and reported through `width`/`height`).
+		Texture2DHandle createTexture2DFromImage(const void* data, std::size_t byteSize, const Texture2DDescription& options,
+			std::uint32_t* width = nullptr, std::uint32_t* height = nullptr);
 		// Replaces all pixels (same size as at creation). Materials using the texture show the new pixels.
 		void updateTexture2D(Texture2DHandle handle, const void* rgba8, std::size_t byteSize);
 		// Frees it once the GPU is done with it. Destroy materials that use it first.

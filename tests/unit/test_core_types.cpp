@@ -987,7 +987,7 @@ namespace
 			"transparent material state should preserve independent depth-write control");
 
 		// 3.4: textured and splat materials need textures[0].
-		for (const auto selection : {lightGraphics::ShaderSelection::Textured, lightGraphics::ShaderSelection::TerrainSplat})
+		for (const auto selection : {lightGraphics::ShaderSelection::Textured, lightGraphics::ShaderSelection::TexturedUnlit, lightGraphics::ShaderSelection::TerrainSplat})
 		{
 			lightGraphics::MaterialDescription textured;
 			textured.shaderProgram.selection = selection;
@@ -998,6 +998,10 @@ namespace
 			textured.textures[0] = {0, 1};
 			lightGraphics::validateMaterialDescription(textured);
 		}
+
+		// 3.5: the texture filter defaults to the 3.4 behaviour (linear), so existing textures are unchanged.
+		require(lightGraphics::Texture2DDescription{}.filter == lightGraphics::Texture2DFilter::Linear,
+			"Texture2DDescription should default to linear filtering");
 
 		lightGraphics::ClippingDescription clipping;
 		clipping.clipPlaneEnabled = true;

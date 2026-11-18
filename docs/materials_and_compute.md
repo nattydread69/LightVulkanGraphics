@@ -13,20 +13,26 @@ applications recompile against the new header.
     Texture2DHandle fromFile = app.createTexture2DFromImage(bytes, size, Texture2DFormat::RGBA8_SRGB, /*repeat*/ true);  // PNG/JPEG/BMP/TGA via stb
     app.destroyTexture2D(t);   // destroy materials that use it first; the GPU memory is freed once in-flight work finishes
 
+    Texture2DDescription pixelArt = d; pixelArt.filter = Texture2DFilter::Nearest; pixelArt.generateMipmaps = false;   // 3.5: hard texel edges
+    Texture2DHandle crisp = app.createTexture2DFromImage(bytes, size, pixelArt);   // decoded image with any option
+
 Mip chains are built on the CPU with a box filter (sRGB colour is averaged in linear light). Weight maps and other data should set
 `generateMipmaps = false` and `RGBA8_UNORM`.
 
 ## Materials with textures
 
 `MaterialDescription::textures` (10 slots = bindings 0-9 of descriptor set 1) and `parameters` / `parameters2` (two `vec4`s, fragment push
-constants) feed two built-in shaders. Unused slots sample a white texel.
+constants) feed the built-in textured shaders. Unused slots sample a white texel.
 
 | `ShaderSelection` | Slots | Constants |
 |---|---|---|
 | `Textured` | `textures[0]` multiplies the vertex colour (uv scaled by `parameters.xy`), lit like `VertexColorLit` | `parameters.xy` |
+| `TexturedUnlit` (3.5) | `textures[0]` | `parameters.xy` |
 | `TerrainSplat` | `textures[0]`, `[1]` = weights of layers 0-3 and 4-7 (RGBA8, mesh uv 0..1 across the terrain); `textures[2..9]` = the 8 layer colours, sampled at world xz / tile size | `parameters` = tile metres of layers 0-3, `parameters2` = layers 4-7 |
 
-Both need a mesh with `MeshVertex::uv` (and, for splat, the uv spanning the whole terrain). A `Textured`/`TerrainSplat` material without
+`TexturedUnlit` is `Textured` without the lighting: the texture times the vertex colour, written as is (alpha included), so artwork keeps its own colours. Pair it with `alphaBlendingEnabled = true` (and usually `depthWriteEnabled = false`, `cullMode = None`) for sprites.
+
+All three need a mesh with `MeshVertex::uv` (and, for splat, the uv spanning the whole terrain). A `Textured`/`TerrainSplat` material without
 `textures[0]` is rejected.
 
 ## Compute
