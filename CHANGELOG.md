@@ -6,6 +6,9 @@ The format is based on Keep a Changelog, and the project follows semantic versio
 
 ## Unreleased
 
+### 3.5: GraphicsUnavailableError
+- New `lightGraphics::GraphicsUnavailableError` (`LightVulkanGraphicsLogging.h`, macro `LVG_HAS_GRAPHICS_UNAVAILABLE_ERROR`), thrown by `VkApp::init` when the window or Vulkan cannot be started (no loader or ICD, no suitable GPU, no display). `what()` is a sentence for the end user and `technicalDetail()` keeps the underlying error. Later failures keep their original exception types. It derives from `std::runtime_error`, so existing handlers still catch it; no ABI change to existing classes. A missing `libvulkan` itself still fails at load time because the library links the loader directly.
+
 ### 3.5: unlit textured materials and nearest-neighbour textures
 - New `ShaderSelection::TexturedUnlit` (appended to the enum, so existing values are unchanged): `textures[0]` multiplied by the vertex
   colour and written with no lighting, alpha included. Use it with `alphaBlendingEnabled` for sprites and other artwork that must keep

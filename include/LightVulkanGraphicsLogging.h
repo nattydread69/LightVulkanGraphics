@@ -19,6 +19,12 @@
 #pragma once
 
 #include <iosfwd>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+// Defined from 3.5: lightGraphics::GraphicsUnavailableError.
+#define LVG_HAS_GRAPHICS_UNAVAILABLE_ERROR 1
 
 namespace lightGraphics
 {
@@ -29,4 +35,21 @@ namespace lightGraphics
 
 	std::ostream& consoleInfoStream();
 	std::ostream& consoleErrorStream();
+
+	// Thrown when the window or Vulkan could not be started: no Vulkan loader or driver, no suitable GPU, no
+	// display, or a surface that cannot be created. what() is a sentence meant for the end user (what is wrong and
+	// what to try), and technicalDetail() keeps the underlying error for logs and bug reports. An application can
+	// catch it to show a message and exit cleanly, or to fall back to a non-graphical mode.
+	class GraphicsUnavailableError : public std::runtime_error
+	{
+	public:
+		GraphicsUnavailableError(std::string const& userMessage, std::string detail)
+			: std::runtime_error(userMessage), technicalDetail_(std::move(detail))
+		{
+		}
+		[[nodiscard]] std::string const& technicalDetail() const noexcept { return technicalDetail_; }
+
+	private:
+		std::string technicalDetail_;
+	};
 }

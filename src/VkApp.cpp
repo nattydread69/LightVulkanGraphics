@@ -567,8 +567,37 @@ namespace lightGraphics
 		width_ = width;
 		height_ = height;
 
-		createWindow(width_, height_, title);
-		initVulkan();
+		// Start-up failures that are the machine's fault, not the program's, become GraphicsUnavailableError with a
+		// message a player can act on. Later failures (device lost, out of memory) keep their original type.
+		try
+		{
+			createWindow(width_, height_, title);
+		}
+		catch (GraphicsUnavailableError const&)
+		{
+			throw;
+		}
+		catch (std::exception const& error)
+		{
+			throw GraphicsUnavailableError(
+				"The game window could not be opened. Check that a display (X11 or Wayland on Linux) is available and that your graphics drivers are installed.",
+				error.what());
+		}
+		try
+		{
+			initVulkan();
+		}
+		catch (GraphicsUnavailableError const&)
+		{
+			throw;
+		}
+		catch (std::exception const& error)
+		{
+			throw GraphicsUnavailableError(
+				"Vulkan could not be started. This game needs a graphics card and driver that support Vulkan 1.1 or newer; "
+				"install or update your graphics driver (and the Vulkan loader, libvulkan, on Linux) and try again.",
+				error.what());
+		}
 		createSwapChain();
 		createImageViews();
 		createRenderPass();
